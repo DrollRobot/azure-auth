@@ -74,7 +74,7 @@ keyvault = false
 private_repo_deps = false
 # scripts/mark_remote_disposable.py + tests/verify_remote_disposable.py stub
 # pair, gating @pytest.mark.destructive_remote tests. false deletes both.
-remote_disposable_scripts = false
+remote_disposable_scripts = true
 # SECURITY.md, GitHub's vulnerability-disclosure page. false deletes it.
 security_policy = true
 # CONTRIBUTING.md, linked in GitHub's issue/PR sidebar. false deletes it.

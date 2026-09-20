@@ -19,6 +19,7 @@
 | `acceptance` | Purpose | Verifies behavior against a requirement or user-facing spec. |
 | `functional` | Purpose | Tests behavior/output of a feature without regard to internal structure. |
 | `live` | Dependency | Requires a real external resource — network, live tenant, secrets, third-party API. |
+| `interactive` | Dependency | Requires a human at this desktop to complete a sign-in prompt. Tell the user a prompt is coming before starting one. |
 | `destructive_local` | Dependency | Mutates the host/device running pytest. Skipped by default. |
 | `destructive_remote` | Dependency | Mutates a remote/external system. Skipped by default. |
 | `slow` | Performance | Long-running. |
@@ -46,6 +47,20 @@ uv run mypy --platform linux        # type check as Linux
 # tests (destructive tests are skipped by default; see note below)
 uv run pytest -m "not live"         # offline tests
 uv run pytest                       # live and not-live tests (when credentialed)
+```
+
+## Interactive tests
+Tests marked `interactive` open a sign-in prompt and need a human at the machine
+running pytest. Nothing gates them, because a missing human is obvious: the run
+blocks and then times out.
+
+Agents should run them only when the user has said they are present, and should
+say a prompt is coming before starting one. Everything else can be run freely
+and repeatedly:
+```
+uv run pytest -m "not interactive"              # safe to repeat unattended
+uv run pytest -m "live and not interactive"     # live, but no prompt
+uv run pytest -m "interactive"                  # only with a user present
 ```
 
 ## Destructive tests
@@ -100,3 +115,25 @@ If the user has approved running destructive tests in the current session, run f
 ```
 uv run pytest --run-destructive-remote
 ```
+
+#### The marker is generic, and shared between projects
+A disposable target is disposable for everyone. Nothing in the marker names a
+project, so a throwaway target can be marked once and every repository carrying
+this script pair recognises it — no project has to know anything about its
+neighbours. Treat the value as a cross-repo contract: changing it breaks every
+other repo using the convention.
+
+For an **Entra tenant**, the marker is this address in the organization's
+`marketingNotificationEmails`:
+```
+disposable-environment@example.invalid
+```
+`marketingNotificationEmails` is used because reading it needs only
+`Organization.Read.All`, so no project needs an extra permission just to check.
+The `.invalid` TLD is reserved by RFC 2606, so the address can never resolve or
+receive mail. It is the remote counterpart of `DISPOSABLE_ENVIRONMENT=1`: one
+says *this machine* is throwaway, the other says *this tenant* is.
+
+The value is defined once, as `SENTINEL` in `tests/verify_remote_disposable.py`;
+`scripts/mark_remote_disposable.py` imports it so the writer and reader cannot
+drift apart.
