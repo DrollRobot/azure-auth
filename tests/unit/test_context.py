@@ -17,7 +17,7 @@ from azure_auth import (
     InteractionRequired,
 )
 from azure_auth.auth.credentials import CertStoreCredential
-from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID, GRAPH_POWERSHELL_CLIENT_ID
+from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID, GRAPH_CLI_CLIENT_ID
 from tests.fakes import Call, FakeMsal, Result, error_result, token_result
 
 pytestmark = pytest.mark.unit
@@ -109,6 +109,69 @@ def test_interactive_failure_is_raised_as_auth_error(fake_msal: FakeMsal) -> Non
         user_context().acquire_token([ARM_SCOPE])
 
 
+# ---------------------------------------------------------------------------- consent
+
+
+def _consent_error() -> Result:
+    """Build the MSAL result Entra returns when an app lacks consent for the scopes."""
+    return error_result("invalid_grant", "AADSTS65001", error_codes=[65001])
+
+
+def test_a_failed_sign_in_is_reported_rather_than_retried(fake_msal: FakeMsal) -> None:
+    # Entra shows its own consent screen, so nothing here reopens the browser. A retry with
+    # prompt=consent used to live here and was removed once live testing showed it could not
+    # fire; see the comment in AuthContext._acquire_for_user.
+    fake_msal.interactive = lambda call: _consent_error()
+
+    with pytest.raises(ConsentRequired) as caught:
+        user_context().acquire_token(["User.Read.All"])
+
+    assert caught.value.scopes == ("User.Read.All",)
+    assert fake_msal.methods() == ["interactive"]
+    assert "prompt" not in fake_msal.calls[0].kwargs
+
+
+def test_a_non_consent_failure_is_not_retried(fake_msal: FakeMsal) -> None:
+    fake_msal.interactive = lambda call: error_result("access_denied", "user cancelled")
+
+    with pytest.raises(AuthError, match="access_denied"):
+        user_context().acquire_token([ARM_SCOPE])
+
+    assert fake_msal.methods() == ["interactive"]
+
+
+def test_a_bare_access_denied_explains_both_things_it_can_mean(fake_msal: FakeMsal) -> None:
+    # What a live tenant returns when a user who may not consent leaves "Need admin approval":
+    # no AADSTS code, no description, nothing to tell it apart from pressing Cancel. Measured
+    # 2026-09-20. It must not be classified as a consent failure, and it must still be useful.
+    fake_msal.interactive = lambda call: error_result("access_denied")
+
+    with pytest.raises(AuthError) as caught:
+        user_context().acquire_token(["User.Read.All"])
+
+    assert not isinstance(caught.value, ConsentRequired)
+    message = str(caught.value)
+    assert "User.Read.All" in message
+    assert "partner-tenant" in message
+    assert "cancelled" in message
+    assert "Need admin approval" in message
+    assert fake_msal.methods() == ["interactive"]
+
+
+def test_a_sibling_reports_missing_consent_without_prompting(fake_msal: FakeMsal) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: _consent_error()
+
+    with pytest.raises(ConsentRequired):
+        user_context().for_tenant("customer").acquire_token(["User.Read.All"])
+
+    # A sibling has no browser of its own; it reports and stops.
+    assert fake_msal.methods() == ["silent"]
+
+
+# ---------------------------------------------------------------------------- other failures
+
+
 def test_ambiguous_account_is_rejected(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT, dict(ACCOUNT)]
 
@@ -147,17 +210,17 @@ def test_login_is_silent_when_a_token_is_cached(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: token_result()
 
-    user_context().login(client_id=GRAPH_POWERSHELL_CLIENT_ID, scopes=["User.Read"])
+    user_context().login(client_id=GRAPH_CLI_CLIENT_ID, scopes=["User.Read"])
 
     assert fake_msal.methods() == ["silent"]
-    assert fake_msal.apps[0].client_id == GRAPH_POWERSHELL_CLIENT_ID
+    assert fake_msal.apps[0].client_id == GRAPH_CLI_CLIENT_ID
 
 
 def test_forced_login_always_prompts(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: token_result()
 
-    user_context().login(client_id=GRAPH_POWERSHELL_CLIENT_ID, scopes=["User.Read"], force=True)
+    user_context().login(client_id=GRAPH_CLI_CLIENT_ID, scopes=["User.Read"], force=True)
 
     assert fake_msal.methods() == ["interactive"]
 

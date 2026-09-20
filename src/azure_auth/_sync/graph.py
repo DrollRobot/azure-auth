@@ -12,7 +12,7 @@ import httpx
 from azure_auth._sync.base import ResourceClient
 from azure_auth.auth.context import AuthContext
 from azure_auth.clients.errors import GraphError, ResourceError
-from azure_auth.constants import GRAPH_POWERSHELL_CLIENT_ID, GRAPH_RESOURCE
+from azure_auth.constants import GRAPH_CLI_CLIENT_ID, GRAPH_RESOURCE
 
 BATCH_LIMIT = 20
 
@@ -30,7 +30,7 @@ class GraphClient(ResourceClient):
         >>> users = graph.get_all("/users")  # doctest: +SKIP
     """
 
-    DEFAULT_CLIENT_ID: ClassVar[str] = GRAPH_POWERSHELL_CLIENT_ID
+    DEFAULT_CLIENT_ID: ClassVar[str] = GRAPH_CLI_CLIENT_ID
     RESOURCE: ClassVar[str] = GRAPH_RESOURCE
     ERROR_CLASS: ClassVar[type[ResourceError]] = GraphError
 

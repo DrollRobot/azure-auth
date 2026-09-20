@@ -13,7 +13,7 @@ import pytest
 from azure_auth import AuthContext
 from azure_auth.clients import GraphClient, GraphError
 from azure_auth.clients.base import claims_from_challenge, retry_delay
-from azure_auth.constants import GRAPH_POWERSHELL_CLIENT_ID
+from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from tests.fakes import FakeMsal, token_result
 from tests.http import Recorder, ok
 
@@ -56,7 +56,7 @@ async def test_request_carries_a_token_for_the_graph_defaults(
     assert body == {"id": "1"}
     assert str(request.url) == f"{GRAPH}/me?%24select=id"
     assert request.headers["Authorization"] == "Bearer interactive"
-    assert fake_msal.apps[0].client_id == GRAPH_POWERSHELL_CLIENT_ID
+    assert fake_msal.apps[0].client_id == GRAPH_CLI_CLIENT_ID
     # MSAL rejects the reserved OpenID Connect scopes, so the client drops them.
     assert fake_msal.calls[0].scopes == ["https://graph.microsoft.com/User.Read.All"]
     assert GraphClient(auth, scopes=["openid", "email"]).scopes == ("email",)
@@ -78,9 +78,7 @@ async def test_client_id_precedence(fake_msal: FakeMsal) -> None:
     context_id = AuthContext("tenant", username=USER, client_id="context-app")
     assert GraphClient(context_id).client_id == "context-app"
     assert GraphClient(context_id, client_id="client-app").client_id == "client-app"
-    assert GraphClient(AuthContext("tenant", username=USER)).client_id == (
-        GRAPH_POWERSHELL_CLIENT_ID
-    )
+    assert GraphClient(AuthContext("tenant", username=USER)).client_id == (GRAPH_CLI_CLIENT_ID)
 
 
 async def test_app_flow_rules(fake_msal: FakeMsal) -> None:
@@ -109,7 +107,7 @@ async def test_login_uses_the_clients_id_and_scopes(auth: AuthContext, fake_msal
     await graph.login(force=True)
 
     assert fake_msal.methods() == ["interactive", "interactive"]
-    assert fake_msal.apps[0].client_id == GRAPH_POWERSHELL_CLIENT_ID
+    assert fake_msal.apps[0].client_id == GRAPH_CLI_CLIENT_ID
     assert fake_msal.calls[0].scopes == ["https://graph.microsoft.com/User.Read.All"]
     assert graph.auth is auth
 

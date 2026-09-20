@@ -14,6 +14,13 @@ _CONSENT_ERROR_CODES = frozenset({65001, 65004, 650052, 650056, 650057})
 _CONSENT_MARKERS = frozenset({"consent_required"})
 _INTERACTION_ERRORS = frozenset({"interaction_required", "login_required", "invalid_grant"})
 
+# What Entra sends when a browser sign-in ends without a token. Observed against a live tenant
+# on 2026-09-20: a user who may not consent is shown "Need admin approval", and leaving that
+# page returns a bare ``access_denied`` -- no AADSTS code, no description, nothing to
+# distinguish it from someone pressing Cancel on an ordinary consent screen. So it cannot be
+# classified as a consent failure, and the message has to cover both readings.
+_DECLINED_ERRORS = frozenset({"access_denied"})
+
 
 class AuthError(Exception):
     """Base class for every authentication failure raised by this package."""
@@ -110,4 +117,11 @@ def error_from_msal_result(
         return ConsentRequired(message, tenant_id=tenant_id, scopes=scopes)
     if error in _INTERACTION_ERRORS:
         return InteractionRequired(message, tenant_id=tenant_id, scopes=scopes)
+    if error in _DECLINED_ERRORS:
+        return AuthError(
+            f"{message}. No token was issued for {' '.join(scopes) or '(no scopes)'} in tenant "
+            f"{tenant_id}. Either the sign-in was cancelled, or the account is not allowed to "
+            "consent to these scopes and was shown 'Need admin approval' -- in which case an "
+            "administrator has to grant them before this account can use them."
+        )
     return AuthError(message)
