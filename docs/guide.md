@@ -69,6 +69,34 @@ Two things follow from that table:
   in the tenant before, which in a fresh tenant is close to nothing. Short names such as
   `User.Read.All` are qualified for you. App flows always use `.default`.
 
+### Consent
+
+Entra shows a consent screen by itself the first time an application is asked for delegated
+scopes it has not been granted, so in an ordinary interactive sign-in consent happens without
+this package doing anything. Asking for more scopes later works the same way: the cached token
+does not match the new scopes, the silent attempt fails, and the browser opens again.
+
+The screen decides what is granted, not this package:
+
+- A user who may consent for themselves grants it for themselves.
+- An administrator sees a **Consent on behalf of your organization** checkbox. For a
+  permission that requires admin consent there is no other form: Entra grants those to the
+  whole tenant or not at all, so every user in the tenant gets them through that client id.
+
+**This package never grants consent on its own and offers no way to do so without that
+click.** Granting consent is a tenant-wide security change, not something a token request
+should do as a side effect.
+
+When a sign-in ends without a token, what comes back is usually `access_denied`, with no
+error code to say why. A user who may not consent is shown **Need admin approval**, and
+leaving that page produces exactly the same `access_denied` as pressing Cancel on an ordinary
+consent screen. The two cannot be told apart, so the library does not reopen the browser on
+either — it raises `AuthError` naming the scopes and the tenant, and saying both things it can
+mean.
+
+Sibling contexts from `for_tenant()` never prompt at all, so they report `ConsentRequired` and
+stop. Consent for a customer tenant has to be granted in that tenant.
+
 ## Token cache
 
 | `cache=` | Behaviour |
@@ -184,7 +212,7 @@ For the typed management SDKs no client is needed: pass `credential=auth` (or `a
 
 ```python
 async with ExchangeClient(auth) as exchange:
-    mailboxes = await exchange.run("Get-Mailbox", ResultSize=100, IncludeInactive=True)
+    mailboxes = await exchange.run("Get-Mailbox", IncludeInactive=True)
     print(exchange.last_warnings)
 
 async with IppsClient(auth) as ipps:
@@ -207,8 +235,19 @@ from module version 3.10.1:
   redirect itself, because HTTP libraries drop the `Authorization` header on a cross-host
   redirect, and keeps using the regional host.
 
-Not confirmed against a live tenant yet: paging of large results (the client posts the same
-body to `@odata.nextLink`) and the `X-ResponseFormat` and `X-CmdletName` headers.
+- Paging works by POSTing the same body again to `@odata.nextLink`. Confirmed against a live
+  tenant: 13 pages with `page_size=2`, each page after the first fetched from the link.
+  `run()` walks every page, so it returns the whole result set; use `iter_pages()` to stop
+  early.
+
+`ResultSize` does nothing here. In the PowerShell module it is a client-side cap applied
+while consuming pages, not a cmdlet parameter, so `InvokeCommand` ignores it — silently, with
+no warning, in every spelling (`10`, `"10"`, `"Unlimited"`). `run("Get-Mailbox", ResultSize=10)`
+returns every mailbox in the tenant. To limit results, break out of `iter_pages()` yourself.
+
+The `X-ResponseFormat` and `X-CmdletName` headers were reconstructed from memory rather than
+found in the module assemblies. Live calls succeed with them, which shows they are accepted,
+not that they are required or correct.
 
 App flows need the `Exchange.ManageAsApp` application permission and an Exchange
 administrator role on the service principal.
