@@ -4,7 +4,7 @@ Thank you for your interest in contributing!
 ## Setting up a development environment
 Requires Python 3.14+ and [uv](https://docs.astral.sh/uv/).
 ```
-git clone https://github.com/FIXME/azure-auth.git
+git clone https://github.com/DrollRobot/azure-auth.git
 cd azure-auth
 uv sync --all-groups --all-extras
 uv run pre-commit install
@@ -18,14 +18,30 @@ Pre-commit also runs lint, format, type check, and secret detection
 automatically on every commit.
 
 ### Code structure
-<!-- FIXME: update paths and descriptions to match your project layout -->
-- `src/azure_auth/` -- library source (src layout)
-- `tests/` -- pytest test suite
+- `src/azure_auth/auth/` -- `AuthContext`, credentials, the token cache, the Windows
+  certificate store signer and the authentication errors
+- `src/azure_auth/clients/` -- the asynchronous resource clients; the source of truth
+- `src/azure_auth/_sync/` -- blocking clients, **generated** from `clients/`; never edit
+- `src/azure_auth/sync/` -- public import path for the blocking clients
+- `scripts/generate_sync.py` -- the generator for `_sync/` and `tests/unit/sync/`
+- `tests/unit/`, `tests/integration/`, `tests/live/` -- pytest suites by scope
+- `tests/unit/sync/` -- **generated** from the client tests in `tests/unit/`; never edit
 - `docs/` -- MkDocs documentation source
 
 ### Naming and module conventions
-<!-- FIXME: describe the key architectural patterns your project uses.
-     Example patterns: command/handler, service/repository, client/parser, etc. -->
+- One `AuthContext` owns credentials, cache and account. Resource clients never talk to MSAL;
+  they ask the context for a token and pass their client id and scopes.
+- Every resource client subclasses `ResourceClient`, which owns retries, the 401 claims
+  challenge, error mapping and the check that a token is only sent to the resource's host.
+- Write clients asynchronously with plain constructs (`async def`, `await`, `async with`,
+  `async for`, `asyncio.sleep`). After changing anything in `src/azure_auth/clients/` or a
+  client test in `tests/unit/`, run `uv run python scripts/generate_sync.py` and commit the
+  result. A test fails when the generated files are out of date.
+- MSAL result dictionaries never leave `auth/`; translate them into the exceptions in
+  `auth/errors.py`.
+- Secrets are held in memory only. There is no unencrypted disk cache, and none may be added.
+- Everything that knows about the undocumented Exchange `InvokeCommand` endpoint stays in
+  `clients/invoke_command.py`.
 
 ### Public API
 Export new public symbols from `src/azure_auth/__init__.py`.
