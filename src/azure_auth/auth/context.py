@@ -261,6 +261,11 @@ class AuthContext:
         return self._credential is not None
 
     @property
+    def is_sibling(self) -> bool:
+        """Whether this context was created by :meth:`for_tenant` and so never prompts."""
+        return not self._interactive_allowed
+
+    @property
     def authority(self) -> str:
         """The authority URL for this tenant."""
         return f"{self._authority_host}/{self._tenant_id}"
