@@ -1,6 +1,5 @@
-# FIXME: set site_name, site_description, and repo_url for your project
 site_name: azure-auth
-site_description: FIXME
+site_description: Authentication helpers and thin clients for Microsoft cloud services
 repo_url: https://github.com/DrollRobot/azure-auth
 
 theme:
@@ -11,10 +10,13 @@ theme:
     - content.code.copy       # copy button on code blocks
     - search.highlight
 
-# FIXME: update nav to match your actual docs pages
 nav:
   - Home: index.md
-  - Reference: reference/azure_auth.md
+  - Guide: guide.md
+  - Reference:
+      - Authentication: reference/auth.md
+      - Clients: reference/clients.md
+      - Blocking clients: reference/sync.md
 
 markdown_extensions:
   - admonition                # !!! note style callouts

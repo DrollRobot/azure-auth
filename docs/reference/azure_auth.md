@@ -1,3 +1,0 @@
-# Reference
-
-::: azure_auth
