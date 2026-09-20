@@ -10,13 +10,14 @@ import hashlib
 import os
 import subprocess
 import sys
+import uuid
 from collections.abc import Iterator
 
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from azure_auth import CertificateUnavailable
+from azure_auth import AuthContext, AuthError, CertificateUnavailable
 from azure_auth.auth import cng
 from azure_auth.auth.credentials import CertStoreCredential
 from tests.certs import decode_jwt, verify_signature
@@ -97,6 +98,19 @@ def test_assertion_is_signed_ps256_by_the_store_key(
     header, claims, signing_input, signature = decode_jwt(token)
     assert (header["alg"], claims["aud"]) == ("PS256", "https://login/token")
     verify_signature(public_key, signing_input, signature, "PS256")
+
+
+@pytest.mark.live
+def test_real_msal_sends_the_store_assertion_to_entra(thumbprint: str) -> None:
+    # The application id is made up, so Entra ID answers "application not found". Getting
+    # that far proves that MSAL accepts the assertion callable and that the signed JWT is
+    # well formed; a malformed assertion is rejected earlier, with a different error.
+    auth = AuthContext(
+        "contoso.onmicrosoft.com", client_id=str(uuid.uuid4()), certificate_thumbprint=thumbprint
+    )
+
+    with pytest.raises(AuthError, match="AADSTS700016"):
+        auth.get_token("https://graph.microsoft.com/.default")
 
 
 def test_digest_must_be_sha256(thumbprint: str) -> None:
