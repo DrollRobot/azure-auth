@@ -1,0 +1,37 @@
+# FIXME: set site_name, site_description, and repo_url for your project
+site_name: azure-auth
+site_description: FIXME
+repo_url: https://github.com/DrollRobot/azure-auth
+
+theme:
+  name: material
+  features:
+    - navigation.sections     # collapsible sections in left nav
+    - navigation.expand       # expand all by default
+    - content.code.copy       # copy button on code blocks
+    - search.highlight
+
+# FIXME: update nav to match your actual docs pages
+nav:
+  - Home: index.md
+  - Reference: reference/azure_auth.md
+
+markdown_extensions:
+  - admonition                # !!! note style callouts
+  - pymdownx.superfences      # fenced code with language detection
+  - pymdownx.highlight        # syntax highlighting
+  - pymdownx.inlinehilite     # inline `code` highlighting
+  - toc:
+      permalink: true         # ¶ link on each heading
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_signature_annotations: true

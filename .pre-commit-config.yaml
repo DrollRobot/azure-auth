@@ -1,0 +1,114 @@
+# .pre-commit-config.yaml
+
+# configure pre-commit checks
+# install uv: https://docs.astral.sh/uv/
+# uv sync
+# uv run pre-commit install
+# uv run pre-commit install --hook-type pre-push
+# uv run pre-commit autoupdate
+
+default_language_version:
+  python: python3.14
+
+default_stages: [pre-commit]
+
+ci:
+  autoupdate_schedule: monthly
+
+repos:
+  # Generic hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+      - id: mixed-line-ending
+        args: [--fix=lf]  # for cross-platform support
+
+  # detect-secrets
+  - repo: local
+    hooks:
+      - id: detect-secrets
+        name: Detect secrets
+        entry: uv run detect-secrets-hook --baseline .secrets.baseline
+        language: system
+
+      # The hook above only checks that findings are *in* the baseline; this
+      # gate requires every entry to be an audited false positive, so a
+      # blindly regenerated baseline cannot smuggle a real secret into a
+      # commit (and therefore into pushed history).
+      - id: secrets-baseline-audited
+        name: secrets baseline audited
+        entry: uv run pytest tests/test_secrets_baseline_audited.py --no-cov -q
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # Ruff: lint + format
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # Mypy type checking
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      # Block mypy overrides that silence imports with published type stubs
+      - id: mypy-stub-guard
+        name: mypy stub guard
+        entry: uv run pytest tests/test_mypy_stub_guard.py --no-cov -q
+        language: system
+        files: ^pyproject\.toml$
+        pass_filenames: false
+
+  # Block inline secret-scanner suppressions at commit time
+  - repo: local
+    hooks:
+      - id: no-inline-secret-suppressions
+        name: no inline secret suppressions
+        entry: uv run pytest tests/test_no_inline_suppressions_for_secrets.py --no-cov -q
+        language: system
+        pass_filenames: false
+        always_run: true
+
+  # Pre-push checks
+  - repo: local
+    hooks:
+      # uv lock file verification
+      - id: uv-lock-check
+        name: uv lock --locked
+        entry: uv lock --locked
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+
+      # dependency vulnerability checking
+      - id: uv-audit
+        name: uv audit
+        entry: uv audit
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+
+      # run non-slow, non-live pytest
+      - id: pytest-prepush
+        name: pytest (prepush)
+        entry: uv run pytest -m "not live and not slow and not destructive_local and not destructive_remote"
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true

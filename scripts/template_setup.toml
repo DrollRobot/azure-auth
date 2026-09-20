@@ -1,0 +1,81 @@
+# scripts/template_setup.toml
+#
+# Config-driven template setup. Edit the values below, then run:
+#   uv run scripts/template_setup/setup_new_project.py
+# --dry-run previews every change with nothing applied; -y/--yes skips the
+# single confirmation prompt (still previews first).
+#
+# Lives in scripts/, not scripts/template_setup/, so cleanup.py's deletion of
+# the setup-scripts folder doesn't take this with it -- compare_to_template.py
+# keeps reading it afterward (see "SETUP + COMPARE" below).
+
+# ==========================================================================
+# SETUP-ONLY -- read once by setup_new_project.py, unused after that
+# ==========================================================================
+
+[project]
+# New project name (any case). Derives both the snake_case import name and
+# kebab-case distribution name. No-op until changed from the template's own.
+name = "azure-auth"
+
+# Your GitHub username; replaces the template author's everywhere it appears
+# (clone URLs, badges, docs). No-op until changed from the template's own.
+github_user = "DrollRobot"
+
+# Python version (MAJOR.MINOR or MAJOR.MINOR.PATCH).
+python_version = "3.14"
+
+# Initial version written to pyproject.toml. Use 0.1.0, not the template's
+# own accumulated release number -- a new project hasn't released anything.
+version = "0.1.0"
+
+[license]
+# One of: "mit", "apache", "gnu", "proprietary". No default -- mandatory
+# choice, fails validation if left unedited (see choose_license.py).
+key = "mit"
+# Required unless key = "gnu" (the GPL text carries its own notice).
+year = "2026"
+name = "DrollRobot"
+# Required only when key = "proprietary".
+company = ""
+
+[git]
+# DESTRUCTIVE: deletes .git and runs `git init`. Refused unless the repo
+# still looks like a pristine, un-reinitialized template clone.
+reinit = true
+branch = "main"
+
+# ==========================================================================
+# SETUP + COMPARE -- also read by compare_to_template.py; keep accurate for
+# the life of the project
+# ==========================================================================
+
+[features]
+# Each false removes that feature. All default true (no-op if unedited).
+mkdocs = true
+# The config system: the per-user config.toml package (src/<package>/config/
+# -- schema, config CLI, credential backends) and its tests. false deletes
+# the whole package; secret_storage/keyring/keyvault below must then be
+# false too.
+config_system = false
+# The secret-storage machinery inside the config package: the backend
+# dispatcher (config/secrets.py), every credential backend, and their tests.
+# Requires config_system. false deletes them all (for projects whose config
+# holds no secrets); keyring/keyvault below must then be false too.
+secret_storage = false
+# OS-keyring secret backend (config/keyring_backend.py) and its unit-test
+# suite. Requires config_system and secret_storage. false deletes both files.
+keyring = false
+# Azure Key Vault secret backend (config/keyvault_backend.py). Requires
+# config_system and secret_storage. false deletes it.
+keyvault = false
+# Commented-out "mint a GitHub App token" steps in .github/workflows/
+# {ci,audit,docs}.yml, for cloning private git deps in CI. false deletes them.
+private_repo_deps = false
+# scripts/mark_remote_disposable.py + tests/verify_remote_disposable.py stub
+# pair, gating @pytest.mark.destructive_remote tests. false deletes both.
+remote_disposable_scripts = false
+# SECURITY.md, GitHub's vulnerability-disclosure page. false deletes it.
+security_policy = true
+# CONTRIBUTING.md, linked in GitHub's issue/PR sidebar. false deletes it.
+contributing_guide = true
