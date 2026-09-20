@@ -222,7 +222,10 @@ class InvokeCommandClient(ResourceClient):
             **parameters: Cmdlet parameters. Use ``True`` for switch parameters.
 
         Returns:
-            The output objects as dictionaries.
+            Every output object, as dictionaries. There is no server-side limit: a cmdlet
+            with a large result set is paged through in full. ``ResultSize`` does not change
+            this, because the PowerShell module applies it client side rather than sending
+            it, so ``InvokeCommand`` ignores it. To stop early, use :meth:`iter_pages`.
 
         Raises:
             InvokeCommandError: If the service rejects the cmdlet.

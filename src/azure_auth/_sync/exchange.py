@@ -19,7 +19,13 @@ class ExchangeClient(InvokeCommandClient):
 
     Example:
         >>> exchange = ExchangeClient(auth)  # doctest: +SKIP
-        >>> mailboxes = exchange.run("Get-Mailbox", ResultSize=10)  # doctest: +SKIP
+        >>> mailboxes = exchange.run("Get-Mailbox")  # doctest: +SKIP
+
+    Note:
+        ``ResultSize`` is not a cmdlet parameter on this endpoint. The PowerShell module
+        applies it client side while consuming pages, so ``InvokeCommand`` ignores it and
+        ``run`` returns every result. Use :meth:`~InvokeCommandClient.iter_pages` and stop
+        when you have enough.
     """
 
     RESOURCE: ClassVar[str] = EXCHANGE_RESOURCE
