@@ -59,7 +59,12 @@ def test_request_carries_a_token_for_the_graph_defaults(
     assert str(request.url) == f"{GRAPH}/me?%24select=id"
     assert request.headers["Authorization"] == "Bearer interactive"
     assert fake_msal.apps[0].client_id == GRAPH_POWERSHELL_CLIENT_ID
-    assert fake_msal.calls[0].scopes == ["https://graph.microsoft.com/User.Read.All", "openid"]
+    # MSAL rejects the reserved OpenID Connect scopes, so the client drops them.
+    assert fake_msal.calls[0].scopes == ["https://graph.microsoft.com/User.Read.All"]
+    assert GraphClient(auth, scopes=["openid", "email"]).scopes == ("email",)
+    assert GraphClient(auth, scopes=["offline_access"]).scopes == (
+        "https://graph.microsoft.com/.default",
+    )
 
 
 def test_without_scopes_the_default_scope_is_requested(
@@ -196,6 +201,8 @@ def test_retry_delay_understands_dates_and_caps_the_wait() -> None:
     soon = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=30)
     dated = httpx.Response(429, headers={"Retry-After": email.utils.format_datetime(soon)})
     assert 25 <= retry_delay(dated, 1, 120) <= 30
+    naive = soon.strftime("%a, %d %b %Y %H:%M:%S -0000")
+    assert 25 <= retry_delay(httpx.Response(429, headers={"Retry-After": naive}), 1, 120) <= 30
     assert retry_delay(httpx.Response(429, headers={"Retry-After": "600"}), 1, 120) == 120
     assert retry_delay(httpx.Response(429, headers={"Retry-After": "soon"}), 3, 120) == 8
     assert retry_delay(httpx.Response(429), 10, 120) == 30

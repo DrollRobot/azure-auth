@@ -19,7 +19,7 @@ import httpx
 from azure_auth.auth.context import AuthContext
 from azure_auth.clients.errors import ResourceError
 
-_OIDC_SCOPES = frozenset({"openid", "profile", "offline_access", "email"})
+_RESERVED_SCOPES = frozenset({"openid", "profile", "offline_access"})
 _RETRY_STATUSES = frozenset({429, 503})
 _CLAIMS_PATTERN = re.compile(r'claims="([^"]+)"')
 _REQUEST_ID_HEADERS = ("request-id", "x-ms-request-id", "client-request-id")
@@ -71,6 +71,8 @@ def retry_delay(response: httpx.Response, attempt: int, max_wait: float) -> floa
             except ValueError:
                 pass
             else:
+                if when.tzinfo is None:  # "-0000" parses as a naive UTC time
+                    when = when.replace(tzinfo=datetime.UTC)
                 delay = (when - datetime.datetime.now(datetime.UTC)).total_seconds()
     return max(0.0, min(delay, max_wait))
 
@@ -181,11 +183,13 @@ class ResourceClient:
             Fully qualified scopes.
         """
         default = [f"{self.RESOURCE}/.default"]
-        if not scopes:
+        # MSAL adds the OpenID Connect scopes itself and rejects them when they are passed in.
+        wanted = [scope for scope in scopes or () if scope not in _RESERVED_SCOPES]
+        if not wanted:
             return default
         qualified = [
-            scope if "://" in scope or scope in _OIDC_SCOPES else f"{self.RESOURCE}/{scope}"
-            for scope in scopes
+            scope if "://" in scope or scope == "email" else f"{self.RESOURCE}/{scope}"
+            for scope in wanted
         ]
         if self._auth.is_app_flow and qualified != default:
             raise ValueError(f"App flows always request {default[0]}; do not pass scopes")
