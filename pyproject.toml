@@ -67,7 +67,9 @@ pythonpath = ["."]
 addopts = [
     "--cov=azure_auth",
     "--cov-report=term-missing",
-    "--cov-fail-under=0", # FIXME: coverage disabled for template. update for your project.
+    # The Windows certificate signer only runs under --run-destructive-local, and not at
+    # all on other platforms, so the floor leaves room for it.
+    "--cov-fail-under=85",
     "--strict-markers",
     "--strict-config",
 ]

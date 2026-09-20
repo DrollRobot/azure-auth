@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -176,6 +177,14 @@ def test_thumbprint_is_normalised(value: str) -> None:
 def test_bad_thumbprint_is_rejected(value: str) -> None:
     with pytest.raises(CertificateUnavailable, match="SHA-1 thumbprint"):
         CertStoreCredential(value)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="covers the stub used off Windows")
+def test_certificate_store_is_reported_as_unavailable_off_windows() -> None:
+    with pytest.raises(CertificateUnavailable, match="Windows certificate store"):
+        cng.load_certificate_der(THUMBPRINT)
+    with pytest.raises(CertificateUnavailable, match="certificate_pem or certificate_pfx"):
+        cng.sign_digest(THUMBPRINT, bytes(32), padding="pss")
 
 
 # ---------------------------------------------------------------------------- PEM / PFX
