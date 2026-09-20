@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fakes import FakeMsal
+
 # ---------------------------------------------------------------------------
 # Destructive-test opt-in gates
 # ---------------------------------------------------------------------------
@@ -156,11 +158,19 @@ def _require_disposable_remote(request: pytest.FixtureRequest) -> None:
 
 
 # ---------------------------------------------------------------------------
-# FIXME: add project-specific fixtures below
+# Project fixtures
 # ---------------------------------------------------------------------------
-# Example:
-#
-# @pytest.fixture(scope="session")
-# def client() -> MyClient:
-#     """Return a client configured for live tests."""
-#     return MyClient(base_url=...)
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    """Run ``@pytest.mark.anyio`` tests on asyncio only."""
+    return "asyncio"
+
+
+@pytest.fixture
+def fake_msal(monkeypatch: pytest.MonkeyPatch) -> FakeMsal:
+    """Replace the ``msal`` module used by ``AuthContext`` with a scriptable fake."""
+    fake = FakeMsal()
+    monkeypatch.setattr("azure_auth.auth.context.msal", fake)
+    return fake

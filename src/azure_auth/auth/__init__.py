@@ -1,21 +1,10 @@
-"""Authentication helpers and thin clients for Microsoft cloud services.
-
-Create one :class:`AuthContext`, hand it to the client for the resource you need, and make
-requests; the client takes care of tokens.
-
-Example:
-    >>> from azure_auth import AuthContext
-    >>> auth = AuthContext("contoso.onmicrosoft.com", username="admin@contoso.com")
-    >>> auth.is_app_flow
-    False
-"""
+"""Token acquisition: the authentication context, credentials, cache and errors."""
 
 from __future__ import annotations
 
-from azure_auth.auth import (
+from azure_auth.auth.context import AsyncAuthContext, AuthContext
+from azure_auth.auth.errors import (
     AccountSelectionRequired,
-    AsyncAuthContext,
-    AuthContext,
     AuthError,
     BrokerUnavailable,
     CacheEncryptionUnavailable,
