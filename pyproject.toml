@@ -13,21 +13,6 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     # FIXME add depencencies
-    "platformdirs>=4.3,<5",
-    "tomlkit>=0.13,<1",
-]
-
-[project.optional-dependencies]
-# Credential-backend extras: each installs what one secret backend needs, so
-# the end user picks a backend at install time (e.g. 'uv sync --extra keyring'
-# or 'pip install <package>[keyvault]'). Contributors install all of them with
-# 'uv sync --all-extras'. Delete an extra together with its backend module.
-keyring = [
-    "keyring>=25.0,<26",
-]
-keyvault = [
-    "azure-identity>=1.25,<2",
-    "azure-keyvault-secrets>=4.11,<5",
 ]
 
 [dependency-groups]
@@ -63,14 +48,12 @@ constraint-dependencies = [
 
 [project.scripts]
 azure-auth = "azure_auth.main:main"
-azure-auth-config = "azure_auth.config.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = [
     "--cov=azure_auth",
-    "--cov=scripts",
     "--cov-report=term-missing",
     "--cov-fail-under=0", # FIXME: coverage disabled for template. update for your project.
     "--strict-markers",
@@ -116,7 +99,7 @@ convention = "google"
 [tool.mypy]
 python_version = "3.14"
 strict = true
-files = ["src", "tests", "scripts"]
+files = ["src", "tests"]
 mypy_path = ["scripts"]
 
 # AGENTS: ONLY ADD OVERRIDES IF, AFTER RESEARCHING, THERE IS NO TYPES STUB AVAILABLE.

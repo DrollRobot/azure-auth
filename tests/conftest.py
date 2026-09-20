@@ -4,9 +4,8 @@ Tests are tagged with the marker taxonomy documented in AGENTS.TESTING.md.
 The dependency axis is what gates external resources:
 
 Live tests (marked @pytest.mark.live) require a real external resource --
-network, secrets, a live tenant, or a third-party API -- configured through
-the config system (config.toml + the credential backend; see
-src/azure_auth/config/). Select on that axis with:
+network, secrets, a live tenant, or a third-party API. Select on that axis
+with:
 
     pytest -m "not live"   # offline tests only (the default pre-commit run)
     pytest -m live         # live tests only
@@ -20,7 +19,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from azure_auth.config import Settings, load_settings
 
 # ---------------------------------------------------------------------------
 # Destructive-test opt-in gates
@@ -158,29 +156,11 @@ def _require_disposable_remote(request: pytest.FixtureRequest) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Settings
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def settings() -> Settings:
-    """Resolved configuration for live tests.
-
-    Resolves through the config system: env vars > credential backend >
-    config.toml > schema defaults. Profile selection via the profile env
-    var (``resolve.PROFILE_ENV``), else default_profile in config.toml.
-    Fails with an actionable ConfigError (naming the init command and env
-    vars) when required values are missing.
-    """
-    return load_settings()
-
-
-# ---------------------------------------------------------------------------
 # FIXME: add project-specific fixtures below
 # ---------------------------------------------------------------------------
-# Example (secrets resolve through the credential backend automatically):
+# Example:
 #
 # @pytest.fixture(scope="session")
-# def client(settings: Settings) -> MyClient:
+# def client() -> MyClient:
 #     """Return a client configured for live tests."""
-#     return MyClient(base_url=settings.api_url, secret=settings.client_secret)
+#     return MyClient(base_url=...)
