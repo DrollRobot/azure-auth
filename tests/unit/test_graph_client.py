@@ -262,7 +262,15 @@ async def test_get_all_follows_next_links(auth: AuthContext) -> None:
     assert all(r.headers["ConsistencyLevel"] == "eventual" for r in recorder.requests)
 
 
-@pytest.mark.parametrize("url", ["https://evil.example/v1.0/users", "http://graph.microsoft.com/x"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/v1.0/users",
+        "http://graph.microsoft.com/x",
+        "https://graph.microsoft.com@evil.example/v1.0/users",
+        "https://someone@graph.microsoft.com/v1.0/users",
+    ],
+)
 async def test_token_is_never_sent_to_another_host(auth: AuthContext, url: str) -> None:
     recorder = Recorder([ok({"value": [], "@odata.nextLink": url})])
     graph = GraphClient(auth, transport=recorder.transport)

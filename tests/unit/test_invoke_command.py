@@ -188,6 +188,20 @@ async def test_ipps_ignores_a_redirect_to_a_foreign_host_name(auth: AuthContext)
     assert [r.url.host for r in recorder.requests] == [IPPS_HOST, f"evil.{IPPS_HOST}"]
 
 
+@pytest.mark.parametrize("location", ["/adminapi/elsewhere", f"https://nam12b.{IPPS_HOST}/x"])
+async def test_redirect_that_cannot_be_followed_is_an_error(
+    auth: AuthContext, location: str
+) -> None:
+    # Every host keeps redirecting, so even the regional retry ends in a redirect.
+    recorder = Recorder(lambda request: httpx.Response(302, headers={"Location": location}))
+    ipps = IppsClient(auth, transport=recorder.transport)
+
+    with pytest.raises(InvokeCommandError) as caught:
+        await ipps.run("Get-Label")
+
+    assert caught.value.status == 302
+
+
 async def test_next_link_on_a_foreign_host_is_refused(auth: AuthContext) -> None:
     recorder = Recorder([ok({"value": [], "@odata.nextLink": "https://evil.example/next"})])
     exchange = ExchangeClient(auth, transport=recorder.transport)

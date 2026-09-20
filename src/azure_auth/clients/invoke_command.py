@@ -184,6 +184,9 @@ class InvokeCommandClient(ResourceClient):
                 target = httpx.URL(url) if "://" in url else None
                 retry_url = str(target.copy_with(host=self._base_url.host)) if target else url
                 response = await self.request("POST", retry_url, json=payload, headers=headers)
+        if response.is_redirect:
+            # A redirect that could not be followed must not look like an empty result.
+            raise self._error(response)
         return response
 
     async def iter_pages(self, cmdlet: str, **parameters: Any) -> AsyncIterator[dict[str, Any]]:

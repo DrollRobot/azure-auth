@@ -235,7 +235,9 @@ class ResourceClient:
             ValueError: If the URL points at a host this client does not trust.
         """
         target = self._base_url.join(url.lstrip("/") if "://" not in url else url)
-        if target.scheme != "https" or not self._is_trusted_host(target.host):
+        trusted = target.scheme == "https" and self._is_trusted_host(target.host)
+        # Credentials in the URL would make httpx replace the bearer token with basic auth.
+        if not trusted or target.userinfo:
             raise ValueError(f"Refusing to send a token for {self.RESOURCE} to {target}")
         return target
 
