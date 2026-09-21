@@ -204,7 +204,12 @@ async def reset_to_baseline(
         principal = await service_principal(graph, client_id)
     except ResourceError as error:
         if error.status == 404:
-            return result  # Never used in this tenant, so there is nothing to reset.
+            # The application has no service principal here, so it has never been consented
+            # to and there is nothing to reset. That is a confirmed baseline, not a failure
+            # to reach one, so it counts as a round; otherwise `ok` would be False for a
+            # tenant that is already in exactly the state being asked for.
+            result.rounds = 1
+            return result
         raise
     principal_id = str(principal["id"])
 
