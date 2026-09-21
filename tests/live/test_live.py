@@ -65,10 +65,11 @@ SETTLE_SECONDS = float(os.environ.get("AZURE_AUTH_TEST_CONSENT_SETTLE_SECONDS", 
 #
 # Entra grants an admin-consent-required permission to the whole tenant -- there is no
 # "only for me" form of it -- so the administrator consenting to RESET_SCOPES necessarily
-# creates an AllPrincipals grant carrying those scopes. If the test asked for one of them, the
-# reset fixture's own sign-in would hand the non-administrator the very access the test
-# expects them to be refused. Keeping the two sets disjoint is what makes this test mean
-# anything, whatever order things propagate in.
+# creates an AllPrincipals grant carrying those scopes, which covers every user including this
+# one. Overlap therefore hands the non-administrator the very access the test expects them to
+# be refused, and the test fails with "DID NOT RAISE". That is a loud failure rather than a
+# silent pass, so this cannot fake a green run -- but it wasted several live runs before the
+# cause was understood, which is why it is written down here.
 NONADMIN_SCOPE = "User.ReadWrite.All"
 
 TENANT = os.environ.get("AZURE_AUTH_TEST_TENANT_ID", "")
@@ -334,6 +335,7 @@ async def test_graph_paging_follows_next_links(user_auth: AuthContext) -> None:
 @needs_nonadmin
 @pytest.mark.interactive
 @pytest.mark.destructive_remote
+@pytest.mark.slow
 async def test_a_user_who_may_not_consent_is_refused_with_a_useful_error(
     consent_reset_to_baseline: str,
 ) -> None:
