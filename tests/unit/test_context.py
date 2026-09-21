@@ -305,17 +305,19 @@ def test_app_flow_error_is_mapped(fake_msal: FakeMsal) -> None:
         auth.get_token(ARM_SCOPE)
 
 
-def test_rejected_ps256_assertion_is_retried_as_rs256(fake_msal: FakeMsal) -> None:
-    results = [error_result("invalid_client", error_codes=[700027]), token_result("rs256")]
-    fake_msal.for_client = lambda call: results.pop(0)
+@pytest.mark.regression
+def test_rejected_certificate_assertion_is_not_retried(fake_msal: FakeMsal) -> None:
+    # AADSTS700027 also means "the key was not found" on the application. Retrying it as
+    # RS256 logged a false reason and left the credential on RS256 for the whole process.
+    fake_msal.for_client = lambda call: error_result("invalid_client", error_codes=[700027])
     auth = AuthContext("tenant", client_id="app", certificate_thumbprint="AB" * 20)
 
-    token = auth.get_token(ARM_SCOPE)
+    with pytest.raises(AuthError, match="invalid_client"):
+        auth.get_token(ARM_SCOPE)
 
-    assert token.token == "rs256"
     assert isinstance(auth._credential, CertStoreCredential)
-    assert auth._credential.algorithm == "RS256"
-    assert fake_msal.methods() == ["for_client", "for_client"]
+    assert auth._credential.algorithm == "PS256"
+    assert fake_msal.methods() == ["for_client"]
 
 
 # ---------------------------------------------------------------------------- tenants

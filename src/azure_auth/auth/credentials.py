@@ -15,7 +15,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -23,13 +22,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric.padding import MGF1, PSS
+from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
 from cryptography.hazmat.primitives.serialization import pkcs12
 
 from azure_auth.auth import cng
 from azure_auth.auth.errors import CertificateUnavailable
 
 ASSERTION_LIFETIME_SECONDS = 600
+
+# PS256 is RSASSA-PSS with SHA-256 and a salt as long as the digest (RFC 7518, section 3.5).
+_PS256_PADDING = PSS(mgf=MGF1(hashes.SHA256()), salt_length=32)
+
+
+class _InvalidPssSignature(Exception):
+    """The key storage provider signed with PSS, but the signature does not verify as PS256."""
 
 
 def _b64url(data: bytes) -> str:
@@ -182,9 +193,12 @@ class PemCertificateCredential:
 class CertStoreCredential:
     """A certificate in the Windows certificate store with a non-exportable key.
 
-    Assertions are signed PS256 first, because Microsoft documents PS256 together with the
-    ``x5t#S256`` header. When the key storage provider refuses PSS padding, or Entra ID
-    rejects the PSS signature, the credential switches to RS256 and stays there.
+    Assertions are signed PS256, because Microsoft documents PS256 together with the
+    ``x5t#S256`` header. The credential switches to RS256, and stays there, when the key
+    storage provider refuses PSS padding or returns a PSS signature that is not PS256. Both
+    are detected here, before anything is sent. An error from Entra ID is never retried with
+    the other algorithm: AADSTS700027 also means the certificate is not registered on the
+    application, so a retry would mistake a configuration error for an algorithm problem.
     """
 
     def __init__(self, thumbprint: str, store_location: cng.StoreLocation = "CurrentUser") -> None:
@@ -198,7 +212,7 @@ class CertStoreCredential:
         self.store_location: cng.StoreLocation = store_location
         self._padding: cng.Padding = "pss"
         self._certificate_der: bytes | None = None
-        self._lock = threading.Lock()
+        self._public_key: rsa.RSAPublicKey | None = None
 
     def __repr__(self) -> str:
         """Describe the credential without touching the key.
@@ -216,36 +230,84 @@ class CertStoreCredential:
         """The JWT algorithm currently in use: ``PS256`` or ``RS256``."""
         return "PS256" if self._padding == "pss" else "RS256"
 
-    def downgrade_to_rs256(self) -> bool:
-        """Switch from PS256 to RS256.
+    def _load_certificate(self) -> tuple[bytes, rsa.RSAPublicKey]:
+        """Read the certificate once, keeping its public key for checking signatures.
 
         Returns:
-            ``True`` if the algorithm changed, ``False`` if RS256 was already in use.
-        """
-        with self._lock:
-            if self._padding == "pkcs1":
-                return False
-            self._padding = "pkcs1"
-            return True
+            The DER-encoded certificate and its RSA public key.
 
-    def _sign(self, digest: bytes) -> bytes:
-        """Sign a digest with the padding currently in use.
+        Raises:
+            CertificateUnavailable: If the certificate cannot be found or holds no RSA key.
+        """
+        if self._certificate_der is None or self._public_key is None:
+            der = cng.load_certificate_der(self.thumbprint, self.store_location)
+            public_key = x509.load_der_x509_certificate(der).public_key()
+            if not isinstance(public_key, rsa.RSAPublicKey):
+                raise CertificateUnavailable(
+                    f"certificate {self.thumbprint} does not hold an RSA key"
+                )
+            self._certificate_der, self._public_key = der, public_key
+        return self._certificate_der, self._public_key
+
+    def _sign(self, digest: bytes, padding: cng.Padding) -> bytes:
+        """Sign a digest, and check that a PSS signature really is PS256.
+
+        A TPM 2.0 that is not in FIPS mode signs PSS with the longest salt the key allows,
+        whatever salt length was requested, and the key storage provider still reports
+        success. PS256 requires a salt as long as the digest, so Entra ID would reject the
+        assertion. Verifying against the certificate catches that before it is sent. PKCS #1
+        v1.5 has no parameter a provider could get wrong, so RS256 signatures are not checked.
 
         Args:
             digest: The SHA-256 digest to sign.
+            padding: ``pss`` for PS256 or ``pkcs1`` for RS256.
 
         Returns:
             The raw signature.
+
+        Raises:
+            SignatureFailed: If the key storage provider refuses to sign with ``padding``.
+            _InvalidPssSignature: If a PSS signature does not verify as PS256.
         """
-        return cng.sign_digest(
-            self.thumbprint, digest, padding=self._padding, store_location=self.store_location
+        signature = cng.sign_digest(
+            self.thumbprint, digest, padding=padding, store_location=self.store_location
+        )
+        if padding == "pss":
+            _certificate_der, public_key = self._load_certificate()
+            try:
+                public_key.verify(signature, digest, _PS256_PADDING, Prehashed(hashes.SHA256()))
+            except InvalidSignature:
+                raise _InvalidPssSignature from None
+        return signature
+
+    def _build(self, client_id: str, token_endpoint: str, padding: cng.Padding) -> str:
+        """Build and sign an assertion with one padding.
+
+        The padding is passed in rather than read from the credential, so the ``alg``
+        header always matches the signature even if another thread switches to RS256.
+
+        Args:
+            client_id: Application (client) id.
+            token_endpoint: Tenant-specific token endpoint; becomes the ``aud`` claim.
+            padding: ``pss`` for PS256 or ``pkcs1`` for RS256.
+
+        Returns:
+            The signed JWT.
+        """
+        certificate_der, _public_key = self._load_certificate()
+        return build_client_assertion(
+            client_id=client_id,
+            token_endpoint=token_endpoint,
+            certificate_der=certificate_der,
+            algorithm="PS256" if padding == "pss" else "RS256",
+            sign=lambda digest: self._sign(digest, padding),
         )
 
     def build_assertion(self, *, client_id: str, token_endpoint: str) -> str:
         """Build a fresh client assertion for one tenant.
 
-        The ``alg`` header is part of what gets signed, so when the key storage provider
-        refuses PSS padding the whole assertion is rebuilt as RS256.
+        The ``alg`` header is part of what gets signed, so when PS256 fails the whole
+        assertion is rebuilt as RS256.
 
         Args:
             client_id: Application (client) id.
@@ -253,27 +315,17 @@ class CertStoreCredential:
 
         Returns:
             The signed JWT.
+
+        Raises:
+            CertificateUnavailable: If the certificate cannot be found, holds no RSA key, or
+                cannot sign even with PKCS #1 v1.5 padding.
         """
-        if self._certificate_der is None:
-            self._certificate_der = cng.load_certificate_der(self.thumbprint, self.store_location)
-        try:
-            return build_client_assertion(
-                client_id=client_id,
-                token_endpoint=token_endpoint,
-                certificate_der=self._certificate_der,
-                algorithm=self.algorithm,
-                sign=self._sign,
-            )
-        except cng.SignatureFailed:
-            if not self.downgrade_to_rs256():
-                raise
-        return build_client_assertion(
-            client_id=client_id,
-            token_endpoint=token_endpoint,
-            certificate_der=self._certificate_der,
-            algorithm=self.algorithm,
-            sign=self._sign,
-        )
+        if self._padding == "pss":
+            try:
+                return self._build(client_id, token_endpoint, "pss")
+            except cng.SignatureFailed, _InvalidPssSignature:
+                self._padding = "pkcs1"
+        return self._build(client_id, token_endpoint, "pkcs1")
 
     def msal_client_credential(self, *, client_id: str, token_endpoint: str) -> Any:
         """Return the value MSAL expects as ``client_credential``.

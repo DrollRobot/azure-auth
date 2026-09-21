@@ -143,9 +143,11 @@ With `certificate_thumbprint=` the private key never leaves the key storage prov
 non-exportable and TPM-backed keys work. Only CNG keys are supported, not legacy CryptoAPI
 keys.
 
-The client assertion is signed **PS256** first, which is what Microsoft documents together
-with the `x5t#S256` header. If the key provider refuses PSS padding, or Entra ID rejects the
-signature (`AADSTS700027`), the credential switches to **RS256** and stays there.
+The client assertion is signed **PS256**, which is what Microsoft documents together with the
+`x5t#S256` header. Each PSS signature is checked against the certificate before it is sent. If
+the key provider refuses PSS padding, or signs with the wrong salt length (a TPM 2.0 outside
+FIPS mode uses the longest salt the key allows), the credential switches to **RS256** and stays
+there. Errors from Entra ID are never retried with the other algorithm.
 
 For `certificate_store="LocalMachine"` the account running the process needs read access to
 the private key (certlm.msc, certificate, All Tasks, Manage Private Keys).

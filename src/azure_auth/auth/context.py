@@ -46,8 +46,6 @@ _LOGGER = logging.getLogger(__name__)
 
 # A cached token is reused until it is this close to expiry.
 _REFRESH_MARGIN_SECONDS = 300
-# AADSTS700027: the client assertion failed signature validation.
-_INVALID_ASSERTION_SIGNATURE = 700027
 
 _TokenKey = tuple[str, frozenset[str]]
 
@@ -547,14 +545,6 @@ class AuthContext:
         if force_refresh:
             app.remove_tokens_for_client()
         result = app.acquire_token_for_client(scopes, claims_challenge=claims)
-        if (
-            "access_token" not in result
-            and isinstance(self._credential, CertStoreCredential)
-            and _INVALID_ASSERTION_SIGNATURE in result.get("error_codes", ())
-            and self._credential.downgrade_to_rs256()
-        ):
-            _LOGGER.warning("Entra ID rejected the PS256 client assertion; retrying with RS256")
-            result = app.acquire_token_for_client(scopes, claims_challenge=claims)
         if "access_token" not in result:
             raise error_from_msal_result(result, tenant_id=self._tenant_id, scopes=scopes)
         return dict(result)

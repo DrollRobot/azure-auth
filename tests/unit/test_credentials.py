@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import datetime
 import hashlib
 import sys
 import time
@@ -11,7 +12,12 @@ from typing import Any
 
 import msal
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.asymmetric.padding import MGF1, PSS
+from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
+from cryptography.x509.oid import NameOID
 
 from azure_auth import (
     AuthError,
@@ -94,7 +100,11 @@ def test_every_assertion_has_a_new_id(certificate: TestCertificate) -> None:
 
 
 def patch_cng(
-    monkeypatch: pytest.MonkeyPatch, certificate: TestCertificate, *, refuse_pss: bool
+    monkeypatch: pytest.MonkeyPatch,
+    certificate: TestCertificate,
+    *,
+    refuse_pss: bool,
+    pss_salt_length: int = 32,
 ) -> list[str]:
     """Replace the CNG calls with an in-memory key; return the list of paddings used."""
     paddings: list[str] = []
@@ -103,6 +113,9 @@ def patch_cng(
         paddings.append(padding)
         if padding == "pss" and refuse_pss:
             raise cng.SignatureFailed("PSS not supported", status=0x80090029)
+        if padding == "pss" and pss_salt_length != 32:
+            pss = PSS(mgf=MGF1(hashes.SHA256()), salt_length=pss_salt_length)
+            return certificate.key.sign(digest, pss, Prehashed(hashes.SHA256()))
         signature: bytes = certificate.sign(padding)(digest)
         return signature
 
@@ -142,6 +155,28 @@ def test_refused_pss_rebuilds_the_assertion_as_rs256(
     assert decode_jwt(second)[0]["alg"] == "RS256"
     assert paddings == ["pss", "pkcs1", "pkcs1"]
     assert credential.algorithm == "RS256"
+    assert "RS256" in repr(credential)
+    public_key = certificate.certificate.public_key()
+    assert isinstance(public_key, rsa.RSAPublicKey)
+    verify_signature(public_key, signing_input, signature, "RS256")
+
+
+def test_pss_with_the_wrong_salt_length_rebuilds_the_assertion_as_rs256(
+    monkeypatch: pytest.MonkeyPatch, certificate: TestCertificate
+) -> None:
+    # A TPM 2.0 outside FIPS mode signs PSS with the longest salt the key allows (222 bytes
+    # for RSA 2048 with SHA-256) and reports success. Entra ID would reject it as PS256.
+    paddings = patch_cng(monkeypatch, certificate, refuse_pss=False, pss_salt_length=222)
+    credential = CertStoreCredential(THUMBPRINT)
+
+    first = credential.build_assertion(client_id="app", token_endpoint=ENDPOINT)
+    second = credential.build_assertion(client_id="app", token_endpoint=ENDPOINT)
+
+    header, _claims, signing_input, signature = decode_jwt(first)
+    assert header["alg"] == "RS256"
+    assert decode_jwt(second)[0]["alg"] == "RS256"
+    assert paddings == ["pss", "pkcs1", "pkcs1"]
+    assert credential.algorithm == "RS256"
     public_key = certificate.certificate.public_key()
     assert isinstance(public_key, rsa.RSAPublicKey)
     verify_signature(public_key, signing_input, signature, "RS256")
@@ -160,11 +195,25 @@ def test_failure_with_pkcs1_is_not_swallowed(
         CertStoreCredential(THUMBPRINT).build_assertion(client_id="app", token_endpoint=ENDPOINT)
 
 
-def test_downgrade_reports_whether_it_changed_anything() -> None:
-    credential = CertStoreCredential(THUMBPRINT)
-    assert credential.downgrade_to_rs256() is True
-    assert credential.downgrade_to_rs256() is False
-    assert "RS256" in repr(credential)
+def test_a_certificate_without_an_rsa_key_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "azure-auth ec test")])
+    now = datetime.datetime.now(datetime.UTC)
+    der = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .sign(key, hashes.SHA256())
+        .public_bytes(serialization.Encoding.DER)
+    )
+    monkeypatch.setattr(cng, "load_certificate_der", lambda thumbprint, store: der)
+
+    with pytest.raises(CertificateUnavailable, match="does not hold an RSA key"):
+        CertStoreCredential(THUMBPRINT).build_assertion(client_id="app", token_endpoint=ENDPOINT)
 
 
 @pytest.mark.parametrize("value", ["ab cd " * 10, "AB:" * 19 + "AB", "ab" * 20])
