@@ -22,10 +22,13 @@
 | `interactive` | Dependency | Requires a human at this desktop to complete a sign-in prompt. Tell the user a prompt is coming before starting one. |
 | `destructive_local` | Dependency | Mutates the host/device running pytest. Skipped by default. |
 | `destructive_remote` | Dependency | Mutates a remote/external system. Skipped by default. |
-| `slow` | Performance | Long-running. |
+| `slow` | Performance | Long-running: anything that would push the pre-push run past 60 seconds. See below. |
 
 ## Running tests
 
+- **The pre-push run must finish in under 60 seconds.** The `pytest (prepush)` hook runs
+    `-m "not live and not slow and not destructive_local and not destructive_remote"`. A new
+    test that would push that over 60 seconds is marked `slow`.
 - Tests should be run before committing code.
 - Use the test procedure below.
 ```
