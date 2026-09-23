@@ -4,15 +4,6 @@ Authentication for Microsoft cloud services, so that other packages do not have 
 it. Create one `AuthContext`, hand it to the client for the resource you need, and make
 requests. The client gets, caches and refreshes tokens.
 
-- Microsoft Graph, Azure Resource Manager, Exchange Online, Security & Compliance and Key
-  Vault clients, plus any `azure-*` SDK client through the `credential` argument.
-- User sign-in through the browser or the Windows broker. App sign-in with a secret, a
-  PEM/PFX certificate, or a non-exportable certificate in the Windows certificate store.
-- Microsoft first-party client ids by default, your own with `client_id=`.
-- In-memory cache, or an encrypted disk cache. Never an unencrypted one.
-- GDAP: one partner sign-in, silent access to customer tenants.
-- Async clients, with generated blocking versions in `azure_auth.sync`.
-
 ## Installation
 
 ```bash

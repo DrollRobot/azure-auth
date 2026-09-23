@@ -24,7 +24,7 @@ The high-level goals of this package.
 
 ### Non-goals
 
-- Device code flow. (at this time)
+- Device code flow.
 
 ### Todo
 
