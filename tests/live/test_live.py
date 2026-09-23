@@ -8,11 +8,19 @@ they leave their tokens in an encrypted disk cache that outlives the run.
 
 Every other user-flow test only *uses* a signed-in account, so it is ``live`` but not
 ``interactive``. It cannot open a prompt: it takes its token from that cache, and skips when
-there is none. So sign in once, then run the rest unattended for as long as the refresh token
-lasts::
+there is none. So do the prompts once, walk away, and run the rest unattended for as long as
+the refresh token lasts::
 
-    uv run --env-file .env pytest tests/live -s -m interactive --no-cov        # user present
+    uv run --env-file .env pytest tests/live -s -m interactive --run-destructive-remote --no-cov
     uv run --env-file .env pytest tests/live -s -m "not interactive" --no-cov  # unattended
+
+The ``interactive`` tests are ordered so that every prompt comes in one stretch and the tenant
+ends up consented. The consent test runs first, because its fixture revokes the Graph
+application's grants and puts nothing back. The Graph sign-in that follows does, through the
+consent screen the missing grants provoke. Run the consent test after that sign-in instead and
+the grants stay revoked: the tests that read cached tokens carry on, but the two refresh tests
+fail, because a refresh needs Entra to issue a new token and the consent for it is gone, and
+the ``.default`` test skips for the same reason.
 
 Environment variables:
 
@@ -401,6 +409,10 @@ async def consent_reset_to_baseline(cache_path: Path) -> str:
         "'Need admin approval' for the non-admin. Click 'Return to the application without"
         " granting consent'. Do NOT click 'Sign in with that account', and do NOT just close"
         " the tab -- closing it leaves the test waiting for a redirect that never arrives.",
+        f"Then the Graph sign-in test, as {USERNAME} again, with a consent screen: it grants"
+        " back what this reset revoked, which is why it comes after. The browser is still"
+        f" signed in as {NONADMIN} at that point, so choose 'Use another account' if it offers"
+        " that one.",
     )
     admin = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
     async with GraphClient(admin, scopes=RESET_SCOPES) as graph:
@@ -437,6 +449,63 @@ async def consent_reset_to_baseline(cache_path: Path) -> str:
 
 
 @needs_user
+@needs_nonadmin
+@pytest.mark.interactive
+@pytest.mark.destructive_remote
+@pytest.mark.slow
+async def test_a_user_who_may_not_consent_is_refused_with_a_useful_error(
+    consent_reset_to_baseline: str,
+) -> None:
+    """A non-administrator asking for an admin-consent-required scope is refused clearly.
+
+    What Entra actually does, measured against a live tenant on 2026-09-20: the user is shown
+    "Need admin approval", and leaving that page returns a bare ``access_denied`` -- no AADSTS
+    code, no description, nothing that distinguishes it from pressing Cancel on an ordinary
+    consent screen.
+
+    So this is *not* a :class:`ConsentRequired`, and :meth:`AuthContext._consent` does not run.
+    It cannot: retrying with ``prompt=consent`` would reopen the same "Need admin approval"
+    page, and treating a cancellation as a reason to reopen the browser would be worse than
+    the error. What the package owes the caller here is an error that says what happened, so
+    that is what this asserts.
+
+    Marked ``destructive_remote``: the fixture deletes consent grants in the tenant, so it
+    needs ``--run-destructive-remote`` and a tenant marked disposable (see
+    ``tests/verify_remote_disposable.py``).
+
+    Two sign-in windows appear. The administrator's, for the reset, then the
+    non-administrator's. On the second, click "Return to the application without granting
+    consent" -- closing the window instead leaves MSAL waiting for a redirect that never comes.
+
+    It is the first test in this module on purpose. Its fixture revokes the Graph
+    application's grants and puts nothing back; the Graph sign-in test immediately after is
+    what grants them again, through the consent screen the missing grants provoke. The
+    Exchange and ARM sign-ins are other applications and restore nothing here.
+
+    It also leaves the browser signed in as the non-administrator, which the next test's
+    walkthrough warns about.
+    """
+    auth = AuthContext(TENANT, username=NONADMIN)
+    async with GraphClient(auth, scopes=[NONADMIN_SCOPE]) as graph:
+        with pytest.raises(AuthError) as caught:
+            await graph.get("/users", params={"$top": "1"})
+
+    message = str(caught.value)
+    # Signing in as the wrong account produces an AuthError too, and would otherwise look like
+    # a pass. It means the browser reused an existing session instead of asking for this user.
+    assert "Signed in as" not in message, (
+        "the browser signed in as somebody else; sign out of the tenant in the browser first"
+    )
+    # A bare "access_denied" tells whoever reads the traceback nothing at all.
+    assert "access_denied" in message
+    assert NONADMIN_SCOPE in message
+    assert TENANT in message
+    assert "Need admin approval" in message
+    # ConsentRequired would have meant the retry ran; it must not have.
+    assert not isinstance(caught.value, ConsentRequired)
+
+
+@needs_user
 @pytest.mark.interactive
 async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
     """A forced browser sign-in to the Graph client id works and signs in the right user.
@@ -444,13 +513,17 @@ async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
     The sign-in is forced, so the interactive flow runs even when the cache could have
     answered: the point is to test it, not to get a token. It asks for every scope the live
     Graph tests use, so its consent screen covers them all and they find their tokens in the
-    cache afterwards.
+    cache afterwards. When the consent test ran first, this is also what consents to the
+    grants its fixture revoked.
     """
     auth = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
     async with GraphClient(auth, scopes=LIVE_GRAPH_SCOPES) as graph:
         with walkthrough_if_waiting(
             f"Sign-in prompt for {USERNAME}, asking for {', '.join(LIVE_GRAPH_SCOPES)}. Sign"
             " in, and accept the consent screen if one appears.",
+            f"The browser may still be signed in as the non-administrator from the consent"
+            f" test. If it offers that account, choose 'Use another account' and sign in as"
+            f" {USERNAME}; signing in as the wrong one fails this test.",
         ):
             await graph.login(force=True)
         me = await graph.get("/me", params={"$select": "userPrincipalName"})
@@ -795,55 +868,6 @@ def test_the_blocking_client_calls_graph(cache_path: Path) -> None:
         require_cached_sign_in(graph)
         me = graph.get("/me", params={"$select": "userPrincipalName"})
     assert me["userPrincipalName"].lower() == USERNAME.lower()
-
-
-@needs_user
-@needs_nonadmin
-@pytest.mark.interactive
-@pytest.mark.destructive_remote
-@pytest.mark.slow
-async def test_a_user_who_may_not_consent_is_refused_with_a_useful_error(
-    consent_reset_to_baseline: str,
-) -> None:
-    """A non-administrator asking for an admin-consent-required scope is refused clearly.
-
-    What Entra actually does, measured against a live tenant on 2026-09-20: the user is shown
-    "Need admin approval", and leaving that page returns a bare ``access_denied`` -- no AADSTS
-    code, no description, nothing that distinguishes it from pressing Cancel on an ordinary
-    consent screen.
-
-    So this is *not* a :class:`ConsentRequired`, and :meth:`AuthContext._consent` does not run.
-    It cannot: retrying with ``prompt=consent`` would reopen the same "Need admin approval"
-    page, and treating a cancellation as a reason to reopen the browser would be worse than
-    the error. What the package owes the caller here is an error that says what happened, so
-    that is what this asserts.
-
-    Marked ``destructive_remote``: the fixture deletes consent grants in the tenant, so it
-    needs ``--run-destructive-remote`` and a tenant marked disposable (see
-    ``tests/verify_remote_disposable.py``).
-
-    Two sign-in windows appear. The administrator's, for the reset, then the
-    non-administrator's. On the second, click "Return to the application without granting
-    consent" -- closing the window instead leaves MSAL waiting for a redirect that never comes.
-    """
-    auth = AuthContext(TENANT, username=NONADMIN)
-    async with GraphClient(auth, scopes=[NONADMIN_SCOPE]) as graph:
-        with pytest.raises(AuthError) as caught:
-            await graph.get("/users", params={"$top": "1"})
-
-    message = str(caught.value)
-    # Signing in as the wrong account produces an AuthError too, and would otherwise look like
-    # a pass. It means the browser reused an existing session instead of asking for this user.
-    assert "Signed in as" not in message, (
-        "the browser signed in as somebody else; sign out of the tenant in the browser first"
-    )
-    # A bare "access_denied" tells whoever reads the traceback nothing at all.
-    assert "access_denied" in message
-    assert NONADMIN_SCOPE in message
-    assert TENANT in message
-    assert "Need admin approval" in message
-    # ConsentRequired would have meant the retry ran; it must not have.
-    assert not isinstance(caught.value, ConsentRequired)
 
 
 @needs_app
