@@ -7,7 +7,7 @@ past -- and redeems the refresh token stored beside it, which is the path under 
 
 The shortcut is only worth having if it models the real thing. So
 ``tests/integration/test_disk_cache.py`` checks that an aged entry really does vanish from a
-search while its refresh token stays, and ``tests/live/test_live.py`` carries a ``slow``
+search while its refresh token stays, and ``tests/live/test_cache.py`` carries a ``slow``
 test that waits out a real token lifetime and asserts the same outcome as the fast one.
 """
 

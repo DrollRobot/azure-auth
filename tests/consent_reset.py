@@ -1,7 +1,7 @@
 """Reset an application's consent in a tenant, back to a known baseline.
 
 Shared by ``scripts/revoke_consent.py`` (run by hand) and the consent fixture in
-``tests/live/test_live.py`` (run as part of a ``destructive_remote`` test), so both take
+``tests/live/test_consent.py`` (run as part of a ``destructive_remote`` test), so both take
 exactly the same path through Graph.
 
 Consent cannot be tested repeatably without a way to un-consent: once an application has been
