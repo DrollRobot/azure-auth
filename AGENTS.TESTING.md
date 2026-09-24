@@ -57,6 +57,12 @@ Tests marked `interactive` open a sign-in prompt and need a human at the machine
 running pytest. Nothing gates them, because a missing human is obvious: the run
 blocks and then times out.
 
+`interactive` means the test *will* prompt, for whatever reason: a consent screen, a
+second user signing in, a forced sign-in. A step that only *might* prompt is not marked.
+The one such step is the `consent_baseline` fixture in `tests/live/conftest.py`: it has
+to run for every live run, so marking it would make it optional. It is silent when the
+tenant already holds the tests' baseline consent, and prompts once when it does not.
+
 Agents should run them only when the user has said they are present, and should
 say a prompt is coming before starting one. Everything else can be run freely
 and repeatedly:

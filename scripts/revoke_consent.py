@@ -242,7 +242,7 @@ async def run(args: argparse.Namespace) -> int:
             return 0
 
         if not doomed:
-            _cli.success("Only your own grant is present. Already at the baseline.")
+            _cli.success("Only your own grant is present. Nothing to revoke.")
             return 0
 
         _cli.section("Delete")
@@ -257,7 +257,7 @@ async def run(args: argparse.Namespace) -> int:
             _cli.warn("Nothing was deleted.")
             return 1
 
-        result = await consent_reset.reset_to_baseline(
+        result = await consent_reset.revoke_grants(
             graph, client_id=args.client_id, keep_principal_id=spare
         )
         for grant_id in result.deleted:

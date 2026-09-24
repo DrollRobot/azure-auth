@@ -1,4 +1,4 @@
-"""Reset an application's consent in a tenant, back to a known baseline.
+"""Revoke an application's consent grants in a tenant.
 
 Shared by ``scripts/revoke_consent.py`` (run by hand) and the consent fixture in
 ``tests/live/test_consent.py`` (run as part of a ``destructive_remote`` test), so both take
@@ -58,7 +58,7 @@ class ResetResult:
 
     @property
     def ok(self) -> bool:
-        """Whether the baseline was reached and confirmed by a clean re-read."""
+        """Whether every grant that was to go is gone, confirmed by a clean re-read."""
         return not self.failed and self.rounds > 0
 
 
@@ -175,7 +175,7 @@ async def _delete_grant(graph: GraphClient, grant_id: str) -> str | None:
     return last
 
 
-async def reset_to_baseline(
+async def revoke_grants(
     graph: GraphClient,
     *,
     client_id: str = GRAPH_CLI_CLIENT_ID,
@@ -183,12 +183,12 @@ async def reset_to_baseline(
 ) -> ResetResult:
     """Delete an application's consent grants, optionally sparing one user's own grant.
 
-    The baseline is "nobody has consented to this application, except possibly the one user
-    named by ``keep_principal_id``". That exception exists because the caller doing the
-    revoking needs consent to make these very calls: revoking its own grant would make the
-    next run prompt again purely to restore tooling access, which tests nothing. Every
-    tenant-wide (``AllPrincipals``) grant is removed regardless, since that is what would let
-    an unrelated user sign in silently and make a consent test pass without consenting.
+    Afterwards nobody has consented to this application, except possibly the one user named
+    by ``keep_principal_id``. That exception exists because the caller doing the revoking
+    needs consent to make these very calls: revoking its own grant would make the next run
+    prompt again purely to restore tooling access, which tests nothing. Every tenant-wide
+    (``AllPrincipals``) grant is removed regardless, since that is what would let an
+    unrelated user sign in silently and make a consent test pass without consenting.
 
     Args:
         graph: A Graph client whose identity holds ``DelegatedPermissionGrant.ReadWrite.All``.
@@ -205,9 +205,9 @@ async def reset_to_baseline(
     except ResourceError as error:
         if error.status == 404:
             # The application has no service principal here, so it has never been consented
-            # to and there is nothing to reset. That is a confirmed baseline, not a failure
-            # to reach one, so it counts as a round; otherwise `ok` would be False for a
-            # tenant that is already in exactly the state being asked for.
+            # to and there is nothing to revoke. That is the end state, confirmed, not a
+            # failure to reach it, so it counts as a round; otherwise `ok` would be False for
+            # a tenant that already has no grants.
             result.rounds = 1
             return result
         raise

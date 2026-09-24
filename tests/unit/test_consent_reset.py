@@ -144,15 +144,15 @@ async def reset(graph: FakeGraph, keep: str | None = None) -> consent_reset.Rese
     Returns:
         What the reset did.
     """
-    return await consent_reset.reset_to_baseline(graph, keep_principal_id=keep)  # type: ignore[arg-type]
+    return await consent_reset.revoke_grants(graph, keep_principal_id=keep)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------- the simple cases
 
 
-async def test_a_tenant_with_no_service_principal_is_already_at_the_baseline() -> None:
-    # The application has never been used here, so there is nothing to reset. That has to
-    # count as success: it is exactly the state the caller asked for.
+async def test_a_tenant_with_no_service_principal_has_nothing_to_revoke() -> None:
+    # The application has never been used here, so there is nothing to revoke. That has to
+    # count as success: no grants is exactly the state the caller asked for.
     result = await reset(FakeGraph(principal_missing=True))
 
     assert result.ok

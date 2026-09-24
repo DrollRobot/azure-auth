@@ -5,9 +5,7 @@ the blocking mirror.
 from __future__ import annotations
 
 import asyncio
-import base64
 import collections
-import json
 import os
 from pathlib import Path
 from typing import Any
@@ -17,15 +15,21 @@ import pytest
 
 from azure_auth import AuthContext, ConsentRequired, GraphClient, GraphError, InteractionRequired
 from azure_auth.sync import GraphClient as BlockingGraphClient
-from tests.live.support import USERNAME, cached_user_auth, needs_user, require_cached_sign_in
+from tests.live.support import (
+    USERNAME,
+    cached_user_auth,
+    needs_user,
+    require_cached_sign_in,
+    token_scopes,
+)
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
 
 # A delegated scope nobody in the tenant has granted the Graph command-line application. The
 # .default test asserts it is missing from a .default token and cannot be had without a
-# prompt. It must not be anything the live tests ask for (RESET_SCOPES, NONADMIN_SCOPE, the
-# scopes of the other tests), or the suite would grant it and the test would fail. A tenant
-# where it has been granted anyway needs another one named here.
+# prompt. It must not be anything the live tests ask for (BASELINE_SCOPES, NONADMIN_SCOPE), or
+# the suite would grant it and the test would fail. A tenant where it has been granted anyway
+# needs another one named here.
 UNGRANTED_SCOPE = os.environ.get("AZURE_AUTH_TEST_UNGRANTED_SCOPE", "Mail.ReadWrite")
 
 # How many audit log requests go out at once, how many the test sends before giving up, and
@@ -41,24 +45,6 @@ UNGRANTED_SCOPE = os.environ.get("AZURE_AUTH_TEST_UNGRANTED_SCOPE", "Mail.ReadWr
 THROTTLE_BURST = 20
 THROTTLE_MAX_REQUESTS = 100
 THROTTLE_RETRIES = 8
-
-
-def token_scopes(token: str) -> set[str]:
-    """Read the delegated scopes out of an access token, without validating it.
-
-    Graph access tokens are JWTs whose ``scp`` claim lists the delegated permissions Entra
-    actually issued, which may differ from what was asked for. Nothing here checks the
-    signature; the token came straight from Entra and is only being inspected.
-
-    Args:
-        token: A Graph access token.
-
-    Returns:
-        The scope names, such as ``{"User.Read", "Application.Read.All"}``.
-    """
-    payload = token.split(".")[1]
-    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    return set(str(claims.get("scp", "")).split())
 
 
 class StatusCounter(httpx.AsyncBaseTransport):

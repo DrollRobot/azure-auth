@@ -11,7 +11,7 @@ import pytest
 from azure_auth import AuthContext, AzureClient, ExchangeClient, GraphClient
 from azure_auth.clients import ResourceClient
 from tests.live.support import (
-    LIVE_GRAPH_SCOPES,
+    BASELINE_SCOPES,
     TENANT,
     USERNAME,
     _flag,
@@ -29,15 +29,14 @@ async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
     """A forced browser sign-in to the Graph client id works and signs in the right user.
 
     The sign-in is forced, so the interactive flow runs even when the cache could have
-    answered: the point is to test it, not to get a token. It asks for every scope the live
-    Graph tests use, so its consent screen covers them all and they find their tokens in the
-    cache afterwards. When the consent test ran first, this is also what consents to the
-    grants its fixture revoked.
+    answered: the point is to test it, not to get a token. It asks for the baseline scopes,
+    the same ones the tenant already holds, so no consent screen is expected; the token it
+    leaves in the cache serves the tests that follow.
     """
     auth = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
-    async with GraphClient(auth, scopes=LIVE_GRAPH_SCOPES) as graph:
+    async with GraphClient(auth, scopes=BASELINE_SCOPES) as graph:
         with walkthrough_if_waiting(
-            f"Sign-in prompt for {USERNAME}, asking for {', '.join(LIVE_GRAPH_SCOPES)}. Sign"
+            f"Sign-in prompt for {USERNAME}, asking for {', '.join(BASELINE_SCOPES)}. Sign"
             " in, and accept the consent screen if one appears.",
             f"The browser may still be signed in as the non-administrator from the consent"
             f" test. If it offers that account, choose 'Use another account' and sign in as"
