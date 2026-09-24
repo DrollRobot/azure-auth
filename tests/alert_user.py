@@ -36,7 +36,7 @@ import tempfile
 import time
 import wave
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 BELL = "\a"
 
@@ -71,6 +71,24 @@ def ring_terminal(times: int) -> bool:
     return True
 
 
+def beep_levels(beeps: int) -> list[float]:
+    """Return the volume of each beep in a burst, as a fraction of full volume.
+
+    The burst rises evenly from half volume to full, so three beeps play at 50%, 75% and
+    100%. A single beep plays at full volume.
+
+    Args:
+        beeps: How many beeps in the burst.
+
+    Returns:
+        One level per beep, each between 0.5 and 1.0.
+    """
+    quietest = 0.5
+    if beeps < 2:
+        return [1.0] * beeps
+    return [quietest + (1.0 - quietest) * index / (beeps - 1) for index in range(beeps)]
+
+
 def build_alarm(beeps: int = 3) -> bytes:
     """Build a short alarm as an in-memory WAV.
 
@@ -80,7 +98,8 @@ def build_alarm(beeps: int = 3) -> bytes:
     The waveform is a square wave, not a sine: its odd harmonics spread the energy across the
     spectrum instead of putting it all at one frequency, which is what lets a short beep stay
     audible over music. 1 kHz sits where hearing is most sensitive, and three abrupt repeats
-    read as an alarm rather than a notification.
+    read as an alarm rather than a notification. Each beep is louder than the one before, as
+    set by :func:`beep_levels`.
 
     Args:
         beeps: How many beeps in the burst.
@@ -92,12 +111,13 @@ def build_alarm(beeps: int = 3) -> bytes:
     hertz = 1000
     beep_seconds = 0.09
     gap_seconds = 0.06
-    amplitude = 16000  # Loud, but short of the clipping point of a 16-bit sample.
+    peak = 16000  # Loud, but short of the clipping point of a 16-bit sample.
     ramp = 200  # Samples of fade at each edge, enough to avoid a click.
 
     samples = array.array("h")
     period = rate / hertz
-    for index in range(beeps):
+    for index, level in enumerate(beep_levels(beeps)):
+        amplitude = int(peak * level)
         count = int(rate * beep_seconds)
         for position in range(count):
             value = amplitude if (position % period) < (period / 2) else -amplitude
