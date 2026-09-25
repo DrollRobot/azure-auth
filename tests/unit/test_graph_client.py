@@ -316,11 +316,11 @@ async def test_batch_is_chunked_and_order_is_restored(auth: AuthContext) -> None
 # ---------------------------------------------------------------------------- GDAP helper
 
 
-async def test_customer_tenants_come_from_delegated_admin_customers(auth: AuthContext) -> None:
+async def test_managed_tenants_come_from_delegated_admin_customers(auth: AuthContext) -> None:
     recorder = Recorder(
         [ok({"value": [{"tenantId": "t1", "displayName": "A"}, {"tenantId": "t2"}]})]
     )
     graph = GraphClient(auth, transport=recorder.transport)
 
-    assert await graph.list_customer_tenant_ids() == ["t1", "t2"]
+    assert await graph.list_managed_tenant_ids() == ["t1", "t2"]
     assert recorder.urls() == [f"{GRAPH}/tenantRelationships/delegatedAdminCustomers"]

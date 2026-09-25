@@ -10,7 +10,7 @@ Environment variables:
 * ``AZURE_AUTH_TEST_ARM=1``: the user can see at least one Azure subscription. A tenant with
   no Azure access still answers ``/subscriptions`` with an empty list, which is why this is a
   flag and not something the test can work out for itself.
-* ``AZURE_AUTH_TEST_GDAP=1``: the user is a partner user with GDAP customers.
+* ``AZURE_AUTH_TEST_GDAP=1``: the user's home tenant manages other tenants through GDAP.
 * ``AZURE_AUTH_TEST_EXCHANGE=1`` / ``AZURE_AUTH_TEST_IPPS=1``: the user may run Exchange /
   Security & Compliance cmdlets.
 * ``AZURE_AUTH_TEST_UNGRANTED_SCOPE``: a delegated Graph scope the tenant has never granted
@@ -41,7 +41,7 @@ from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from azure_auth.sync import ResourceClient as BlockingResourceClient
 from tests import alert_user
 
-# The GDAP test's scopes, on the partner tenant and on each customer.
+# The GDAP test's scopes, on the home tenant and on each managed tenant.
 GDAP_SCOPES = ["DelegatedAdminRelationship.Read.All", "Organization.Read.All"]
 
 # The consent baseline: every Graph scope a live test needs, granted to the Graph

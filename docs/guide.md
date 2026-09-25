@@ -103,7 +103,7 @@ The library does not reopen the browser on any of them: the first cannot be fixe
 again, the second is the user's decision, and the third means nobody is there.
 
 Sibling contexts from `for_tenant()` never prompt at all, so they report `ConsentRequired` and
-stop. Consent for a customer tenant has to be granted in that tenant.
+stop. Consent for a managed tenant has to be granted in that tenant.
 
 ## Token cache
 
@@ -125,10 +125,10 @@ credentials, the cache and the username, and makes no network call, so it is che
 in a loop.
 
 ```python
-partner = GraphClient(auth, scopes=["DelegatedAdminRelationship.Read.All"])
-await partner.login()
+home = GraphClient(auth, scopes=["DelegatedAdminRelationship.Read.All"])
+await home.login()
 
-for tenant_id in await partner.list_customer_tenant_ids():
+for tenant_id in await home.list_managed_tenant_ids():
     graph = GraphClient(auth.for_tenant(tenant_id), scopes=["User.Read.All"])
     try:
         users = await graph.get_all("/users")
@@ -139,9 +139,9 @@ for tenant_id in await partner.list_customer_tenant_ids():
 - A sibling **never prompts.** When a token cannot be obtained silently it raises
   `InteractionRequired` or `ConsentRequired`, and the error carries the tenant id. Sign in on
   a client of the root context first.
-- `list_customer_tenant_ids()` reads `GET /tenantRelationships/delegatedAdminCustomers` and
-  needs `DelegatedAdminRelationship.Read.All` consented in the partner tenant.
-- The application must be consented to in each customer tenant for the scopes you request.
+- `list_managed_tenant_ids()` reads `GET /tenantRelationships/delegatedAdminCustomers` and
+  needs `DelegatedAdminRelationship.Read.All` consented in the home tenant.
+- The application must be consented to in each managed tenant for the scopes you request.
 - In app flows each sibling builds its own client assertion, because the assertion audience
   is the tenant's token endpoint.
 

@@ -296,8 +296,8 @@ class AuthContext:
     def for_tenant(self, tenant_id: str) -> AuthContext:
         """Return a sibling context for another tenant.
 
-        The sibling shares this context's credentials, cache and username, so a partner user
-        with GDAP access obtains customer-tenant tokens from the one sign-in. No network call
+        The sibling shares this context's credentials, cache and username, so a user with
+        GDAP access obtains managed-tenant tokens from the one home-tenant sign-in. No network call
         is made. A sibling never opens a browser: when a token cannot be obtained silently it
         raises :class:`InteractionRequired` or :class:`ConsentRequired` carrying the tenant
         id.

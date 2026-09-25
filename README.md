@@ -30,7 +30,7 @@ The high-level goals of this package.
 
 - Supports using WAM credentials on Windows systems.
   Built, but untested: `broker=True` has never been run against a live tenant, and whether a
-  broker sign-in can reach a customer tenant silently through `for_tenant()` is unverified.
+  broker sign-in can reach a managed tenant silently through `for_tenant()` is unverified.
 - Exchange and IPPS clients.
   Built, and reaching a live tenant: cmdlets run, paging works, and the Security & Compliance
   regional redirect is followed. Still open: the `InvokeCommand` endpoint is undocumented, two

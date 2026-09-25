@@ -243,14 +243,14 @@ class GraphClient(ResourceClient):
             responses.update({str(item["id"]): item for item in result.get("responses", [])})
         return [responses[item["id"]] for item in prepared]
 
-    async def list_customer_tenant_ids(self) -> list[str]:
-        """List the tenants this partner tenant has a GDAP relationship with.
+    async def list_managed_tenant_ids(self) -> list[str]:
+        """List the tenants this home tenant manages through GDAP.
 
-        Call this on a client for the partner tenant. It needs the delegated or application
+        Call this on a client for the home tenant. It needs the delegated or application
         permission ``DelegatedAdminRelationship.Read.All``.
 
         Returns:
-            The customer tenant ids.
+            The managed tenant ids.
         """
-        customers = await self.get_all("/tenantRelationships/delegatedAdminCustomers")
-        return [str(customer["tenantId"]) for customer in customers]
+        managed = await self.get_all("/tenantRelationships/delegatedAdminCustomers")
+        return [str(tenant["tenantId"]) for tenant in managed]
