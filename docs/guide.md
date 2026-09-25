@@ -35,6 +35,9 @@ Signing in is lazy: the first request prompts if it has to. To choose the moment
 `username` selects the cached account and pre-fills the sign-in page. If somebody else signs
 in, the context raises `AuthError`, because their tokens would never be found again.
 
+A browser sign-in that nobody completes -- the window closed, or left alone -- fails with
+`AuthError` after `interactive_timeout` seconds (default 120) rather than waiting for ever.
+
 ### The Windows broker
 
 `broker=True` signs in through the Windows Web Account Manager. It needs the `broker` extra.

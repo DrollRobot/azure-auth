@@ -14,13 +14,13 @@ The high-level goals of this package.
 - Supports delegated user and application auth.
 - For delegated user, supports interactive browser auth.
 - For applications, supports secret and non-exportable certificate auth.
-- Provides clients for Graph, Azure (ARM), Keyvault.
+- Provides clients for Graph, Exchange, IPPS, Azure (ARM) and Keyvault.
 - Azure auth object from this library can be passed to Azure SDKs.
 - Defaults to first-party Microsoft client ids, but can connect to any client id.
 - Supports saving the MSAL cache in memory, or on disk. Refuses to save tokens/credentials
   unencrypted.
 - Supports async operation wherever possible.
-- Platform support: Windows
+- Platform support: Windows, Linux, MacOs
 
 ### Non-goals
 
@@ -37,6 +37,8 @@ The high-level goals of this package.
   of its request headers were reconstructed from memory rather than found in the PowerShell
   module, `ResultSize` is not a cmdlet parameter there so results cannot be capped, and the
   app-only and GDAP paths have not been run.
+- Azure (ARM) and Keyvault clients.
+  Built, but untested: ARM needs a user with a subscription, Key Vault needs a vault.
 - Supports accessing multiple tenants through GDAP.
   Built, but untested: live testing is on hold until an account with sign-in rights to a
   GDAP partner tenant is available.

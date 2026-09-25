@@ -87,6 +87,10 @@ uv run mkdocs build --strict          # build docs, fail on warnings
 `CHANGELOG.md` in the repo root is the authoritative changelog.
 Before proceeding, fetch and review <https://keepachangelog.com> to get the
 current format rules. Do not rely on training data -- request a fresh copy every time.
+- Changelogs should contain a high-level overview of changes, not low-level
+   technical details.
+- Group logical changes. Don't create two "added" and "removed" entries when one
+   "changed" would be more appropriate.
 
 **Deviation from Keep a Changelog:** version headings end with a title after the
 date. Use this format in place of Keep a Changelog's `## [1.2.3] - 2026-01-31`:
