@@ -12,6 +12,10 @@
    https://gist.github.com/qoomon/5dfcdf8eec66a051ecd85625518cfd13
    Fetch both pages at least once every session. Do not rely on memory alone.
 
+- One logical change per commit. Commit types label a commit; they are never a
+   reason to split a change. Split only when the parts could stand alone and would
+   each be worth reverting separately.
+
 - When commits are needed, write all proposed commits to .local/next_commit.md,
    (overwrite any existing contents) open the file in code, and wait for the
    user to approve.
