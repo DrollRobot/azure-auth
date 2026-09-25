@@ -24,6 +24,7 @@ from typing import Any, Self
 
 import msal
 from azure.core.credentials import AccessToken, AccessTokenInfo, TokenRequestOptions
+from msal import BrowserInteractionTimeoutError
 
 from azure_auth.auth import cng
 from azure_auth.auth.cache import CacheKind, build_cache
@@ -46,6 +47,11 @@ _LOGGER = logging.getLogger(__name__)
 
 # A cached token is reused until it is this close to expiry.
 _REFRESH_MARGIN_SECONDS = 300
+
+# How long a browser sign-in waits for the person before it is abandoned, unless the context
+# is given ``interactive_timeout``. Without a limit, a closed browser window leaves MSAL
+# waiting for a redirect that never arrives.
+_DEFAULT_INTERACTIVE_TIMEOUT_SECONDS = 120
 
 _TokenKey = tuple[str, frozenset[str]]
 
@@ -157,6 +163,7 @@ class AuthContext:
         broker: bool = False,
         broker_fallback: bool = True,
         authority_host: str = DEFAULT_AUTHORITY_HOST,
+        interactive_timeout: float = _DEFAULT_INTERACTIVE_TIMEOUT_SECONDS,
     ) -> None:
         """Configure the context. No network call is made.
 
@@ -182,6 +189,9 @@ class AuthContext:
             broker_fallback: When the broker cannot be used, fall back to the browser
                 (default) instead of raising :class:`BrokerUnavailable`.
             authority_host: Entra ID authority host, for sovereign clouds.
+            interactive_timeout: Seconds a browser sign-in waits for the person before it
+                fails with :class:`AuthError` (default 120). A closed window would otherwise
+                wait for ever.
 
         Raises:
             ValueError: If the arguments do not describe exactly one flow.
@@ -215,6 +225,7 @@ class AuthContext:
         self._broker = broker
         self._broker_fallback = broker_fallback
         self._authority_host = authority_host.rstrip("/")
+        self._interactive_timeout = interactive_timeout
         self._interactive_allowed = True
         self._init_state()
 
@@ -311,6 +322,7 @@ class AuthContext:
                 sibling._broker = self._broker
                 sibling._broker_fallback = self._broker_fallback
                 sibling._authority_host = self._authority_host
+                sibling._interactive_timeout = self._interactive_timeout
                 sibling._interactive_allowed = False
                 sibling._init_state()
                 self._siblings[tenant_id.lower()] = sibling
@@ -676,11 +688,19 @@ class AuthContext:
                 _LOGGER.warning("Authentication broker failed; using the browser")
 
         app = self._app(client_id, use_broker=False)
-        return dict(
-            app.acquire_token_interactive(
-                scopes, login_hint=self._username, claims_challenge=claims
+        try:
+            result = app.acquire_token_interactive(
+                scopes,
+                login_hint=self._username,
+                claims_challenge=claims,
+                timeout=self._interactive_timeout,
             )
-        )
+        except BrowserInteractionTimeoutError as exc:
+            raise AuthError(
+                f"The browser sign-in was not completed within {self._interactive_timeout:g} "
+                "seconds. The window was probably closed, or nobody was there to answer it."
+            ) from exc
+        return dict(result)
 
     def _check_signed_in_user(self, result: dict[str, Any]) -> None:
         """Make sure the person who signed in is the configured user.

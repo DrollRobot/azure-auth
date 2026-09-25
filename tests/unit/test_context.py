@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 import pytest
+from msal import BrowserInteractionTimeoutError
 
 from azure_auth import (
     AccountSelectionRequired,
@@ -107,6 +108,33 @@ def test_interactive_failure_is_raised_as_auth_error(fake_msal: FakeMsal) -> Non
 
     with pytest.raises(AuthError, match="access_denied: user cancelled"):
         user_context().acquire_token([ARM_SCOPE])
+
+
+def test_browser_sign_in_is_given_a_timeout(fake_msal: FakeMsal) -> None:
+    # A closed browser window would otherwise leave MSAL waiting for ever.
+    user_context().acquire_token([ARM_SCOPE])
+
+    assert fake_msal.methods() == ["interactive"]
+    assert fake_msal.calls[0].kwargs["timeout"] == 120
+
+
+def test_the_browser_timeout_can_be_set(fake_msal: FakeMsal) -> None:
+    user_context(interactive_timeout=5).acquire_token([ARM_SCOPE])
+
+    assert fake_msal.calls[0].kwargs["timeout"] == 5
+
+
+def test_an_unanswered_browser_sign_in_is_reported_not_hung(fake_msal: FakeMsal) -> None:
+    def time_out(call: Call) -> Result:
+        raise BrowserInteractionTimeoutError("User did not complete the flow in time")
+
+    fake_msal.interactive = time_out
+
+    with pytest.raises(AuthError, match="not completed within 120 seconds") as caught:
+        user_context().acquire_token([ARM_SCOPE])
+
+    # A timeout is neither a missing sign-in nor missing consent; nothing should retry it.
+    assert not isinstance(caught.value, (InteractionRequired, ConsentRequired))
 
 
 # ---------------------------------------------------------------------------- consent

@@ -87,12 +87,20 @@ The screen decides what is granted, not this package:
 click.** Granting consent is a tenant-wide security change, not something a token request
 should do as a side effect.
 
-When a sign-in ends without a token, what comes back is usually `access_denied`, with no
-error code to say why. A user who may not consent is shown **Need admin approval**, and
-leaving that page produces exactly the same `access_denied` as pressing Cancel on an ordinary
-consent screen. The two cannot be told apart, so the library does not reopen the browser on
-either — it raises `AuthError` naming the scopes and the tenant, and saying both things it can
-mean.
+When a sign-in ends without a token, the error says which of three things happened:
+
+- A user who may not consent is shown **Need admin approval**. Leaving that page produces a
+  bare `access_denied` with no error code, and the library raises `AuthError` naming the
+  scopes and the tenant and saying what that means.
+- Pressing **Cancel** on a consent screen produces `consent_required` with `AADSTS65004`
+  ("User declined to consent"), and the library raises `ConsentRequired` carrying the scopes
+  and the tenant.
+- A browser window that is closed, or never answered, is given up with an `AuthError` saying
+  so after `interactive_timeout` seconds (default 120). Without that limit the wait would be
+  indefinite.
+
+The library does not reopen the browser on any of them: the first cannot be fixed by asking
+again, the second is the user's decision, and the third means nobody is there.
 
 Sibling contexts from `for_tenant()` never prompt at all, so they report `ConsentRequired` and
 stop. Consent for a customer tenant has to be granted in that tenant.

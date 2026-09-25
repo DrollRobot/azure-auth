@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -163,3 +164,41 @@ async def test_a_cancelled_sign_in_is_reported_and_not_retried() -> None:
     assert caught.tenant_id == TENANT
     # Not this: it would mean the package took the decline for a missing sign-in.
     assert not isinstance(caught, InteractionRequired)
+
+
+# How long the timeout test waits. The default is two minutes, which is right for a person
+# and wrong for a test; the point here is only that the limit is real.
+TIMEOUT_SECONDS = 5
+
+
+@needs_user
+@pytest.mark.interactive
+async def test_an_unanswered_sign_in_times_out() -> None:
+    """A browser sign-in that nobody completes fails after ``interactive_timeout`` seconds.
+
+    A closed browser window is the case this guards: MSAL would otherwise wait for a redirect
+    that never arrives. Nobody needs to close anything here -- leaving the page alone has the
+    same effect, and is easier to get right.
+
+    The sign-in asks for ``CANCEL_SCOPE`` so that it stops at a consent screen rather than
+    completing silently from the browser session. Nothing is granted, because nobody clicks.
+    Marked ``interactive`` because it opens a browser tab on the desktop and leaves it there,
+    not because anyone has to act.
+    """
+    print(
+        f"\n  A consent screen for {CANCEL_SCOPE} will open and be abandoned after"
+        f" {TIMEOUT_SECONDS}s. Do NOT click anything on it. Close the tab afterwards.",
+        flush=True,
+    )
+    auth = AuthContext(TENANT, username=USERNAME, interactive_timeout=TIMEOUT_SECONDS)
+    started = time.monotonic()
+    async with GraphClient(auth, scopes=[CANCEL_SCOPE]) as graph:
+        with pytest.raises(
+            AuthError, match=f"not completed within {TIMEOUT_SECONDS} seconds"
+        ) as caught:
+            await graph.login(force=True)
+    elapsed = time.monotonic() - started
+
+    assert not isinstance(caught.value, (ConsentRequired, InteractionRequired))
+    # It waited the timeout, and not much more: the limit is real and not a fluke.
+    assert TIMEOUT_SECONDS <= elapsed <= TIMEOUT_SECONDS + 30, f"gave up after {elapsed:.0f}s"
