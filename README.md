@@ -32,11 +32,11 @@ The high-level goals of this package.
   Built, but untested: `broker=True` has never been run against a live tenant, and whether a
   broker sign-in can reach a managed tenant silently through `for_tenant()` is unverified.
 - Exchange and IPPS clients.
-  Built, and reaching a live tenant: cmdlets run, paging works, and the Security & Compliance
-  regional redirect is followed. Still open: the `InvokeCommand` endpoint is undocumented, two
-  of its request headers were reconstructed from memory rather than found in the PowerShell
-  module, `ResultSize` is not a cmdlet parameter there so results cannot be capped, and the
-  app-only and GDAP paths have not been run.
+  Delegated user access is live-tested end to end: the sign-in, cmdlets with every kind of
+  parameter, paging, failures reported with the cmdlet's own reason, the Security & Compliance
+  regional redirect, and the blocking mirrors. Still open: the `InvokeCommand` endpoint is
+  undocumented, `ResultSize` is not a cmdlet parameter there so results cannot be capped, and
+  the app-only and GDAP paths have not been run.
 - Azure (ARM) and Keyvault clients.
   Built, but untested: ARM needs a user with a subscription, Key Vault needs a vault.
 - Supports accessing multiple tenants through GDAP.

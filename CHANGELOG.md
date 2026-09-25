@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Validated with a delegated user sign-in: the Exchange Online and Security & Compliance
+  clients, and their blocking versions.
+
+### Changed
+
+- A failed Exchange or Security & Compliance cmdlet now says which cmdlet failed and why,
+  in the service's own words, and cmdlet warnings are collected from wherever the service
+  puts them.
+
+### Removed
+
+- The API version option of the Exchange and Security & Compliance clients. Only one
+  version answers cmdlets, so there was nothing to choose.
+
+### Fixed
+
+- An unknown Exchange cmdlet surfaced as a transport error instead of a failed request.
+  Every failed request now reports its status, even when its body cannot be read.
+
 ## [0.1.0] - 2026-09-25 - initial release
 
 ### Added
