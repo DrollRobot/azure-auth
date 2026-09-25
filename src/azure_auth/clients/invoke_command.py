@@ -1,9 +1,13 @@
 """Cmdlet invocation over the Exchange admin REST API.
 
 Exchange Online and Security & Compliance PowerShell both talk to an undocumented REST
-endpoint, ``/adminapi/<version>/<tenant id>/InvokeCommand``. The request shape used here was
+endpoint, ``/adminapi/beta/<tenant id>/InvokeCommand``. The request shape used here was
 read from the ExchangeOnlineManagement module (3.10.1). Because the endpoint is
 undocumented, everything that knows about it lives in this module.
+
+``beta`` is the only version that answers ``InvokeCommand``. The module also has an
+``/adminapi/v1.0`` base URI, but only for its own REST-backed ``Get-EXO*`` cmdlets;
+``InvokeCommand`` under ``v1.0`` is answered 405 (measured 2026-09-25).
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import binascii
 import json as json_module
 import uuid
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 import httpx
 
@@ -47,6 +51,48 @@ def tenant_id_from_token(token: str) -> str | None:
     return str(tenant) if tenant else None
 
 
+def cmdlet_error_details(body: Any) -> list[str]:
+    """Pull the cmdlet's own error text out of an ``InvokeCommand`` error body.
+
+    The service wraps every cmdlet failure the same way: ``error.message`` is a generic
+    ``"Error executing cmdlet"`` or ``"Invalid Operation"``, and the reason a person wants
+    is in ``error.details[*].message``, prefixed with an error id and an exception type::
+
+        Ex6F9304|Microsoft.Exchange...ManagementObjectNotFoundException|The operation ...
+
+    Only the last, human-readable segment is kept; the whole body stays on the exception.
+
+    Args:
+        body: The decoded response body, of any shape.
+
+    Returns:
+        The reasons, in order, without their prefixes; empty when the body has none.
+    """
+    error = body.get("error") if isinstance(body, dict) else None
+    details = error.get("details") if isinstance(error, dict) else None
+    reasons: list[str] = []
+    for detail in details if isinstance(details, list) else []:
+        message = detail.get("message") if isinstance(detail, dict) else None
+        if not isinstance(message, str):
+            continue
+        text = message.rsplit("|", 1)[-1].strip()
+        if text:
+            reasons.append(text)
+    return reasons
+
+
+def _is_blank(body: Any) -> bool:
+    """Tell whether an error body says nothing at all.
+
+    Args:
+        body: The decoded response body, or ``None`` when it could not be decoded.
+
+    Returns:
+        ``True`` for no body, an empty one, or one that is only NUL bytes and whitespace.
+    """
+    return body is None or (isinstance(body, str) and not body.strip("\x00 \t\r\n"))
+
+
 class InvokeCommandClient(ResourceClient):
     """Base class for clients that run cmdlets through ``InvokeCommand``.
 
@@ -66,7 +112,6 @@ class InvokeCommandClient(ResourceClient):
         client_id: str | None = None,
         scopes: Sequence[str] | None = None,
         anchor_mailbox: str | None = None,
-        api_version: Literal["beta", "v1.0"] = "beta",
         page_size: int = 1000,
         timeout: float = 300.0,
         max_retries: int = 3,
@@ -82,7 +127,6 @@ class InvokeCommandClient(ResourceClient):
             anchor_mailbox: Value of the ``X-AnchorMailbox`` routing header. Defaults to the
                 signed-in user for a user flow in its own tenant, and to the tenant's system
                 mailbox for app flows and for sibling (GDAP) contexts.
-            api_version: ``beta`` (what the PowerShell module uses) or ``v1.0``.
             page_size: Preferred number of results per page.
             timeout: Timeout for each HTTP request, in seconds. Cmdlets can be slow.
             max_retries: How often a throttled request is retried.
@@ -100,7 +144,6 @@ class InvokeCommandClient(ResourceClient):
             transport=transport,
         )
         self._anchor_mailbox = anchor_mailbox
-        self._api_version = api_version
         self._page_size = page_size
         self._connection_id = str(uuid.uuid4())
         self._tenant_guid: str | None = None
@@ -165,6 +208,9 @@ class InvokeCommandClient(ResourceClient):
             The successful response.
         """
         tenant = await self._tenant()
+        # X-CmdletName and X-ResponseFormat are not in the PowerShell module. Measured
+        # 2026-09-25: the service answers the same with either or both absent, so they are
+        # kept only as diagnostics -- _error reads the cmdlet name back out of the request.
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json;odata.metadata=minimal",
@@ -189,6 +235,44 @@ class InvokeCommandClient(ResourceClient):
             raise self._error(response)
         return response
 
+    def _error(
+        self, response: httpx.Response, *, undecodable: Exception | None = None
+    ) -> ResourceError:
+        """Build the exception for a failed cmdlet, with the cmdlet's own reason up front.
+
+        The base message is the HTTP summary and the service's generic ``error.message``;
+        the text a person needs is in ``error.details`` (see :func:`cmdlet_error_details`).
+        An unknown cmdlet is a special case: Exchange answers 403 with a body of NUL bytes
+        declared as gzip (measured 2026-09-25), so there is nothing to quote and the message
+        says what that answer means instead.
+
+        Args:
+            response: The error response.
+            undecodable: The decoding error, when the body could not be read at all.
+
+        Returns:
+            An :class:`InvokeCommandError`.
+        """
+        error = super()._error(response, undecodable=undecodable)
+        cmdlet = response.request.headers.get("X-CmdletName", "The cmdlet")
+        reasons = cmdlet_error_details(error.body)
+        if reasons:
+            reason = " ".join(reasons)
+        elif error.status == httpx.codes.FORBIDDEN and _is_blank(error.body):
+            reason = (
+                "Exchange sent no error body, which is how it refuses a cmdlet it does not "
+                "know; check the cmdlet name."
+            )
+        else:
+            reason = "the service rejected it."
+        return self.ERROR_CLASS(
+            f"{cmdlet} failed: {reason} ({error})",
+            status=error.status,
+            code=error.code,
+            request_id=error.request_id,
+            body=error.body,
+        )
+
     async def iter_pages(self, cmdlet: str, **parameters: Any) -> AsyncIterator[dict[str, Any]]:
         """Run a cmdlet and yield each page of its output.
 
@@ -201,14 +285,20 @@ class InvokeCommandClient(ResourceClient):
         """
         payload = {"CmdletInput": {"CmdletName": cmdlet, "Parameters": parameters}}
         tenant = await self._tenant()
-        url: str | None = f"/adminapi/{self._api_version}/{tenant}/InvokeCommand"
+        url: str | None = f"/adminapi/beta/{tenant}/InvokeCommand"
         self.last_warnings = []
         while url:
             response = await self._post(url, payload, cmdlet)
-            warnings = response.headers.get("X-Warnings")
-            if warnings:
-                self.last_warnings.append(warnings)
             page = self._json(response) or {}
+            # The PowerShell module reads warnings from the X-Warnings header. Every live
+            # response also carries them in the body, as "@adminapi.warnings" (measured
+            # 2026-09-25, empty), so both are collected.
+            header = response.headers.get("X-Warnings")
+            if header:
+                self.last_warnings.append(header)
+            in_body = page.get("@adminapi.warnings")
+            if isinstance(in_body, list):
+                self.last_warnings.extend(str(warning) for warning in in_body if warning)
             yield page
             url = page.get("@odata.nextLink")
 

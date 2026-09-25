@@ -9,7 +9,11 @@ import pytest
 
 from azure_auth import AuthContext
 from azure_auth._sync import ExchangeClient, InvokeCommandError, IppsClient
-from azure_auth._sync.invoke_command import SYSTEM_MAILBOX, tenant_id_from_token
+from azure_auth._sync.invoke_command import (
+    SYSTEM_MAILBOX,
+    cmdlet_error_details,
+    tenant_id_from_token,
+)
 from azure_auth.constants import EXCHANGE_POWERSHELL_CLIENT_ID
 from tests.fakes import FakeMsal, token_result
 from tests.http import Recorder, fake_jwt, ok
@@ -102,16 +106,12 @@ def test_gdap_sibling_routes_through_the_managed_tenants_system_mailbox(
 def test_anchor_mailbox_can_be_overridden(auth: AuthContext) -> None:
     recorder = Recorder([ok({"value": []})])
     exchange = ExchangeClient(
-        auth,
-        anchor_mailbox="UPN:shared@partner.com",
-        api_version="v1.0",
-        transport=recorder.transport,
+        auth, anchor_mailbox="UPN:shared@partner.com", transport=recorder.transport
     )
 
     exchange.run("Get-Mailbox")
 
     assert recorder.requests[0].headers["X-AnchorMailbox"] == "UPN:shared@partner.com"
-    assert "/adminapi/v1.0/" in str(recorder.requests[0].url)
 
 
 def test_cmdlet_failure_becomes_invoke_command_error(auth: AuthContext) -> None:
@@ -122,6 +122,138 @@ def test_cmdlet_failure_becomes_invoke_command_error(auth: AuthContext) -> None:
         exchange.run("Get-Mailbox", Identity="missing")
 
     assert (caught.value.status, caught.value.code) == (404, "NotFound")
+    assert str(caught.value).startswith("Get-Mailbox failed: ")
+    assert caught.value.body == body
+
+
+# The shape Exchange really answers with (measured 2026-09-25): a generic message, and the
+# reason in details[*].message behind an error id and an exception type.
+NOT_FOUND = {
+    "error": {
+        "code": "NotFound",
+        "message": "Error executing cmdlet",
+        "details": [
+            {
+                "code": "Context",
+                "message": (
+                    "Ex6F9304|Microsoft.Exchange.Configuration.Tasks."
+                    "ManagementObjectNotFoundException|The operation couldn't be performed"
+                    " because object 'missing' couldn't be found on 'DC001.PROD.OUTLOOK.COM'."
+                ),
+                "target": "",
+            }
+        ],
+        "innererror": {"message": "Error executing cmdlet"},
+    }
+}
+
+
+def test_the_cmdlets_own_reason_leads_the_error_message(auth: AuthContext) -> None:
+    exchange = ExchangeClient(auth, transport=Recorder([ok(NOT_FOUND, 404)]).transport)
+
+    with pytest.raises(InvokeCommandError) as caught:
+        exchange.run("Get-Mailbox", Identity="missing")
+
+    message = str(caught.value)
+    assert message.startswith(
+        "Get-Mailbox failed: The operation couldn't be performed because object 'missing'"
+    )
+    assert "Ex6F9304|" not in message, "the error id and exception type belong in body, not text"
+    assert "-> 404 NotFound: Error executing cmdlet" in message
+    assert caught.value.body == NOT_FOUND
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            NOT_FOUND,
+            [
+                "The operation couldn't be performed because object 'missing' couldn't be"
+                " found on 'DC001.PROD.OUTLOOK.COM'."
+            ],
+        ),
+        (
+            {"error": {"details": [{"message": "|SomeException|first"}, {"message": "second"}]}},
+            ["first", "second"],
+        ),
+        ({"error": {"details": [{"message": "|Type|"}, {"message": 3}, "x", None]}}, []),
+        ({"error": {"code": "NotFound", "message": "no details"}}, []),
+        ({"error": "a string"}, []),
+        ("not json at all", []),
+        (None, []),
+    ],
+)
+def test_cmdlet_error_details_are_the_readable_part(body: object, expected: list[str]) -> None:
+    assert cmdlet_error_details(body) == expected
+
+
+def test_an_unknown_cmdlet_is_an_error_and_not_a_decoding_failure(
+    auth: AuthContext,
+) -> None:
+    # What Exchange answers an unknown cmdlet with (measured 2026-09-25): 403, a body of NUL
+    # bytes, and a Content-Encoding it does not honour. httpx cannot decode that.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            headers={"Content-Encoding": "gzip", "request-id": "req-1"},
+            stream=httpx.ByteStream(b"\x00" * 8),
+        )
+
+    exchange = ExchangeClient(auth, transport=Recorder(handler).transport)
+
+    with pytest.raises(InvokeCommandError) as caught:
+        exchange.run("Get-NoSuchCmdlet")
+
+    error = caught.value
+    assert (error.status, error.code, error.request_id, error.body) == (403, None, "req-1", None)
+    message = str(error)
+    assert message.startswith("Get-NoSuchCmdlet failed: Exchange sent no error body")
+    assert "could not be decoded" in message
+
+
+def test_a_blank_403_body_is_explained(auth: AuthContext) -> None:
+    exchange = ExchangeClient(
+        auth, transport=Recorder([httpx.Response(403, content=b"\x00\x00")]).transport
+    )
+
+    with pytest.raises(InvokeCommandError, match="cmdlet it does not know") as caught:
+        exchange.run("Get-NoSuchCmdlet")
+
+    assert caught.value.status == 403
+
+
+def test_an_undecodable_success_is_still_an_error(auth: AuthContext) -> None:
+    # A 200 whose body cannot be decoded is not a result; the caller must hear about it.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"Content-Encoding": "gzip"}, stream=httpx.ByteStream(b"not gzip")
+        )
+
+    exchange = ExchangeClient(auth, transport=Recorder(handler).transport)
+
+    with pytest.raises(InvokeCommandError, match="could not be decoded") as caught:
+        exchange.run("Get-Mailbox")
+
+    assert caught.value.status == 200
+
+
+def test_warnings_are_collected_from_the_header_and_the_body(auth: AuthContext) -> None:
+    pages = [
+        ok(
+            {
+                "value": [{"n": 1}],
+                "@adminapi.warnings": ["body one"],
+                "@odata.nextLink": EXCHANGE + "?p=2",
+            },
+            headers={"X-Warnings": "header one"},
+        ),
+        ok({"value": [{"n": 2}], "@adminapi.warnings": ["", "body two"]}),
+    ]
+    exchange = ExchangeClient(auth, transport=Recorder(pages).transport)
+
+    assert exchange.run("Get-Mailbox") == [{"n": 1}, {"n": 2}]
+    assert exchange.last_warnings == ["header one", "body one", "body two"]
 
 
 def test_undecodable_token_falls_back_to_the_configured_tenant(fake_msal: FakeMsal) -> None:

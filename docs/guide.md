@@ -232,15 +232,24 @@ async with IppsClient(auth) as ipps:
     labels = await ipps.run("Get-Label")
 ```
 
-Cmdlet parameters are keyword arguments; use `True` for switch parameters. Results are
-dictionaries.
+Cmdlet parameters are keyword arguments: a string or number for a plain parameter, a list
+for a multi-valued one, `True` for a switch. Results are dictionaries. Warnings the cmdlet
+raised are in `last_warnings` after each `run()`.
+
+A cmdlet that fails raises `InvokeCommandError`. The message opens with the cmdlet and the
+reason Exchange gave, for example `Get-Mailbox failed: The operation couldn't be performed
+because object 'x' couldn't be found on '...'`; the HTTP `status`, the service `code`
+(`NotFound`, `BadRequest`, `Forbidden`) and the whole response `body` are on the exception.
+A cmdlet Exchange does not know is refused with a 403 and no body at all, and the message
+says so.
 
 Both clients use the `InvokeCommand` REST endpoint behind the ExchangeOnlineManagement
 PowerShell module. **Microsoft does not document this endpoint.** The request shape was read
 from module version 3.10.1:
 
 - URL: `https://<host>/adminapi/beta/<tenant GUID>/InvokeCommand`. The GUID is read from the
-  token, so a domain name works as `tenant_id`. `api_version="v1.0"` is also accepted.
+  token, so a domain name works as `tenant_id`. `beta` is the only version that answers
+  `InvokeCommand`; the module's `v1.0` base URI serves its own REST cmdlets.
 - Routing header `X-AnchorMailbox`: `UPN:<username>` for a user in their own tenant, and the
   tenant's system mailbox for app flows and for sibling (GDAP) contexts. Override it with
   `anchor_mailbox=`.
@@ -248,19 +257,19 @@ from module version 3.10.1:
   redirect itself, because HTTP libraries drop the `Authorization` header on a cross-host
   redirect, and keeps using the regional host.
 
-- Paging works by POSTing the same body again to `@odata.nextLink`. Confirmed against a live
-  tenant: 13 pages with `page_size=2`, each page after the first fetched from the link.
-  `run()` walks every page, so it returns the whole result set; use `iter_pages()` to stop
-  early.
+- Paging works by POSTing the same body again to `@odata.nextLink`; `page_size` is the
+  `odata.maxpagesize` preference, which the service honours. `run()` walks every page, so it
+  returns the whole result set; use `iter_pages()` to stop early.
 
 `ResultSize` does nothing here. In the PowerShell module it is a client-side cap applied
 while consuming pages, not a cmdlet parameter, so `InvokeCommand` ignores it — silently, with
 no warning, in every spelling (`10`, `"10"`, `"Unlimited"`). `run("Get-Mailbox", ResultSize=10)`
 returns every mailbox in the tenant. To limit results, break out of `iter_pages()` yourself.
 
-The `X-ResponseFormat` and `X-CmdletName` headers were reconstructed from memory rather than
-found in the module assemblies. Live calls succeed with them, which shows they are accepted,
-not that they are required or correct.
+The `X-ResponseFormat` and `X-CmdletName` headers are not in the module; they were
+reconstructed from memory. The service answers the same with either or both absent, so they
+are sent as diagnostics only, and `X-CmdletName` is what the error messages read the cmdlet
+name from.
 
 App flows need the `Exchange.ManageAsApp` application permission and an Exchange
 administrator role on the service principal.
