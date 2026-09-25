@@ -13,7 +13,8 @@ import json
 
 import pytest
 
-from tests.live.support import missing_scopes, token_scopes
+from tests.http import fake_jwt
+from tests.live.support import missing_scopes, token_claims, token_scopes, token_user
 
 pytestmark = [pytest.mark.unit]
 
@@ -54,3 +55,14 @@ def test_missing_scopes_is_empty_when_the_token_carries_more_than_required() -> 
     # The baseline is a floor: extra scopes are not a discrepancy.
     token = jwt_with("User.Read AuditLog.Read.All Mail.Read")
     assert missing_scopes(token, ["User.Read"]) == set()
+
+
+def test_token_claims_reads_the_payload() -> None:
+    assert token_claims(fake_jwt(tid="t", scp="a b")) == {"tid": "t", "scp": "a b"}
+
+
+def test_token_user_takes_the_v2_claim_first_and_the_v1_claims_after() -> None:
+    assert token_user(fake_jwt(preferred_username="a@x.com", upn="b@x.com")) == "a@x.com"
+    assert token_user(fake_jwt(upn="b@x.com")) == "b@x.com"
+    assert token_user(fake_jwt(unique_name="c@x.com")) == "c@x.com"
+    assert token_user(fake_jwt(sub="nobody")) is None

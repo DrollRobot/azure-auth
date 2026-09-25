@@ -32,6 +32,7 @@ import os
 import threading
 from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -93,7 +94,7 @@ def _flag(name: str) -> pytest.MarkDecorator:
     return pytest.mark.skipif(os.environ.get(name) != "1", reason=f"set {name}=1")
 
 
-def cached_user_auth(cache_path: Path) -> AuthContext:
+def cached_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
     """Return a user-flow context that can never open a sign-in prompt.
 
     Every test that only *uses* a signed-in account is marked ``live`` and not
@@ -103,11 +104,15 @@ def cached_user_auth(cache_path: Path) -> AuthContext:
 
     Args:
         cache_path: The shared disk cache.
+        tenant: The tenant to address, by id or by a verified domain name. The default is
+            the configured one; a test that wants the same tenant under another name passes
+            it here, and the cache still answers because MSAL keys tokens by the tenant id
+            that the authority resolves to.
 
     Returns:
         The context.
     """
-    auth = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
+    auth = AuthContext(tenant, username=USERNAME, cache="disk", cache_path=cache_path)
     auth._interactive_allowed = False
     return auth
 
@@ -185,22 +190,55 @@ def walkthrough_if_waiting(*steps: str) -> Iterator[None]:
         timer.cancel()
 
 
+def token_claims(token: str) -> dict[str, Any]:
+    """Read the claims out of an access token, without validating it.
+
+    Nothing here checks the signature; the token came straight from Entra and is only
+    being inspected.
+
+    Args:
+        token: A JWT access token.
+
+    Returns:
+        The payload claims.
+    """
+    payload = token.split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    return dict(claims)
+
+
 def token_scopes(token: str) -> set[str]:
     """Read the delegated scopes out of an access token, without validating it.
 
-    Graph access tokens are JWTs whose ``scp`` claim lists the delegated permissions Entra
-    actually issued, which may differ from what was asked for. Nothing here checks the
-    signature; the token came straight from Entra and is only being inspected.
+    Access tokens are JWTs whose ``scp`` claim lists the delegated permissions Entra
+    actually issued, which may differ from what was asked for.
 
     Args:
-        token: A Graph access token.
+        token: An access token.
 
     Returns:
         The scope names, such as ``{"User.Read", "Application.Read.All"}``.
     """
-    payload = token.split(".")[1]
-    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    return set(str(claims.get("scp", "")).split())
+    return set(str(token_claims(token).get("scp", "")).split())
+
+
+def token_user(token: str) -> str | None:
+    """Read the signed-in user's name out of an access token.
+
+    A v2 token names the user in ``preferred_username``; a v1 token, which the Exchange and
+    ARM resources issue, in ``upn`` (or ``unique_name`` for an account without one).
+
+    Args:
+        token: An access token from a user flow.
+
+    Returns:
+        The user principal name, or ``None`` when the token names nobody.
+    """
+    claims = token_claims(token)
+    for name in ("preferred_username", "upn", "unique_name"):
+        if claims.get(name):
+            return str(claims[name])
+    return None
 
 
 def missing_scopes(token: str, required: Iterable[str]) -> set[str]:
