@@ -320,3 +320,25 @@ def test_managed_tenants_come_from_delegated_admin_customers(auth: AuthContext) 
 
     assert graph.list_managed_tenant_ids() == ["t1", "t2"]
     assert recorder.urls() == [f"{GRAPH}/tenantRelationships/delegatedAdminCustomers"]
+
+
+def test_a_body_the_service_mislabels_is_reported_with_its_status(
+    auth: AuthContext,
+) -> None:
+    # A body declared gzip that is not gzip: httpx raises DecodingError while reading it. The
+    # status and headers arrived, and the caller gets those rather than a transport error.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502,
+            headers={"Content-Encoding": "gzip", "request-id": "req-9"},
+            stream=httpx.ByteStream(b"<html>bad gateway</html>"),
+        )
+
+    graph = GraphClient(auth, transport=Recorder(handler).transport)
+
+    with pytest.raises(GraphError, match="could not be decoded") as caught:
+        graph.get("/me")
+
+    assert (caught.value.status, caught.value.request_id) == (502, "req-9")
+    assert caught.value.body is None
+    assert caught.value.code is None

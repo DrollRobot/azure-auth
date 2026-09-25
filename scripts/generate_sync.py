@@ -91,6 +91,7 @@ SUBSTITUTIONS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         (r"\bAsyncBaseTransport\b", "BaseTransport"),
         (r"\bAsyncIterator\b", "Iterator"),
         (r"\baclose\b", "close"),
+        (r"\baread\b", "read"),
         (r"__aenter__", "__enter__"),
         (r"__aexit__", "__exit__"),
         # prose

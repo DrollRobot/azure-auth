@@ -294,13 +294,24 @@ class ResourceClient:
                 self._scopes, client_id=self._client_id, claims=claims, force_refresh=force_refresh
             )
             claims, force_refresh = None, False
-            response = await self._http.request(
+            request = self._http.build_request(
                 method,
                 target,
                 params=params,
                 json=json,
                 headers={**(headers or {}), "Authorization": f"Bearer {token.token}"},
             )
+            response = await self._http.send(request, stream=True)
+            try:
+                await response.aread()
+            except httpx.DecodingError as exc:
+                # Exchange answers an unknown cmdlet with a 403 whose body is declared gzip
+                # but is not (measured 2026-09-25). httpx cannot decode that, and without this
+                # the caller would get a transport error in place of the status that was
+                # actually sent. The status and headers are in hand; only the body is lost.
+                raise self._error(response, undecodable=exc) from exc
+            finally:
+                await response.aclose()
             if response.status_code == httpx.codes.UNAUTHORIZED and not challenged:
                 challenged = True
                 claims = claims_from_challenge(response.headers.get("WWW-Authenticate"))
@@ -314,20 +325,28 @@ class ResourceClient:
                 raise self._error(response)
             return response
 
-    def _error(self, response: httpx.Response) -> ResourceError:
+    def _error(
+        self, response: httpx.Response, *, undecodable: Exception | None = None
+    ) -> ResourceError:
         """Build the exception for an error response.
 
         Args:
             response: The error response.
+            undecodable: The decoding error, when the body could not be read at all: the
+                service declared a content encoding its body does not have. The exception
+                then carries no body and says so.
 
         Returns:
             An instance of ``ERROR_CLASS``.
         """
         body: Any
-        try:
-            body = response.json()
-        except ValueError:
-            body = response.text
+        if undecodable is not None:
+            body = None
+        else:
+            try:
+                body = response.json()
+            except ValueError:
+                body = response.text
         error = body.get("error") if isinstance(body, dict) else None
         code = message = None
         if isinstance(error, dict):
@@ -340,6 +359,8 @@ class ResourceClient:
         )
         summary = f"{response.request.method} {response.request.url} -> {response.status_code}"
         detail = ": ".join(str(part) for part in (code, message) if part)
+        if undecodable is not None:
+            detail = f"the response body could not be decoded ({undecodable})"
         return self.ERROR_CLASS(
             f"{summary} {detail}".rstrip(),
             status=response.status_code,
