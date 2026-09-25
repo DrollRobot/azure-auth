@@ -2,20 +2,18 @@
 Thank you for your interest in contributing!
 
 ## Setting up a development environment
-Requires Python 3.14+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 ```
 git clone https://github.com/DrollRobot/azure-auth.git
 cd azure-auth
 uv sync --all-groups --all-extras
 uv run pre-commit install
+uv run pre-commit install --hook-type pre-push
 ```
 
 ## Running checks
 The full list of lint, format, type-check, test, and pre-commit commands lives
 in [AGENTS.TESTING.md](AGENTS.TESTING.md). Run those before opening a PR.
-
-Pre-commit also runs lint, format, type check, and secret detection
-automatically on every commit.
 
 ### Code structure
 - `src/azure_auth/auth/` -- `AuthContext`, credentials, the token cache, the Windows
@@ -40,8 +38,6 @@ automatically on every commit.
 - MSAL result dictionaries never leave `auth/`; translate them into the exceptions in
   `auth/errors.py`.
 - Secrets are held in memory only. There is no unencrypted disk cache, and none may be added.
-- Everything that knows about the undocumented Exchange `InvokeCommand` endpoint stays in
-  `clients/invoke_command.py`.
 
 ### Public API
 Export new public symbols from `src/azure_auth/__init__.py`.
@@ -53,9 +49,6 @@ uv run mkdocs build --strict
 
 # live preview at http://127.0.0.1:8000
 uv run mkdocs serve
-
-# deploy to GitHub Pages
-uv run mkdocs gh-deploy --force
 ```
 
 ### Type annotations

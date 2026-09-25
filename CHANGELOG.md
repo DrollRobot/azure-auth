@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Runs on Python 3.11 and newer, not only 3.14.
 - A failed Exchange or Security & Compliance cmdlet now says which cmdlet failed and why,
   in the service's own words, and cmdlet warnings are collected from wherever the service
   puts them.

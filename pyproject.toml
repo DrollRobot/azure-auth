@@ -10,7 +10,7 @@ name = "azure-auth"
 version = "0.1.0"
 description = "A collection of clients and helper functions for authentication with Azure, Graph, Exchange, and other Microsoft cloud systems."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 dependencies = [
     "azure-core>=1.41.0",
     "cryptography>=50.0.1",
@@ -96,7 +96,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py311"
 
 [tool.ruff.lint]
 # E/W = pycodestyle, D = pydocstyle, F = pyflakes, I = isort, B = bugbear,
@@ -113,7 +113,7 @@ extend-ignore = ["ANN401"]  # Any in **kwargs is a legitimate pass-through annot
 convention = "google"
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.11"
 strict = true
 files = ["src", "tests"]
 mypy_path = ["scripts"]

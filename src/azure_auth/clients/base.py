@@ -43,7 +43,7 @@ def claims_from_challenge(header: str | None) -> str | None:
     try:
         decoded = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
         return decoded.decode("utf-8") or None
-    except binascii.Error, UnicodeDecodeError:
+    except (binascii.Error, UnicodeDecodeError):
         return None
 
 

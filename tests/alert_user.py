@@ -36,7 +36,7 @@ import tempfile
 import time
 import wave
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 BELL = "\a"
 
@@ -166,10 +166,13 @@ def _play_windows(data: bytes) -> bool:
     Returns:
         ``True`` if it played.
     """
-    try:
-        import winsound
-    except ImportError:
+    # Gated here as well as at the caller: mypy narrows ``sys.platform`` only within the
+    # block that tests it, and typeshed defines ``winsound``'s names only under ``win32``,
+    # so without this the body fails the type check on Linux and macOS hosts.
+    if sys.platform != "win32":
         return False
+    import winsound
+
     try:
         winsound.PlaySound(data, winsound.SND_MEMORY)
     except RuntimeError:
@@ -221,7 +224,7 @@ def _run(command: list[str]) -> bool:
             check=False,
             timeout=10,
         )
-    except OSError, subprocess.SubprocessError:
+    except (OSError, subprocess.SubprocessError):
         return False
     return completed.returncode == 0
 

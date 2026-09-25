@@ -323,7 +323,7 @@ class CertStoreCredential:
         if self._padding == "pss":
             try:
                 return self._build(client_id, token_endpoint, "pss")
-            except cng.SignatureFailed, _InvalidPssSignature:
+            except (cng.SignatureFailed, _InvalidPssSignature):
                 self._padding = "pkcs1"
         return self._build(client_id, token_endpoint, "pkcs1")
 

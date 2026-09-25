@@ -47,7 +47,7 @@ def tenant_id_from_token(token: str) -> str | None:
         return None
     try:
         payload = json_module.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
-    except binascii.Error, ValueError:
+    except (binascii.Error, ValueError):
         return None
     tenant = payload.get("tid") if isinstance(payload, dict) else None
     return str(tenant) if tenant else None
