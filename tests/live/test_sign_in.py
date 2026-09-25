@@ -8,7 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from azure_auth import AuthContext, AzureClient, ExchangeClient, GraphClient
+from azure_auth import (
+    AuthContext,
+    AuthError,
+    AzureClient,
+    ConsentRequired,
+    ExchangeClient,
+    GraphClient,
+    InteractionRequired,
+)
 from azure_auth.clients import ResourceClient
 from tests.live.support import (
     BASELINE_SCOPES,
@@ -17,10 +25,21 @@ from tests.live.support import (
     _flag,
     cached_user_auth,
     needs_user,
+    walkthrough,
     walkthrough_if_waiting,
 )
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
+
+# What the cancel test asks for. It must need admin consent and must not be granted in the
+# tenant, so that the administrator's sign-in stops at a consent screen, which is the one
+# page with a Cancel button. So it must not be in BASELINE_SCOPES (already granted: no
+# screen), nor UNGRANTED_SCOPE (an Accept by mistake would break the .default test), nor
+# NONADMIN_SCOPE. Admin consent rather than user consent on purpose: an Accept by mistake then
+# creates a tenant-wide grant, which the consent test's revoke removes and the baseline does
+# not put back, so the mistake heals itself. A per-user grant for the administrator would be
+# spared by that revoke for ever.
+CANCEL_SCOPE = "Domain.Read.All"
 
 
 @needs_user
@@ -89,3 +108,58 @@ async def test_interactive_login_to_another_first_party_client(
     cached = cached_user_auth(cache_path)
     token = await cached.aio.acquire_token(client.scopes, client_id=client.client_id)
     assert token.token
+
+
+@needs_user
+@pytest.mark.interactive
+async def test_a_cancelled_sign_in_is_reported_and_not_retried() -> None:
+    """Cancelling the browser sign-in raises an error that says so, and opens nothing else.
+
+    The one page in the sign-in with a Cancel button is Entra's consent screen, so this asks
+    for a scope the tenant has not granted (``CANCEL_SCOPE``) to make that screen appear.
+
+    What Entra actually answers, measured 2026-09-25: ``consent_required`` with
+    ``AADSTS65004: User declined to consent to access the app``. That is *not* the bare
+    ``access_denied`` a non-administrator gets from "Need admin approval" (``test_consent.py``),
+    so the two are distinguishable after all. The package reports this one as
+    :class:`ConsentRequired`, carrying the scope and the tenant, with Entra's own words in the
+    message -- and opens no second browser window.
+
+    Closing the window instead of pressing Cancel is not a cancel: MSAL waits for a redirect
+    that never arrives, because the package passes it no ``timeout``.
+
+    The context has its own memory cache, so nothing here touches the cache the other live
+    tests share.
+    """
+    walkthrough(
+        f"Sign-in as {USERNAME}. The browser is probably still signed in, so this step may"
+        " pass by itself; if it asks, pick or type the admin.",
+        f"A consent screen listing {CANCEL_SCOPE}. Click CANCEL. Do NOT click Accept: that"
+        f" grants {CANCEL_SCOPE} tenant-wide, and this test fails until the consent test's"
+        " revoke, or scripts/revoke_consent.py, removes it again.",
+    )
+    auth = AuthContext(TENANT, username=USERNAME)
+    async with GraphClient(auth, scopes=[CANCEL_SCOPE]) as graph:
+        try:
+            await graph.login(force=True)
+        except AuthError as error:
+            caught = error
+        else:
+            pytest.fail(
+                f"the sign-in succeeded, so nothing was cancelled: either Accept was clicked,"
+                f" or {CANCEL_SCOPE} is already granted in this tenant. Revoke it and run again."
+            )
+
+    message = str(caught)
+    assert "Signed in as" not in message, "the browser signed in as somebody else"
+    # Entra's own explanation reaches the caller, and the exception says which scopes in
+    # which tenant went unconsented, so a caller can decide what to do about it.
+    assert isinstance(caught, ConsentRequired), f"expected ConsentRequired, got {message}"
+    assert "AADSTS65004" in message
+    assert "declined" in message
+    # The client resolves scopes to their full form (https://graph.microsoft.com/...), and
+    # the exception carries what was actually requested.
+    assert caught.scopes == tuple(graph.scopes)
+    assert caught.tenant_id == TENANT
+    # Not this: it would mean the package took the decline for a missing sign-in.
+    assert not isinstance(caught, InteractionRequired)

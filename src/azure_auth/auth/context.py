@@ -625,9 +625,11 @@ class AuthContext:
         # scopes being asked for, so consent is handled by the ordinary sign-in and needs
         # nothing from this package. A retry with prompt=consent was tried here and removed:
         # measured against a live tenant on 2026-09-20, a user who may not consent is shown
-        # "Need admin approval" and leaving that page returns a bare access_denied, which
-        # cannot be told apart from pressing Cancel. Reopening the browser on either reading
-        # would be wrong, and the retry could never fire in the case it was written for.
+        # "Need admin approval" and leaving that page returns a bare access_denied, which no
+        # retry can fix. Pressing Cancel on the consent screen returns consent_required with
+        # AADSTS65004 (measured 2026-09-25), which is the user's decision. Reopening the
+        # browser on either would be wrong, and the retry could never fire in the case it was
+        # written for.
         result = self._interactive(client_id, scopes, claims, use_broker=use_broker)
         if "access_token" not in result:
             raise error_from_msal_result(result, tenant_id=self._tenant_id, scopes=scopes)

@@ -135,8 +135,9 @@ async def test_a_user_who_may_not_consent_is_refused_with_a_useful_error(
 
     What Entra actually does, measured against a live tenant on 2026-09-20: the user is shown
     "Need admin approval", and leaving that page returns a bare ``access_denied`` -- no AADSTS
-    code, no description, nothing that distinguishes it from pressing Cancel on an ordinary
-    consent screen.
+    code, no description. (Pressing Cancel on an ordinary consent screen is different:
+    ``consent_required`` with ``AADSTS65004``, measured 2026-09-25; see
+    ``test_a_cancelled_sign_in_is_reported_and_not_retried``.)
 
     So this is *not* a :class:`ConsentRequired`, and :meth:`AuthContext._consent` does not run.
     It cannot: retrying with ``prompt=consent`` would reopen the same "Need admin approval"
