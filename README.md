@@ -21,6 +21,7 @@ The high-level goals of this package.
   unencrypted.
 - Supports async operation wherever possible.
 - Platform support: Windows, Linux, MacOs
+- Supports all Microsoft clouds: Commercial, Gov, DoD, China.
 
 ### Non-goals
 
@@ -31,7 +32,7 @@ The high-level goals of this package.
 - Supports using WAM credentials on Windows systems.
   Built, but untested: `broker=True` has never been run against a live tenant, and whether a
   broker sign-in can reach a managed tenant silently through `for_tenant()` is unverified.
-- Exchange and IPPS clients.
+- Exchange(done) and IPPS clients.
   Delegated user access is live-tested end to end: the sign-in, cmdlets with every kind of
   parameter, paging, failures reported with the cmdlet's own reason, the Security & Compliance
   regional redirect, and the blocking mirrors. Still open: the `InvokeCommand` endpoint is
@@ -43,10 +44,7 @@ The high-level goals of this package.
   Built, but untested: live testing is on hold until an account with sign-in rights to a
   GDAP partner tenant is available.
 - Platform support: Linux, MacOs
-- Supports all Microsoft clouds: Commercial, Gov, DoD, etc.
-  Today `authority_host=` can point at another cloud's sign-in endpoint, but the resource
-  URLs (Graph, ARM, Exchange, IPPS) are fixed to the commercial cloud. Needs urls for all
-  clouds, function for OIDC lookup.
+
 
 ## Documentation
 
