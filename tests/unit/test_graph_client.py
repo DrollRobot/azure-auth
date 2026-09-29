@@ -13,6 +13,7 @@ import pytest
 from azure_auth import AuthContext
 from azure_auth.clients import GraphClient, GraphError
 from azure_auth.clients.base import claims_from_challenge, retry_delay
+from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from tests.fakes import FakeMsal, token_result
 from tests.http import Recorder, ok
@@ -110,6 +111,44 @@ async def test_login_uses_the_clients_id_and_scopes(auth: AuthContext, fake_msal
     assert fake_msal.apps[0].client_id == GRAPH_CLI_CLIENT_ID
     assert fake_msal.calls[0].scopes == ["https://graph.microsoft.com/User.Read.All"]
     assert graph.auth is auth
+
+
+# ---------------------------------------------------------------------------- clouds
+
+
+@pytest.mark.parametrize("cloud", [US_GOV, US_GOV_DOD, CHINA], ids=lambda cloud: cloud.name)
+async def test_requests_and_scopes_follow_the_contexts_cloud(
+    fake_msal: FakeMsal, cloud: Cloud
+) -> None:
+    auth = AuthContext("tenant", username=USER, client_id="own-app", cloud=cloud)
+    recorder = Recorder([ok({"id": "1"})])
+    graph = GraphClient(auth, scopes=["User.Read"], transport=recorder.transport)
+
+    await graph.get("/me")
+
+    assert graph.resource == cloud.graph
+    assert str(recorder.requests[0].url) == f"{cloud.graph}/v1.0/me"
+    assert fake_msal.calls[0].scopes == [f"{cloud.graph}/User.Read"]
+    assert GraphClient(auth).scopes == (f"{cloud.graph}/.default",)
+
+
+async def test_a_token_for_one_clouds_graph_is_never_sent_to_anothers(
+    fake_msal: FakeMsal,
+) -> None:
+    graph = GraphClient(
+        AuthContext("tenant", username=USER, cloud=US_GOV), transport=Recorder([]).transport
+    )
+    with pytest.raises(ValueError, match="Refusing to send a token"):
+        await graph.get("https://graph.microsoft.com/v1.0/me")
+
+
+async def test_china_has_no_default_graph_client_id(fake_msal: FakeMsal) -> None:
+    with pytest.raises(ValueError, match="not published in the China cloud"):
+        GraphClient(AuthContext("tenant", username=USER, cloud=CHINA))
+    own = AuthContext("tenant", username=USER, client_id="own-app", cloud=CHINA)
+    assert GraphClient(own).client_id == "own-app"
+    by_client = AuthContext("tenant", username=USER, cloud=CHINA)
+    assert GraphClient(by_client, client_id="own-app").client_id == "own-app"
 
 
 # ---------------------------------------------------------------------------- verbs

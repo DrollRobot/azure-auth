@@ -2,9 +2,10 @@
 
 ## How it fits together
 
-`AuthContext` holds one tenant, one set of credentials, one token cache and, for user flows,
-one account. Resource clients hold an `AuthContext` and ask it for tokens. Nothing talks to
-the network until the first token is needed.
+`AuthContext` holds one tenant, one cloud, one set of credentials, one token cache and, for
+user flows, one account. Resource clients hold an `AuthContext` and ask it for tokens. Apart
+from looking up the tenant's cloud when it is created, nothing talks to the network until the
+first token is needed.
 
 ```python
 auth = AuthContext("contoso.onmicrosoft.com", username="admin@contoso.com")
@@ -45,6 +46,65 @@ When the broker is missing or fails, the context falls back to the browser. Pass
 `broker_fallback=False` to get `BrokerUnavailable` instead. A user who cancels the broker
 prompt is not sent to the browser.
 
+## Clouds
+
+A context works in whichever Microsoft cloud its tenant lives in, without being told which.
+When it is created it looks the tenant up in the tenant's public discovery document (one
+unauthenticated request to each of three sign-in hosts, no sign-in), and every client built on
+it uses that cloud's endpoints.
+
+```python
+auth = AuthContext("contoso.us", username="admin@contoso.us")  # found to be in GCC High
+```
+
+| Cloud | `cloud=` | Sign-in | Graph |
+|---|---|---|---|
+| Commercial, including GCC | `"Commercial"` | `login.microsoftonline.com` | `graph.microsoft.com` |
+| US Government GCC High | `"USGov"` | `login.microsoftonline.us` | `graph.microsoft.us` |
+| US Government DoD | `"USGovDoD"` | `login.microsoftonline.us` | `dod-graph.microsoft.us` |
+| China (21Vianet) | `"China"` | `login.chinacloudapi.cn` | `microsoftgraph.chinacloudapi.cn` |
+
+The Resource Manager, Exchange and Security & Compliance hosts are in `azure_auth.clouds`,
+with each cloud as a constant (`COMMERCIAL`, `US_GOV`, `US_GOV_DOD`, `CHINA`).
+
+Pass `cloud=` to skip the lookup, or to override it. The cloud is then taken as given and
+not checked, so a wrong one fails when it is used. An app sign-in with a certificate is
+refused at once (`AADSTS700023`). A user sign-in succeeds, and the first request fails: the
+wrong cloud's Graph answers `401 InvalidAuthenticationToken: InvalidCloudInstance`.
+
+The lookup fails the constructor when it cannot place the tenant:
+
+- `TenantNotFound`: no tenant has that id or domain name in any cloud.
+- `AmbiguousTenant`: each cloud is a separate directory, so one name can be a different
+  tenant in each of two clouds: a domain verified in a commercial and a China tenant, or a
+  GUID that is both a commercial and a US government tenant. The error lists them; pass
+  `cloud=` to choose.
+- `ValueError`: `common`, `organizations` and `consumers` name no single tenant, so they
+  need `cloud=`.
+
+### Looking up a tenant
+
+`discover_tenant()` is the same lookup on its own. Give it any tenant's domain name or GUID,
+anybody's, and it tells you who that tenant is and where it lives. It only asks public
+endpoints, so it needs no sign-in, credential or permission.
+
+```python
+from azure_auth import discover_tenant
+
+tenant = discover_tenant("contoso.com")
+tenant.tenant_id  # the GUID, also when looked up by domain
+tenant.cloud.name  # "Commercial", "USGov", "USGovDoD" or "China"
+tenant.cloud.graph  # that cloud's Graph, and every other endpoint in the table
+tenant.region_sub_scope  # "GCC" for a GCC tenant, "DODCON" for GCC High, "DOD" for DoD
+tenant.document  # the whole OpenID Connect discovery document
+```
+
+It raises `TenantNotFound` and `AmbiguousTenant` as above.
+
+Microsoft Graph Command Line Tools, the default Graph client id, does not exist in the China
+cloud. There, `GraphClient` needs `client_id=` of your own application. The Azure PowerShell
+and Exchange Online PowerShell client ids exist in every cloud.
+
 ## Client ids and scopes
 
 Each client picks its client id in this order:
@@ -55,12 +115,15 @@ Each client picks its client id in this order:
 
 App flows never use a first-party id; without a client id they raise `ValueError`.
 
-| Client | Default client id (user flows) | Default scope |
+| Client | Default client id (user flows) | Default scope (commercial cloud) |
 |---|---|---|
 | `GraphClient` | Microsoft Graph PowerShell | `scopes=` argument, else `https://graph.microsoft.com/.default` |
 | `AzureClient`, `KeyVaultClient`, Azure SDK clients | Azure PowerShell | `https://management.azure.com/.default`, `https://vault.azure.net/.default` |
 | `ExchangeClient` | Exchange Online PowerShell | `https://outlook.office365.com/.default` |
 | `IppsClient` | Exchange Online PowerShell | `https://ps.compliance.protection.outlook.com/.default` |
+
+In another cloud the scopes are that cloud's resources; each client's `resource` property
+names its own.
 
 Two things follow from that table:
 
@@ -124,8 +187,8 @@ plain text and never silently switches to the memory cache.
 ## Multi-tenant access (GDAP)
 
 `auth.for_tenant(tenant_id)` returns a sibling context for another tenant. It shares the
-credentials, the cache and the username, and makes no network call, so it is cheap to call
-in a loop.
+credentials, the cache, the username and the cloud, and makes no network call, so it is cheap
+to call in a loop.
 
 ```python
 home = GraphClient(auth, scopes=["DelegatedAdminRelationship.Read.All"])
@@ -185,7 +248,9 @@ AuthError
 ├── AccountSelectionRequired
 ├── CertificateUnavailable
 ├── CacheEncryptionUnavailable
-└── BrokerUnavailable
+├── BrokerUnavailable
+├── TenantNotFound(tenant)
+└── AmbiguousTenant(tenant, candidates)
 ResourceError(status, code, request_id, body)
 ├── GraphError
 ├── AzureError
@@ -247,15 +312,17 @@ Both clients use the `InvokeCommand` REST endpoint behind the ExchangeOnlineMana
 PowerShell module. **Microsoft does not document this endpoint.** The request shape was read
 from module version 3.10.1:
 
-- URL: `https://<host>/adminapi/beta/<tenant GUID>/InvokeCommand`. The GUID is read from the
-  token, so a domain name works as `tenant_id`. `beta` is the only version that answers
+- URL: `https://<host>/adminapi/beta/<tenant GUID>/InvokeCommand`, on the context's cloud's
+  host. The GUID is read from the token, so a domain name works as `tenant_id`. `beta` is the only version that answers
   `InvokeCommand`; the module's `v1.0` base URI serves its own REST cmdlets.
 - Routing header `X-AnchorMailbox`: `UPN:<username>` for a user in their own tenant, and the
   tenant's system mailbox for app flows and for sibling (GDAP) contexts. Override it with
   `anchor_mailbox=`.
 - Security & Compliance redirects the first call to a regional host. The client follows that
   redirect itself, because HTTP libraries drop the `Authorization` header on a cross-host
-  redirect, and keeps using the regional host.
+  redirect, and keeps using the regional host. In the DoD cloud the first call goes to
+  `l5.ps.compliance.protection.office365.us`, as the module's does, while the token is for
+  `ps.compliance.protection.office365.us`.
 
 - Paging works by POSTing the same body again to `@odata.nextLink`; `page_size` is the
   `odata.maxpagesize` preference, which the service honours. `run()` walks every page, so it

@@ -12,6 +12,7 @@ from azure_auth.clients.invoke_command import (
     cmdlet_error_details,
     tenant_id_from_token,
 )
+from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import EXCHANGE_POWERSHELL_CLIENT_ID
 from tests.fakes import FakeMsal, token_result
 from tests.http import Recorder, fake_jwt, ok
@@ -334,6 +335,70 @@ async def test_redirect_that_cannot_be_followed_is_an_error(
         await ipps.run("Get-Label")
 
     assert caught.value.status == 302
+
+
+# ---------------------------------------------------------------------------- clouds
+
+
+def cloud_context(fake_msal: FakeMsal, cloud: Cloud) -> AuthContext:
+    token = fake_jwt(tid=TENANT_GUID)
+    fake_msal.accounts = [{"username": USER}]
+    fake_msal.silent = lambda call: token_result(token)
+    return AuthContext("partner.onmicrosoft.com", username=USER, cloud=cloud)
+
+
+@pytest.mark.parametrize("cloud", [US_GOV, US_GOV_DOD, CHINA], ids=lambda cloud: cloud.name)
+async def test_exchange_follows_the_contexts_cloud(fake_msal: FakeMsal, cloud: Cloud) -> None:
+    recorder = Recorder([ok({"value": []})])
+    exchange = ExchangeClient(cloud_context(fake_msal, cloud), transport=recorder.transport)
+
+    await exchange.run("Get-Mailbox")
+
+    assert exchange.resource == cloud.exchange
+    assert str(recorder.requests[0].url) == (
+        f"{cloud.exchange}/adminapi/beta/{TENANT_GUID}/InvokeCommand"
+    )
+    assert fake_msal.calls[0].scopes == [f"{cloud.exchange}/.default"]
+    # Exchange Online PowerShell is published in every cloud, China included.
+    assert fake_msal.apps[0].client_id == EXCHANGE_POWERSHELL_CLIENT_ID
+
+
+@pytest.mark.parametrize("cloud", [US_GOV, CHINA], ids=lambda cloud: cloud.name)
+async def test_ipps_follows_the_contexts_cloud(fake_msal: FakeMsal, cloud: Cloud) -> None:
+    recorder = Recorder([ok({"value": []})])
+    ipps = IppsClient(cloud_context(fake_msal, cloud), transport=recorder.transport)
+
+    await ipps.run("Get-Label")
+
+    assert recorder.requests[0].url.host == cloud.ipps_host == httpx.URL(cloud.ipps).host
+    assert fake_msal.calls[0].scopes == [f"{cloud.ipps}/.default"]
+
+
+async def test_dod_ipps_starts_at_l5_with_a_token_for_the_bare_host(fake_msal: FakeMsal) -> None:
+    domain = "ps.compliance.protection.office365.us"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == f"l5.{domain}":
+            return httpx.Response(302, headers={"Location": f"https://gov01.{domain}/adminapi"})
+        return ok({"value": [{"Name": "label"}]})
+
+    recorder = Recorder(handler)
+    ipps = IppsClient(cloud_context(fake_msal, US_GOV_DOD), transport=recorder.transport)
+
+    assert await ipps.run("Get-Label") == [{"Name": "label"}]
+
+    assert [r.url.host for r in recorder.requests] == [f"l5.{domain}", f"gov01.{domain}"]
+    assert ipps.base_url == f"https://gov01.{domain}"
+    assert fake_msal.calls[0].scopes == [f"https://{domain}/.default"]
+
+
+async def test_a_next_link_into_another_clouds_exchange_is_refused(fake_msal: FakeMsal) -> None:
+    other = f"https://outlook.office365.com/adminapi/beta/{TENANT_GUID}/InvokeCommand?page=2"
+    recorder = Recorder([ok({"value": [], "@odata.nextLink": other})])
+    exchange = ExchangeClient(cloud_context(fake_msal, US_GOV), transport=recorder.transport)
+
+    with pytest.raises(ValueError, match="Refusing to send a token"):
+        await exchange.run("Get-Mailbox")
 
 
 async def test_next_link_on_a_foreign_host_is_refused(auth: AuthContext) -> None:

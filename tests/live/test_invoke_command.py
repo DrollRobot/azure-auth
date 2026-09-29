@@ -24,7 +24,6 @@ import httpx
 import pytest
 
 from azure_auth import AuthContext, ExchangeClient, InvokeCommandError, IppsClient
-from azure_auth.constants import EXCHANGE_RESOURCE
 from azure_auth.sync import ExchangeClient as BlockingExchangeClient
 from azure_auth.sync import IppsClient as BlockingIppsClient
 from tests.live.support import (
@@ -107,7 +106,7 @@ async def test_exchange_runs_a_cmdlet_as_the_signed_in_user(user_auth: AuthConte
         mailbox = await exchange.run("Get-Mailbox", Identity=USERNAME)
 
     claims = token_claims(token.token)
-    assert claims["aud"] == EXCHANGE_RESOURCE
+    assert claims["aud"] == user_auth.cloud.exchange
     assert (token_user(token.token) or "").lower() == USERNAME.lower()
     assert "AdminApi.AccessAsUser.All" in token_scopes(token.token)
     print(f"exchange token scopes: {' '.join(sorted(token_scopes(token.token)))}")
@@ -302,8 +301,9 @@ async def test_ipps_runs_a_cmdlet_through_the_regional_host(user_auth: AuthConte
 
     assert isinstance(labels, list)
     host = httpx.URL(ipps.base_url).host
-    assert host != IppsClient.HOST
-    assert host.endswith(f".{IppsClient.HOST}"), f"no regional host was taken: {host}"
+    assert host != user_auth.cloud.ipps_host
+    domain = httpx.URL(ipps.resource).host
+    assert host.endswith(f".{domain}"), f"no regional host was taken: {host}"
     error = unknown.value
     assert (error.status, error.code) == (403, "Forbidden")
     assert str(error).startswith("Get-NoSuchCmdlet failed: ")
@@ -330,7 +330,7 @@ def test_the_blocking_ipps_client_runs_a_cmdlet(cache_path: Path) -> None:
         require_cached_sign_in(ipps)
         labels = ipps.run("Get-Label")
     assert isinstance(labels, list)
-    assert httpx.URL(ipps.base_url).host.endswith(f".{IppsClient.HOST}")
+    assert httpx.URL(ipps.base_url).host.endswith(f".{httpx.URL(ipps.resource).host}")
 
 
 # Exchange's directory is replicated, and a request may land on any domain controller. An

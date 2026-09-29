@@ -113,7 +113,7 @@ async def test_interactive_login_to_another_first_party_client(
     token = await cached.aio.acquire_token(client.scopes, client_id=client.client_id)
     assert token.token
     assert (token_user(token.token) or "").lower() == USERNAME.lower()
-    assert token_claims(token.token)["aud"] == client.RESOURCE
+    assert token_claims(token.token)["aud"] == client.resource
 
 
 @needs_user

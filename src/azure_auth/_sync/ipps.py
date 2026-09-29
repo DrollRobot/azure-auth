@@ -4,10 +4,8 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
-
 from azure_auth._sync.invoke_command import InvokeCommandClient
-from azure_auth.constants import IPPS_RESOURCE
+from azure_auth.clouds import Cloud
 
 
 class IppsClient(InvokeCommandClient):
@@ -22,5 +20,14 @@ class IppsClient(InvokeCommandClient):
         >>> labels = ipps.run("Get-Label")  # doctest: +SKIP
     """
 
-    RESOURCE: ClassVar[str] = IPPS_RESOURCE
-    HOST: ClassVar[str] = "ps.compliance.protection.outlook.com"
+    @classmethod
+    def service(cls, cloud: Cloud) -> tuple[str, str]:
+        """Name Security & Compliance in a cloud.
+
+        Args:
+            cloud: The cloud.
+
+        Returns:
+            The resource, and the host requests go to first.
+        """
+        return cloud.ipps, cloud.ipps_host

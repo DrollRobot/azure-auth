@@ -1,8 +1,8 @@
 """The authentication context shared by every resource client.
 
-An :class:`AuthContext` holds one tenant, one set of credentials, one token cache and (for
-user flows) one account. It creates MSAL applications on demand, one per client id, because
-the Microsoft first-party client ids differ per resource.
+An :class:`AuthContext` holds one tenant, one cloud, one set of credentials, one token cache
+and (for user flows) one account. It creates MSAL applications on demand, one per client id,
+because the Microsoft first-party client ids differ per resource.
 
 The context implements the Azure SDK ``TokenCredential`` protocol, and its :attr:`aio`
 attribute implements ``AsyncTokenCredential``, so any ``azure-*`` SDK client accepts it as
@@ -34,6 +34,7 @@ from azure_auth.auth.credentials import (
     PemCertificateCredential,
     SecretCredential,
 )
+from azure_auth.auth.discovery import discover_tenant
 from azure_auth.auth.errors import (
     AccountSelectionRequired,
     AuthError,
@@ -41,7 +42,8 @@ from azure_auth.auth.errors import (
     InteractionRequired,
     error_from_msal_result,
 )
-from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID, DEFAULT_AUTHORITY_HOST
+from azure_auth.clouds import Cloud, get_cloud
+from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +56,9 @@ _REFRESH_MARGIN_SECONDS = 300
 _DEFAULT_INTERACTIVE_TIMEOUT_SECONDS = 120
 
 _TokenKey = tuple[str, frozenset[str]]
+
+# Authorities that name no single tenant, so there is no one cloud to look up.
+_MULTI_TENANT_AUTHORITIES = frozenset({"common", "organizations", "consumers"})
 
 
 def _broker_installed() -> bool:
@@ -134,14 +139,18 @@ def _build_credential(
 
 
 class AuthContext:
-    """Credentials, cache and account for one tenant.
+    """Credentials, cache and account for one tenant in one cloud.
 
     A context runs either a *user flow* (``username`` given, no credential) or an *app flow*
     (``client_id`` plus a secret or certificate). Authentication is lazy: nothing happens
     until the first token is requested.
 
+    The context finds the tenant's cloud itself, from the tenant's public discovery document,
+    so a tenant in any Microsoft cloud works without saying which. ``cloud=`` skips the
+    lookup.
+
     Example:
-        >>> auth = AuthContext("contoso.onmicrosoft.com", username="admin@contoso.com")
+        >>> auth = AuthContext("contoso.com", username="admin@contoso.com")  # doctest: +SKIP
         >>> token = auth.get_token("https://management.azure.com/.default")  # doctest: +SKIP
     """
 
@@ -162,10 +171,13 @@ class AuthContext:
         cache_path: str | Path | None = None,
         broker: bool = False,
         broker_fallback: bool = True,
-        authority_host: str = DEFAULT_AUTHORITY_HOST,
+        cloud: Cloud | str | None = None,
         interactive_timeout: float = _DEFAULT_INTERACTIVE_TIMEOUT_SECONDS,
     ) -> None:
-        """Configure the context. No network call is made.
+        """Configure the context, looking up the tenant's cloud unless ``cloud`` is given.
+
+        The lookup is one unauthenticated request to each of three public sign-in hosts. Nothing
+        else touches the network until the first token is requested.
 
         Args:
             tenant_id: Tenant id (GUID) or verified domain name.
@@ -188,15 +200,25 @@ class AuthContext:
                 ``broker`` extra.
             broker_fallback: When the broker cannot be used, fall back to the browser
                 (default) instead of raising :class:`BrokerUnavailable`.
-            authority_host: Entra ID authority host, for sovereign clouds.
+            cloud: The cloud the tenant lives in, which every client built on the context
+                uses. Leave it out to have it looked up. Give it, as a
+                :class:`~azure_auth.clouds.Cloud` or its name (``Commercial``, ``USGov``,
+                ``USGovDoD``, ``China``), to skip the lookup; it is then taken as given, and a
+                wrong cloud fails when used: an app sign-in at once, a user's at the first
+                request.
             interactive_timeout: Seconds a browser sign-in waits for the person before it
                 fails with :class:`AuthError` (default 120). A closed window would otherwise
                 wait for ever.
 
         Raises:
-            ValueError: If the arguments do not describe exactly one flow.
+            ValueError: If the arguments do not describe exactly one flow, name an unknown
+                cloud, or leave out the cloud of a multi-tenant authority such as
+                ``organizations``, which has none to look up.
             CacheEncryptionUnavailable: If ``cache='disk'`` cannot be encrypted here.
             CertificateUnavailable: If a PFX archive cannot be read.
+            TenantNotFound: If the lookup finds no such tenant.
+            AmbiguousTenant: If the lookup finds the tenant in more than one cloud.
+            AuthError: If the lookup gets an answer it cannot use.
         """
         if not tenant_id:
             raise ValueError("tenant_id is required")
@@ -216,6 +238,8 @@ class AuthContext:
                 raise ValueError("username is not used for app flows")
             if broker:
                 raise ValueError("broker is only available for user flows")
+        if cloud is None and tenant_id.lower() in _MULTI_TENANT_AUTHORITIES:
+            raise ValueError(f"{tenant_id!r} names no single tenant to look up; pass cloud=")
 
         self._tenant_id = tenant_id
         self._client_id = client_id
@@ -224,7 +248,7 @@ class AuthContext:
         self._cache = build_cache(cache, cache_path)
         self._broker = broker
         self._broker_fallback = broker_fallback
-        self._authority_host = authority_host.rstrip("/")
+        self._cloud = get_cloud(cloud) if cloud is not None else discover_tenant(tenant_id).cloud
         self._interactive_timeout = interactive_timeout
         self._interactive_allowed = True
         self._init_state()
@@ -245,7 +269,9 @@ class AuthContext:
             A short description.
         """
         flow = "app" if self.is_app_flow else "user"
-        return f"AuthContext(tenant_id={self._tenant_id!r}, flow={flow!r})"
+        return (
+            f"AuthContext(tenant_id={self._tenant_id!r}, cloud={self._cloud.name!r}, flow={flow!r})"
+        )
 
     # ------------------------------------------------------------------ properties
 
@@ -253,6 +279,11 @@ class AuthContext:
     def tenant_id(self) -> str:
         """The tenant this context authenticates against."""
         return self._tenant_id
+
+    @property
+    def cloud(self) -> Cloud:
+        """The cloud this context signs in to, and whose endpoints its clients use."""
+        return self._cloud
 
     @property
     def client_id(self) -> str | None:
@@ -277,7 +308,7 @@ class AuthContext:
     @property
     def authority(self) -> str:
         """The authority URL for this tenant."""
-        return f"{self._authority_host}/{self._tenant_id}"
+        return f"{self._cloud.authority_host.rstrip('/')}/{self._tenant_id}"
 
     @property
     def token_endpoint(self) -> str:
@@ -296,11 +327,11 @@ class AuthContext:
     def for_tenant(self, tenant_id: str) -> AuthContext:
         """Return a sibling context for another tenant.
 
-        The sibling shares this context's credentials, cache and username, so a user with
-        GDAP access obtains managed-tenant tokens from the one home-tenant sign-in. No network call
-        is made. A sibling never opens a browser: when a token cannot be obtained silently it
-        raises :class:`InteractionRequired` or :class:`ConsentRequired` carrying the tenant
-        id.
+        The sibling shares this context's credentials, cache, username and cloud, so a user
+        with GDAP access obtains managed-tenant tokens from the one home-tenant sign-in. No
+        network call is made. A sibling never opens a browser: when a token cannot be
+        obtained silently it raises :class:`InteractionRequired` or :class:`ConsentRequired`
+        carrying the tenant id.
 
         Args:
             tenant_id: Tenant id (GUID) or verified domain name of the other tenant.
@@ -321,7 +352,7 @@ class AuthContext:
                 sibling._cache = self._cache
                 sibling._broker = self._broker
                 sibling._broker_fallback = self._broker_fallback
-                sibling._authority_host = self._authority_host
+                sibling._cloud = self._cloud
                 sibling._interactive_timeout = self._interactive_timeout
                 sibling._interactive_allowed = False
                 sibling._init_state()

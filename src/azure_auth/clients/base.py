@@ -78,23 +78,23 @@ def retry_delay(response: httpx.Response, attempt: int, max_wait: float) -> floa
 class ResourceClient:
     """Base class: an authenticated HTTP client for one resource.
 
-    Subclasses set the class attributes and add resource-specific verbs.
+    Subclasses set the class attributes, pick their resource from the context's cloud, and
+    add resource-specific verbs.
 
     Attributes:
         DEFAULT_CLIENT_ID: First-party client id used for user flows when neither the client
             nor the context names one.
-        RESOURCE: Resource identifier; ``<RESOURCE>/.default`` is the default scope.
         ERROR_CLASS: Exception type raised for error responses.
     """
 
     DEFAULT_CLIENT_ID: ClassVar[str]
-    RESOURCE: ClassVar[str]
     ERROR_CLASS: ClassVar[type[ResourceError]] = ResourceError
 
     def __init__(
         self,
         auth: AuthContext,
         *,
+        resource: str,
         base_url: str,
         client_id: str | None = None,
         scopes: Sequence[str] | None = None,
@@ -107,11 +107,13 @@ class ResourceClient:
 
         Args:
             auth: The authentication context to get tokens from.
+            resource: Resource identifier in the context's cloud; ``<resource>/.default`` is
+                the default scope.
             base_url: Base URL that relative request paths are joined to.
             client_id: Client id for this client. Defaults to the context's client id, then
                 (user flows only) to ``DEFAULT_CLIENT_ID``.
             scopes: Delegated scopes to request in a user flow; short names are qualified
-                with the resource. Defaults to ``<RESOURCE>/.default``. App flows always use
+                with the resource. Defaults to ``<resource>/.default``. App flows always use
                 ``.default``.
             timeout: Timeout for each HTTP request, in seconds.
             max_retries: How often a throttled request (429, 503) is retried.
@@ -123,6 +125,7 @@ class ResourceClient:
         """
         self._auth = auth
         self._tokens = auth.aio
+        self._resource = resource.rstrip("/")
         self._client_id = self._resolve_client_id(client_id)
         self._scopes = self._resolve_scopes(scopes)
         self._base_url = httpx.URL(base_url.rstrip("/") + "/")
@@ -136,6 +139,11 @@ class ResourceClient:
     def auth(self) -> AuthContext:
         """The authentication context behind this client."""
         return self._auth
+
+    @property
+    def resource(self) -> str:
+        """The resource this client's tokens are issued for, in the context's cloud."""
+        return self._resource
 
     @property
     def client_id(self) -> str:
@@ -160,6 +168,10 @@ class ResourceClient:
 
         Returns:
             The client's id, else the context's, else (user flows) the resource default.
+
+        Raises:
+            ValueError: If an app flow has no client id, or the resource default is not
+                published in the context's cloud.
         """
         resolved = client_id or self._auth.client_id
         if resolved:
@@ -168,6 +180,12 @@ class ResourceClient:
             raise ValueError(
                 "App flows need a client_id on the AuthContext or on the client; "
                 "first-party client ids cannot be used with a secret or certificate"
+            )
+        cloud = self._auth.cloud
+        if self.DEFAULT_CLIENT_ID not in cloud.first_party_client_ids:
+            raise ValueError(
+                f"{type(self).__name__}'s default client id {self.DEFAULT_CLIENT_ID} is not "
+                f"published in the {cloud.name} cloud; pass client_id= of your own application"
             )
         return self.DEFAULT_CLIENT_ID
 
@@ -180,13 +198,13 @@ class ResourceClient:
         Returns:
             Fully qualified scopes.
         """
-        default = [f"{self.RESOURCE}/.default"]
+        default = [f"{self._resource}/.default"]
         # MSAL adds the OpenID Connect scopes itself and rejects them when they are passed in.
         wanted = [scope for scope in scopes or () if scope not in _RESERVED_SCOPES]
         if not wanted:
             return default
         qualified = [
-            scope if "://" in scope or scope == "email" else f"{self.RESOURCE}/{scope}"
+            scope if "://" in scope or scope == "email" else f"{self._resource}/{scope}"
             for scope in wanted
         ]
         if self._auth.is_app_flow and qualified != default:
@@ -242,7 +260,7 @@ class ResourceClient:
         trusted = target.scheme == "https" and self._is_trusted_host(target.host)
         # Credentials in the URL would make httpx replace the bearer token with basic auth.
         if not trusted or target.userinfo:
-            raise ValueError(f"Refusing to send a token for {self.RESOURCE} to {target}")
+            raise ValueError(f"Refusing to send a token for {self._resource} to {target}")
         return target
 
     def _is_trusted_host(self, host: str) -> bool:

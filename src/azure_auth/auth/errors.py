@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from azure_auth.clouds import TenantInfo
+
 # AADSTS codes that mean "an administrator or the user has not consented to this application".
 _CONSENT_ERROR_CODES = frozenset({65001, 65004, 650052, 650056, 650057})
 _CONSENT_MARKERS = frozenset({"consent_required"})
@@ -82,6 +84,49 @@ class CacheEncryptionUnavailable(AuthError):
 
 class BrokerUnavailable(AuthError):
     """The authentication broker was required but cannot be used."""
+
+
+class TenantNotFound(AuthError):
+    """No tenant by that id or domain name exists in the clouds that were asked.
+
+    Attributes:
+        tenant: The tenant id or domain name that was looked up.
+    """
+
+    def __init__(self, message: str, *, tenant: str) -> None:
+        """Create the error.
+
+        Args:
+            message: Human readable description.
+            tenant: The tenant id or domain name that was looked up.
+        """
+        super().__init__(message)
+        self.tenant = tenant
+
+
+class AmbiguousTenant(AuthError):
+    """A tenant id or domain name belongs to a different tenant in each of several clouds.
+
+    Each cloud is a separate directory: a domain can be verified in a commercial tenant and
+    in a China tenant, and a GUID can be both a commercial and a US government tenant. Pass
+    ``cloud=`` to choose.
+
+    Attributes:
+        tenant: The tenant id or domain name that was looked up.
+        candidates: One entry per tenant found.
+    """
+
+    def __init__(self, message: str, *, tenant: str, candidates: Sequence[TenantInfo]) -> None:
+        """Create the error.
+
+        Args:
+            message: Human readable description.
+            tenant: The tenant id or domain name that was looked up.
+            candidates: One entry per tenant found.
+        """
+        super().__init__(message)
+        self.tenant = tenant
+        self.candidates = tuple(candidates)
 
 
 def error_from_msal_result(

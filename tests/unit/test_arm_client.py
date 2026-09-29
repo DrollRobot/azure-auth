@@ -7,6 +7,7 @@ import pytest
 
 from azure_auth import AuthContext
 from azure_auth.clients import AzureClient, AzureError
+from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
 from tests.fakes import FakeMsal
 from tests.http import Recorder, ok
@@ -49,6 +50,20 @@ async def test_api_version_is_added_to_every_verb(auth: AuthContext, fake_msal: 
     assert recorder.requests[0].url.params["$expand"] == "x"
     assert fake_msal.apps[0].client_id == AZURE_POWERSHELL_CLIENT_ID
     assert fake_msal.calls[0].scopes == ["https://management.azure.com/.default"]
+
+
+@pytest.mark.parametrize("cloud", [US_GOV, US_GOV_DOD, CHINA], ids=lambda cloud: cloud.name)
+async def test_requests_go_to_the_resource_manager_of_the_contexts_cloud(
+    fake_msal: FakeMsal, cloud: Cloud
+) -> None:
+    auth = AuthContext("tenant", username="admin@contoso.com", cloud=cloud)
+    recorder = Recorder([ok({"name": "rg"})])
+
+    await AzureClient(auth, transport=recorder.transport).get(GROUP, api_version="2021-04-01")
+
+    assert recorder.requests[0].url.host == httpx.URL(cloud.arm).host
+    assert fake_msal.calls[0].scopes == [f"{cloud.arm}/.default"]
+    assert fake_msal.apps[0].client_id == AZURE_POWERSHELL_CLIENT_ID
 
 
 async def test_get_all_follows_next_link_as_given(auth: AuthContext) -> None:

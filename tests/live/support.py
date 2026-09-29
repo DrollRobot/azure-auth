@@ -2,7 +2,9 @@
 
 Environment variables:
 
-* ``AZURE_AUTH_TEST_TENANT_ID`` and ``AZURE_AUTH_TEST_USERNAME``: user-flow tests.
+* ``AZURE_AUTH_TEST_TENANT_ID`` and ``AZURE_AUTH_TEST_USERNAME``: user-flow tests. The
+  tenant may be in any cloud; every context the tests build finds which by itself. (The
+  Graph tests need Microsoft Graph Command Line Tools, which the China cloud does not have.)
 * ``AZURE_AUTH_TEST_APP_CLIENT_ID`` and ``AZURE_AUTH_TEST_CERT_THUMBPRINT``: app-flow tests
   with a certificate in ``CurrentUser\\My`` (needs ``Organization.Read.All`` on Graph).
 * ``AZURE_AUTH_TEST_NONADMIN_USERNAME``: a second user in the same tenant who may *not*
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import functools
 import json
 import os
 import threading
@@ -36,7 +39,7 @@ from typing import Any
 
 import pytest
 
-from azure_auth import AuthContext, ConsentRequired, InteractionRequired
+from azure_auth import AuthContext, Cloud, ConsentRequired, InteractionRequired, discover_tenant
 from azure_auth.clients import ResourceClient
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from azure_auth.sync import ResourceClient as BlockingResourceClient
@@ -92,6 +95,31 @@ needs_app = pytest.mark.skipif(
 
 def _flag(name: str) -> pytest.MarkDecorator:
     return pytest.mark.skipif(os.environ.get(name) != "1", reason=f"set {name}=1")
+
+
+@functools.cache
+def live_cloud() -> Cloud:
+    """Return the cloud the configured tenant lives in, found once per run by discovery.
+
+    Returns:
+        The cloud.
+    """
+    return discover_tenant(TENANT).cloud
+
+
+def graph_scopes(scopes: Iterable[str]) -> list[str]:
+    """Qualify short Graph scope names with the Graph resource of the tenant's cloud.
+
+    A bare ``User.Read`` means commercial Graph; the resource tokens are for differs per
+    cloud, so a direct token request names it.
+
+    Args:
+        scopes: Short names such as ``User.Read``.
+
+    Returns:
+        The full scopes, such as ``https://graph.microsoft.com/User.Read``.
+    """
+    return [f"{live_cloud().graph}/{scope}" for scope in scopes]
 
 
 def cached_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
@@ -281,6 +309,7 @@ def ensure_consent_baseline(cache_path: Path, *, force: bool) -> None:
         force: Prompt even when a silent sign-in would do.
     """
     admin = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
+    scopes = graph_scopes(BASELINE_SCOPES)
     with walkthrough_if_waiting(
         f"Sign-in prompt for the ADMIN, {USERNAME}, asking for {', '.join(BASELINE_SCOPES)}."
         " If the browser offers another account, choose 'Use another account'; signing in as"
@@ -289,10 +318,8 @@ def ensure_consent_baseline(cache_path: Path, *, force: bool) -> None:
         " if offered, then Accept. This grants the tests' baseline.",
     ):
         if force:
-            admin.login(client_id=GRAPH_CLI_CLIENT_ID, scopes=BASELINE_SCOPES, force=True)
-        token = admin.acquire_token(
-            BASELINE_SCOPES, client_id=GRAPH_CLI_CLIENT_ID, force_refresh=True
-        )
+            admin.login(client_id=GRAPH_CLI_CLIENT_ID, scopes=scopes, force=True)
+        token = admin.acquire_token(scopes, client_id=GRAPH_CLI_CLIENT_ID, force_refresh=True)
     missing = missing_scopes(token.token, BASELINE_SCOPES)
     if missing:
         pytest.fail(

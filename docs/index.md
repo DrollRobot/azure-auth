@@ -32,4 +32,14 @@ asyncio.run(main())
 
 The first request opens the browser. With `cache="disk"` later runs are silent.
 
+The tenant can be in any Microsoft cloud: Commercial, GCC, GCC High, DoD or China. The
+context finds which by itself. To look a tenant up without signing in at all:
+
+```python
+from azure_auth import discover_tenant
+
+tenant = discover_tenant("contoso.com")
+print(tenant.tenant_id, tenant.cloud.name)
+```
+
 Continue with the [guide](guide.md), or look things up in the [reference](reference/auth.md).

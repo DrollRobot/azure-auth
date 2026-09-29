@@ -6,7 +6,7 @@ They are generated from the asynchronous clients, so behaviour is identical.
 Example:
     >>> from azure_auth import AuthContext
     >>> from azure_auth.sync import GraphClient
-    >>> auth = AuthContext("contoso.onmicrosoft.com", username="admin@contoso.com")
+    >>> auth = AuthContext("contoso.com", username="admin@contoso.com")  # doctest: +SKIP
     >>> with GraphClient(auth, scopes=["User.Read.All"]) as graph:  # doctest: +SKIP
     ...     users = graph.get_all("/users")
 

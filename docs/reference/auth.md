@@ -2,6 +2,10 @@
 
 ::: azure_auth.auth.context
 
+::: azure_auth.clouds
+
+::: azure_auth.auth.discovery
+
 ::: azure_auth.auth.errors
 
 ::: azure_auth.auth.credentials

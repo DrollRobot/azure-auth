@@ -10,7 +10,7 @@ import httpx
 from azure_auth.auth.context import AuthContext
 from azure_auth.clients.base import ResourceClient
 from azure_auth.clients.errors import GraphError, ResourceError
-from azure_auth.constants import GRAPH_CLI_CLIENT_ID, GRAPH_RESOURCE
+from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 
 BATCH_LIMIT = 20
 
@@ -21,7 +21,7 @@ class GraphClient(ResourceClient):
     User flows default to the Microsoft Graph PowerShell client id. That application works
     by dynamic consent, so pass the delegated ``scopes`` you need; without them the token
     only carries what was consented to in the tenant before. App flows always use
-    ``https://graph.microsoft.com/.default``.
+    ``.default``. Requests go to the Graph host of the context's cloud.
 
     Example:
         >>> graph = GraphClient(auth, scopes=["User.Read.All"])  # doctest: +SKIP
@@ -29,7 +29,6 @@ class GraphClient(ResourceClient):
     """
 
     DEFAULT_CLIENT_ID: ClassVar[str] = GRAPH_CLI_CLIENT_ID
-    RESOURCE: ClassVar[str] = GRAPH_RESOURCE
     ERROR_CLASS: ClassVar[type[ResourceError]] = GraphError
 
     def __init__(
@@ -58,7 +57,8 @@ class GraphClient(ResourceClient):
         """
         super().__init__(
             auth,
-            base_url=f"{GRAPH_RESOURCE}/{api_version}",
+            resource=auth.cloud.graph,
+            base_url=f"{auth.cloud.graph}/{api_version}",
             client_id=client_id,
             scopes=scopes,
             timeout=timeout,

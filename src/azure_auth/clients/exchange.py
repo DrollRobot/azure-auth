@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from urllib.parse import urlsplit
 
 from azure_auth.clients.invoke_command import InvokeCommandClient
-from azure_auth.constants import EXCHANGE_RESOURCE
+from azure_auth.clouds import Cloud
 
 
 class ExchangeClient(InvokeCommandClient):
@@ -26,5 +26,14 @@ class ExchangeClient(InvokeCommandClient):
         when you have enough.
     """
 
-    RESOURCE: ClassVar[str] = EXCHANGE_RESOURCE
-    HOST: ClassVar[str] = "outlook.office365.com"
+    @classmethod
+    def service(cls, cloud: Cloud) -> tuple[str, str]:
+        """Name Exchange Online in a cloud.
+
+        Args:
+            cloud: The cloud.
+
+        Returns:
+            The resource, and its host, which is where requests go.
+        """
+        return cloud.exchange, urlsplit(cloud.exchange).hostname or ""

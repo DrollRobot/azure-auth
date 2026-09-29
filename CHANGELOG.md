@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Validated with a delegated user sign-in: the Exchange Online and Security & Compliance
   clients, and their blocking versions.
+- Every Microsoft cloud: Commercial (with GCC), US Government GCC High and DoD, and China.
+  The tenant's cloud is found automatically, and every client uses that cloud's services;
+  naming the cloud skips the lookup. Signing in has only been tried in the commercial cloud.
+- Look up any tenant by domain name or ID, without signing in: its ID, its cloud, and
+  whether it is a GCC tenant.
 
 ### Changed
 
@@ -23,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The API version option of the Exchange and Security & Compliance clients. Only one
   version answers cmdlets, so there was nothing to choose.
+- The option to point sign-in at another host, and the commercial resource URL constants.
+  Choosing the cloud replaces both.
 
 ### Fixed
 

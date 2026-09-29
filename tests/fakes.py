@@ -1,8 +1,12 @@
-"""A scriptable stand-in for the ``msal`` module.
+"""Scriptable stand-ins for the ``msal`` module and for tenant discovery.
 
 Unit tests replace ``azure_auth.auth.context.msal`` with a :class:`FakeMsal` so that no
 network call, browser or broker is ever involved. Behaviour is scripted per test through the
 callables on the fake; every MSAL call is recorded in ``calls``.
+
+A context given no cloud looks its tenant up when it is created. Every unit test replaces
+that lookup with a :class:`FakeDiscovery`, which finds every tenant in ``cloud`` and records
+each lookup.
 """
 
 from __future__ import annotations
@@ -10,6 +14,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from azure_auth.clouds import COMMERCIAL, Cloud, TenantInfo
 
 Result = dict[str, Any]
 
@@ -113,3 +119,19 @@ class FakeApp:
     def remove_tokens_for_client(self) -> None:
         """Count cache purges."""
         self.removed_tokens += 1
+
+
+@dataclass
+class FakeDiscovery:
+    """Replacement for :func:`azure_auth.auth.discovery.discover_tenant`."""
+
+    cloud: Cloud = COMMERCIAL
+    error: Exception | None = None
+    tenants: list[str] = field(default_factory=list)
+
+    def __call__(self, tenant: str) -> TenantInfo:
+        """Record the lookup and find the tenant in ``cloud``, or raise ``error``."""
+        self.tenants.append(tenant)
+        if self.error is not None:
+            raise self.error
+        return TenantInfo("00000000-0000-0000-0000-000000000001", self.cloud)

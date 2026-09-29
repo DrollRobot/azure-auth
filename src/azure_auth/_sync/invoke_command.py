@@ -26,6 +26,7 @@ import httpx
 from azure_auth._sync.base import ResourceClient
 from azure_auth.auth.context import AuthContext
 from azure_auth.clients.errors import InvokeCommandError, ResourceError
+from azure_auth.clouds import Cloud
 from azure_auth.constants import EXCHANGE_POWERSHELL_CLIENT_ID
 
 # The arbitration mailbox Exchange uses to route requests that are not made by a mailbox
@@ -98,14 +99,26 @@ def _is_blank(body: Any) -> bool:
 class InvokeCommandClient(ResourceClient):
     """Base class for clients that run cmdlets through ``InvokeCommand``.
 
+    Subclasses implement :meth:`service` to name their resource and host in a cloud.
+
     Attributes:
-        HOST: Host name of the service.
         last_warnings: Warnings the service returned for the most recent cmdlet.
     """
 
     DEFAULT_CLIENT_ID: ClassVar[str] = EXCHANGE_POWERSHELL_CLIENT_ID
     ERROR_CLASS: ClassVar[type[ResourceError]] = InvokeCommandError
-    HOST: ClassVar[str]
+
+    @classmethod
+    def service(cls, cloud: Cloud) -> tuple[str, str]:
+        """Name the service in a cloud.
+
+        Args:
+            cloud: The cloud.
+
+        Returns:
+            The resource tokens are issued for, and the host requests are sent to first.
+        """
+        raise NotImplementedError
 
     def __init__(
         self,
@@ -125,7 +138,7 @@ class InvokeCommandClient(ResourceClient):
         Args:
             auth: The authentication context to get tokens from.
             client_id: Client id for this client; see :class:`ResourceClient`.
-            scopes: Scopes to request. Defaults to ``https://<host>/.default``.
+            scopes: Scopes to request. Defaults to the service's ``.default``.
             anchor_mailbox: Value of the ``X-AnchorMailbox`` routing header. Defaults to the
                 signed-in user for a user flow in its own tenant, and to the tenant's system
                 mailbox for app flows and for sibling (GDAP) contexts.
@@ -135,9 +148,11 @@ class InvokeCommandClient(ResourceClient):
             max_retry_wait: Longest wait before one retry, in seconds.
             transport: Custom ``httpx`` transport, mainly for tests.
         """
+        resource, host = self.service(auth.cloud)
         super().__init__(
             auth,
-            base_url=f"https://{self.HOST}",
+            resource=resource,
+            base_url=f"https://{host}",
             client_id=client_id,
             scopes=scopes,
             timeout=timeout,
@@ -145,6 +160,10 @@ class InvokeCommandClient(ResourceClient):
             max_retry_wait=max_retry_wait,
             transport=transport,
         )
+        self._host = host
+        # Regional hosts are subdomains of the resource's host, which is not always the host
+        # requests start at: DoD sends them to l5.<resource host>.
+        self._domain = httpx.URL(resource).host
         self._anchor_mailbox = anchor_mailbox
         self._page_size = page_size
         self._connection_id = str(uuid.uuid4())
@@ -152,16 +171,17 @@ class InvokeCommandClient(ResourceClient):
         self.last_warnings: list[str] = []
 
     def _is_trusted_host(self, host: str) -> bool:
-        """Accept the service host and its regional sub-hosts.
+        """Accept the service host and the regional hosts under the resource's host.
 
         Args:
             host: Host name of the request URL.
 
         Returns:
-            ``True`` for ``HOST`` and for ``<region>.HOST``.
+            ``True`` for the service host, the resource's host, and ``<region>.<resource
+            host>``.
         """
         lowered = host.lower()
-        return lowered == self.HOST or lowered.endswith(f".{self.HOST}")
+        return lowered in (self._host, self._domain) or lowered.endswith(f".{self._domain}")
 
     def _tenant(self) -> str:
         """Return the tenant GUID for the request path.
@@ -228,7 +248,7 @@ class InvokeCommandClient(ResourceClient):
         if response.status_code == httpx.codes.FOUND and location:
             region = httpx.URL(location).host.split(".", 1)[0]
             if region and not self._base_url.host.startswith(f"{region}."):
-                self._base_url = httpx.URL(f"https://{region}.{self.HOST}/")
+                self._base_url = httpx.URL(f"https://{region}.{self._domain}/")
                 target = httpx.URL(url) if "://" in url else None
                 retry_url = str(target.copy_with(host=self._base_url.host)) if target else url
                 response = self.request("POST", retry_url, json=payload, headers=headers)

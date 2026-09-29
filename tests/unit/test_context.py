@@ -16,10 +16,12 @@ from azure_auth import (
     BrokerUnavailable,
     ConsentRequired,
     InteractionRequired,
+    TenantNotFound,
 )
 from azure_auth.auth.credentials import CertStoreCredential
+from azure_auth.clouds import COMMERCIAL, US_GOV, US_GOV_DOD
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID, GRAPH_CLI_CLIENT_ID
-from tests.fakes import Call, FakeMsal, Result, error_result, token_result
+from tests.fakes import Call, FakeDiscovery, FakeMsal, Result, error_result, token_result
 
 pytestmark = pytest.mark.unit
 
@@ -594,3 +596,80 @@ async def test_async_view_serves_other_tenants_and_login(fake_msal: FakeMsal) ->
 
     assert token.token.endswith("/customer")
     assert info.token == token.token
+
+
+# ---------------------------------------------------------------------------- clouds
+
+
+def test_the_cloud_is_looked_up_when_the_context_is_created(
+    fake_discovery: FakeDiscovery, fake_msal: FakeMsal
+) -> None:
+    fake_discovery.cloud = US_GOV_DOD
+    auth = user_context()
+
+    assert fake_discovery.tenants == ["partner-tenant"]
+    assert auth.cloud is US_GOV_DOD
+    assert "cloud='USGovDoD'" in repr(auth)
+    auth.acquire_token([ARM_SCOPE])
+    assert fake_msal.apps[0].authority == "https://login.microsoftonline.us/partner-tenant"
+    # Once is enough: token requests do not look again.
+    assert fake_discovery.tenants == ["partner-tenant"]
+
+
+def test_a_given_cloud_is_taken_as_given_without_a_lookup(
+    fake_discovery: FakeDiscovery, fake_msal: FakeMsal
+) -> None:
+    fake_discovery.cloud = US_GOV_DOD
+    auth = user_context(cloud="usgov")
+
+    auth.acquire_token([ARM_SCOPE])
+
+    assert auth.cloud is US_GOV
+    assert user_context(cloud=COMMERCIAL).cloud is COMMERCIAL
+    assert fake_msal.apps[0].authority == "https://login.microsoftonline.us/partner-tenant"
+    assert fake_discovery.tenants == []
+
+
+def test_an_unknown_cloud_name_is_refused(fake_discovery: FakeDiscovery) -> None:
+    with pytest.raises(ValueError, match="Unknown cloud"):
+        user_context(cloud="Germany")
+    assert fake_discovery.tenants == []
+
+
+def test_a_failed_lookup_fails_the_constructor(fake_discovery: FakeDiscovery) -> None:
+    fake_discovery.error = TenantNotFound("no such tenant", tenant="partner-tenant")
+    with pytest.raises(TenantNotFound):
+        user_context()
+
+
+def test_bad_arguments_are_refused_before_any_lookup(fake_discovery: FakeDiscovery) -> None:
+    with pytest.raises(ValueError, match="username is required"):
+        AuthContext("tenant")
+    with pytest.raises(ValueError, match="username is not used"):
+        AuthContext("tenant", client_id="app", client_secret="s3cret", username=USER)
+    assert fake_discovery.tenants == []
+
+
+@pytest.mark.parametrize("tenant", ["common", "organizations", "Consumers"])
+def test_a_multi_tenant_authority_needs_its_cloud_named(
+    fake_discovery: FakeDiscovery, tenant: str
+) -> None:
+    with pytest.raises(ValueError, match="pass cloud="):
+        AuthContext(tenant, username=USER)
+    assert AuthContext(tenant, username=USER, cloud=COMMERCIAL).cloud is COMMERCIAL
+    assert fake_discovery.tenants == []
+
+
+def test_a_sibling_shares_the_cloud_without_a_lookup(
+    fake_discovery: FakeDiscovery, fake_msal: FakeMsal
+) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: token_result(call.app.authority)
+    fake_discovery.cloud = US_GOV
+    auth = user_context()
+
+    token = auth.get_token(ARM_SCOPE, tenant_id="customer")
+
+    assert auth.for_tenant("customer").cloud is US_GOV
+    assert token.token == "https://login.microsoftonline.us/customer"
+    assert fake_discovery.tenants == ["partner-tenant"]

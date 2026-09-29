@@ -17,7 +17,7 @@ import httpx
 from azure_auth._sync.base import ResourceClient, retry_delay
 from azure_auth.auth.context import AuthContext
 from azure_auth.clients.errors import AzureError, ResourceError
-from azure_auth.constants import ARM_RESOURCE, AZURE_POWERSHELL_CLIENT_ID
+from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
 
 _TERMINAL_FAILURES = frozenset({"failed", "canceled", "cancelled"})
 _DEFAULT_POLL_SECONDS = 5.0
@@ -26,7 +26,8 @@ _DEFAULT_POLL_SECONDS = 5.0
 class AzureClient(ResourceClient):
     """Authenticated requests to Azure Resource Manager.
 
-    Every call needs the ``api_version`` of the resource provider being addressed.
+    Every call needs the ``api_version`` of the resource provider being addressed. Requests
+    go to the Resource Manager of the context's cloud.
 
     Example:
         >>> arm = AzureClient(auth)  # doctest: +SKIP
@@ -34,7 +35,6 @@ class AzureClient(ResourceClient):
     """
 
     DEFAULT_CLIENT_ID: ClassVar[str] = AZURE_POWERSHELL_CLIENT_ID
-    RESOURCE: ClassVar[str] = ARM_RESOURCE
     ERROR_CLASS: ClassVar[type[ResourceError]] = AzureError
 
     def __init__(
@@ -53,7 +53,7 @@ class AzureClient(ResourceClient):
         Args:
             auth: The authentication context to get tokens from.
             client_id: Client id for this client; see :class:`ResourceClient`.
-            scopes: Scopes to request. Defaults to ``https://management.azure.com/.default``.
+            scopes: Scopes to request. Defaults to the Resource Manager's ``.default``.
             timeout: Timeout for each HTTP request, in seconds.
             max_retries: How often a throttled request is retried.
             max_retry_wait: Longest wait before one retry, in seconds.
@@ -61,7 +61,8 @@ class AzureClient(ResourceClient):
         """
         super().__init__(
             auth,
-            base_url=ARM_RESOURCE,
+            resource=auth.cloud.arm,
+            base_url=auth.cloud.arm,
             client_id=client_id,
             scopes=scopes,
             timeout=timeout,
