@@ -1,8 +1,9 @@
-"""Revoke an application's consent grants in a tenant.
+"""Revoke an application's consent grants in a tenant, or take them down to allowed scopes.
 
-Shared by ``scripts/revoke_consent.py`` (run by hand) and the consent fixture in
-``tests/live/test_consent.py`` (run as part of a ``destructive_remote`` test), so both take
-exactly the same path through Graph.
+Shared by ``scripts/revoke_consent.py`` (run by hand), the consent fixture in
+``tests/live/test_consent.py`` (run as part of a ``destructive_remote`` test) and
+``restore_baseline`` in ``tests/live/support.py``, so all take exactly the same path through
+Graph.
 
 Consent cannot be tested repeatably without a way to un-consent: once an application has been
 granted its scopes, every later sign-in is silent and the consent code never runs again.
@@ -13,6 +14,7 @@ Nothing here is part of the package's public API.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -256,5 +258,183 @@ async def revoke_grants(
         if not spared(grant):
             result.failed.setdefault(
                 str(grant["id"]), f"still present after {_SETTLE_ROUNDS} rounds: {describe(grant)}"
+            )
+    return result
+
+
+# Scopes Entra puts in a delegated grant by itself, alongside whatever was consented to.
+# They are part of every sign-in and never beyond anyone's baseline.
+OIDC_SCOPES = frozenset({"openid", "profile", "offline_access", "email"})
+
+
+@dataclass
+class StripResult:
+    """What taking an application's grants down to the allowed scopes did.
+
+    Attributes:
+        changed: Ids of the grants that were rewritten, or deleted because nothing was left.
+        removed: The scopes that were taken out, across every grant.
+        failed: Ids that could not be brought down, with the reason.
+        rounds: How many times the grants had to be re-read before two reads in a row found
+            nothing beyond the allowed scopes.
+    """
+
+    changed: list[str] = field(default_factory=list)
+    removed: set[str] = field(default_factory=set)
+    failed: dict[str, str] = field(default_factory=dict)
+    rounds: int = 0
+
+    @property
+    def ok(self) -> bool:
+        """Whether nothing beyond the allowed scopes is left, confirmed by two clean reads."""
+        return not self.failed and self.rounds > 0
+
+
+def grant_scopes(grant: dict[str, Any]) -> set[str]:
+    """Return the scopes a grant carries.
+
+    Args:
+        grant: An ``oauth2PermissionGrant``.
+
+    Returns:
+        Its scopes; Graph stores them space-separated, with stray spaces.
+    """
+    return set(str(grant.get("scope", "")).split())
+
+
+def _beyond(grant: dict[str, Any], allowed: Collection[str]) -> set[str]:
+    """Return the scopes a grant carries beyond ``allowed`` and the OpenID Connect ones."""
+    return grant_scopes(grant) - set(allowed) - OIDC_SCOPES
+
+
+async def application_grants(
+    graph: GraphClient, *, client_id: str = GRAPH_CLI_CLIENT_ID
+) -> list[dict[str, Any]]:
+    """Return an application's consent grants, read twice to see past a lagging replica.
+
+    One read can miss a grant created moments earlier (see ``_SETTLE_ROUNDS``), which is
+    exactly what a consent screen accepted during a test creates. So the grants are read
+    twice, with a pause, and every grant either read saw is returned, as the later read has it.
+
+    Args:
+        graph: A Graph client whose identity may read grants.
+        client_id: The application.
+
+    Returns:
+        The grants; empty when the application has no service principal here.
+    """
+    try:
+        principal = await service_principal(graph, client_id)
+    except ResourceError as error:
+        if error.status == 404:
+            return []
+        raise
+    principal_id = str(principal["id"])
+    first = await find_grants(graph, principal_id)
+    await asyncio.sleep(_SETTLE_BACKOFF_SECONDS)
+    second = await find_grants(graph, principal_id)
+    return list({str(grant["id"]): grant for grant in [*first, *second]}.values())
+
+
+async def _rewrite_grant(graph: GraphClient, grant_id: str, scopes: set[str]) -> str | None:
+    """Give one grant exactly these scopes, deleting it when there are none, despite lag.
+
+    The write can be refused for a grant a read returned moments earlier (see
+    ``_DELETE_ATTEMPTS``), so the grant is read back rather than the refusal believed.
+
+    Args:
+        graph: The Graph client to use.
+        grant_id: Id of the grant.
+        scopes: The scopes it should carry.
+
+    Returns:
+        ``None`` once the grant reads back as wanted, or the last error message.
+    """
+    if not scopes - OIDC_SCOPES:
+        return await _delete_grant(graph, grant_id)
+    last = ""
+    for attempt in range(_DELETE_ATTEMPTS):
+        try:
+            await graph.patch(
+                f"/oauth2PermissionGrants/{grant_id}", {"scope": " ".join(sorted(scopes))}
+            )
+        except ResourceError as error:
+            last = str(error)
+        try:
+            if grant_scopes(await graph.get(f"/oauth2PermissionGrants/{grant_id}")) == scopes:
+                return None
+        except ResourceError as error:
+            last = str(error)
+        if attempt < _DELETE_ATTEMPTS - 1:
+            await asyncio.sleep(_DELETE_BACKOFF_SECONDS)
+    return last or "the grant did not read back as written"
+
+
+async def strip_grants(
+    graph: GraphClient, allowed: Collection[str], *, client_id: str = GRAPH_CLI_CLIENT_ID
+) -> StripResult:
+    """Take every scope beyond ``allowed`` out of every grant of an application.
+
+    Each grant keeps the allowed scopes it has, so nothing that is allowed is lost and nobody
+    is asked to consent again; a grant left with nothing is deleted. Grants are re-read until
+    two reads in a row find nothing to take out, for the same reason as in
+    :func:`revoke_grants`: one clean read is what a lagging replica returns.
+
+    Known gap, deliberately not handled for now: every grant of the application is treated
+    as a grant for Microsoft Graph, whichever API it is for. A grant letting the same
+    application call some other API would have all its scopes taken out, since ``allowed``
+    only names Graph scopes. Filtering on the grant's ``resourceId`` would close the gap.
+
+    Args:
+        graph: A Graph client whose identity holds ``DelegatedPermissionGrant.ReadWrite.All``.
+        allowed: The scopes that may stay. The OpenID Connect scopes always may.
+        client_id: The application.
+
+    Returns:
+        What was changed, which scopes were taken out, and what failed.
+    """
+    result = StripResult()
+    try:
+        principal = await service_principal(graph, client_id)
+    except ResourceError as error:
+        if error.status == 404:
+            result.rounds = 1
+            return result
+        raise
+    principal_id = str(principal["id"])
+
+    clean_reads = 0
+    for attempt in range(_SETTLE_ROUNDS):
+        excessive = [
+            grant for grant in await find_grants(graph, principal_id) if _beyond(grant, allowed)
+        ]
+        if not excessive:
+            clean_reads += 1
+            if clean_reads >= 2:
+                result.rounds = attempt + 1
+                return result
+            await asyncio.sleep(_SETTLE_BACKOFF_SECONDS)
+            continue
+        clean_reads = 0
+
+        for grant in excessive:
+            grant_id = str(grant["id"])
+            extra = _beyond(grant, allowed)
+            failure = await _rewrite_grant(graph, grant_id, grant_scopes(grant) - extra)
+            if failure is None:
+                result.changed.append(grant_id)
+                result.removed |= extra
+                result.failed.pop(grant_id, None)
+            else:
+                result.failed[grant_id] = failure
+
+        if attempt < _SETTLE_ROUNDS - 1:
+            await asyncio.sleep(_SETTLE_BACKOFF_SECONDS)
+
+    result.rounds = _SETTLE_ROUNDS
+    for grant in await find_grants(graph, principal_id):
+        if _beyond(grant, allowed):
+            result.failed.setdefault(
+                str(grant["id"]), f"still beyond after {_SETTLE_ROUNDS} rounds: {describe(grant)}"
             )
     return result

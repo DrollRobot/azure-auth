@@ -65,6 +65,8 @@ class FakeGraph:
         delete_failures: Grant id to the number of times deleting it raises before working.
         vanishing: Grant ids whose delete raises but removes the grant anyway, which is what
             a lagging delete looks like from the caller's side.
+        patch_failures: Grant id to the number of times rewriting it raises.
+        patch_lands_anyway: Grant ids whose failing rewrite is applied regardless.
     """
 
     def __init__(self, *grants: dict[str, Any], principal_missing: bool = False) -> None:
@@ -84,6 +86,9 @@ class FakeGraph:
         self.reads = 0
         self.filtered_reads = 0
         self.delete_attempts: list[str] = []
+        self.patch_failures: dict[str, int] = {}
+        self.patch_lands_anyway: set[str] = set()
+        self.patches: list[tuple[str, str]] = []
 
     async def get(self, path: str, *, params: Any = None, headers: Any = None) -> Any:
         """Read a service principal or a single grant."""
@@ -122,6 +127,24 @@ class FakeGraph:
             )
         self.store.pop(grant_id, None)
         self.deleted.append(grant_id)
+
+    async def patch(self, path: str, json: Any = None, **kwargs: Any) -> None:
+        """Rewrite a grant's scopes, failing as scripted."""
+        grant_id = path.rsplit("/", 1)[-1]
+        self.patches.append((grant_id, json["scope"]))
+        remaining = self.patch_failures.get(grant_id, 0)
+        if remaining:
+            self.patch_failures[grant_id] = remaining - 1
+            if grant_id in self.patch_lands_anyway and grant_id in self.store:
+                self.store[grant_id] = {**self.store[grant_id], "scope": json["scope"]}
+            raise ResourceError(
+                "Permission being updated or deleted is not found.",
+                status=400,
+                code="Request_BadRequest",
+            )
+        if grant_id not in self.store:
+            raise ResourceError("not found", status=404, code="Request_ResourceNotFound")
+        self.store[grant_id] = {**self.store[grant_id], "scope": json["scope"]}
 
 
 @pytest.fixture(autouse=True)
@@ -291,3 +314,117 @@ def test_describe_names_who_a_grant_covers_and_what_it_carries() -> None:
 
 def test_describe_handles_a_grant_with_no_scopes() -> None:
     assert "(no scopes)" in consent_reset.describe(grant("a", scope=""))
+
+
+# ---------------------------------------------------------------------------- down to a baseline
+
+BASELINE = ["User.Read", "Application.Read.All"]
+
+
+async def strip(graph: FakeGraph) -> consent_reset.StripResult:
+    """Take a fake tenant's grants down to ``BASELINE``."""
+    return await consent_reset.strip_grants(graph, BASELINE)  # type: ignore[arg-type]
+
+
+def scopes_of(graph: FakeGraph, grant_id: str) -> set[str]:
+    """Return the scopes a grant in the fake tenant now carries."""
+    return consent_reset.grant_scopes(graph.store[grant_id])
+
+
+async def test_everything_beyond_the_baseline_is_taken_out_and_the_baseline_kept() -> None:
+    graph = FakeGraph(
+        grant("wide", scope=" User.Read Domain.Read.All Application.Read.All openid profile ")
+    )
+
+    result = await strip(graph)
+
+    assert result.ok
+    assert scopes_of(graph, "wide") == {"User.Read", "Application.Read.All", "openid", "profile"}
+    assert result.removed == {"Domain.Read.All"}
+    assert result.changed == ["wide"]
+
+
+async def test_a_grant_with_nothing_allowed_left_is_deleted() -> None:
+    # A consent screen accepted by mistake can create a grant of its own; nothing in it stays.
+    graph = FakeGraph(
+        grant("wide", scope="User.Read"),
+        grant("stray", principal=ADMIN, scope="openid Mail.ReadWrite"),
+    )
+
+    result = await strip(graph)
+
+    assert result.ok
+    assert "stray" not in graph.store
+    assert scopes_of(graph, "wide") == {"User.Read"}
+    assert result.removed == {"Mail.ReadWrite"}
+
+
+async def test_a_tenant_at_the_baseline_is_left_alone() -> None:
+    graph = FakeGraph(grant("wide", scope="User.Read Application.Read.All offline_access"))
+
+    result = await strip(graph)
+
+    assert result.ok
+    assert result.changed == []
+    assert graph.patches == []
+    assert graph.reads >= 2
+
+
+async def test_a_tenant_without_the_application_has_nothing_to_take_out() -> None:
+    result = await strip(FakeGraph(principal_missing=True))
+    assert result.ok
+
+
+async def test_a_grant_a_lagging_read_hid_is_still_taken_down() -> None:
+    # Two hidden reads: find_grants re-checks an empty filtered read against the full list.
+    graph = FakeGraph(grant("late", scope="User.Read Domain.Read.All"))
+    graph.hidden_reads = 2
+
+    result = await strip(graph)
+
+    assert result.ok
+    assert scopes_of(graph, "late") == {"User.Read"}
+    assert result.rounds >= 3
+
+
+async def test_a_rewrite_that_is_refused_but_landed_counts_as_done() -> None:
+    graph = FakeGraph(grant("wide", scope="User.Read X"))
+    graph.patch_failures["wide"] = 1
+    graph.patch_lands_anyway.add("wide")
+
+    result = await strip(graph)
+
+    assert result.ok
+    assert scopes_of(graph, "wide") == {"User.Read"}
+    assert len(graph.patches) == 1
+
+
+async def test_a_refused_rewrite_is_retried() -> None:
+    graph = FakeGraph(grant("wide", scope="User.Read X"))
+    graph.patch_failures["wide"] = 2
+
+    result = await strip(graph)
+
+    assert result.ok
+    assert scopes_of(graph, "wide") == {"User.Read"}
+    assert len(graph.patches) == 3
+
+
+async def test_a_grant_that_will_not_change_is_reported() -> None:
+    graph = FakeGraph(grant("stuck", scope="User.Read X"))
+    graph.patch_failures["stuck"] = 99
+
+    result = await strip(graph)
+
+    assert not result.ok
+    assert "stuck" in result.failed
+
+
+async def test_reading_the_grants_sees_past_a_lagging_first_read() -> None:
+    graph = FakeGraph(grant("late", scope="User.Read"))
+    graph.hidden_reads = 2  # the whole first find_grants: filtered and full list alike
+
+    grants = await consent_reset.application_grants(graph)  # type: ignore[arg-type]
+
+    assert [item["id"] for item in grants] == ["late"]
+    assert await consent_reset.application_grants(FakeGraph(principal_missing=True)) == []  # type: ignore[arg-type]

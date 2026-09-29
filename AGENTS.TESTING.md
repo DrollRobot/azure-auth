@@ -59,9 +59,12 @@ blocks and then times out.
 
 `interactive` means the test *will* prompt, for whatever reason: a consent screen, a
 second user signing in, a forced sign-in. A step that only *might* prompt is not marked.
-The one such step is the `consent_baseline` fixture in `tests/live/conftest.py`: it has
-to run for every live run, so marking it would make it optional. It is silent when the
-tenant already holds the tests' baseline consent, and prompts once when it does not.
+The one such step is restoring the consent baseline (`restore_baseline` in
+`tests/live/support.py`). It runs at the start of every live run and after every
+`interactive` or `destructive_remote` test, so marking it would make it optional. It brings
+the tenant to exactly the tests' baseline consent: silent when the tenant is already there,
+one prompt when a baseline scope is missing, and no prompt to take out scopes beyond it --
+which it does only to a tenant marked disposable, failing the run on any other.
 
 Agents should run them only when the user has said they are present, and should
 say a prompt is coming before starting one. Everything else can be run freely

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import collections
-import os
 from pathlib import Path
 from typing import Any
 
@@ -25,12 +24,10 @@ from tests.live.support import (
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
 
-# A delegated scope nobody in the tenant has granted the Graph command-line application. The
+# A delegated scope the baseline does not grant the Graph command-line application. The
 # .default test asserts it is missing from a .default token and cannot be had without a
-# prompt. It must not be anything the live tests ask for (BASELINE_SCOPES, NONADMIN_SCOPE), or
-# the suite would grant it and the test would fail. A tenant where it has been granted anyway
-# needs another one named here.
-UNGRANTED_SCOPE = os.environ.get("AZURE_AUTH_TEST_UNGRANTED_SCOPE", "Mail.ReadWrite")
+# prompt. Being outside BASELINE_SCOPES is enough: every test starts from exactly the baseline.
+UNGRANTED_SCOPE = "Mail.ReadWrite"
 
 # How many audit log requests go out at once, how many the test sends before giving up, and
 # how many times a refused one is retried.
@@ -165,25 +162,31 @@ async def test_default_scope_carries_only_what_the_tenant_already_granted(
     it is not a way to ask for new ones. That is the reason ``scopes=`` exists, and until
     this ran the evidence for it was only Microsoft's documentation.
 
-    Two things show it. The ``.default`` token lacks a scope nobody granted. And asking for
-    that scope by name cannot be done silently: it needs a consent prompt, which a context
-    that may not prompt refuses with an error instead of opening.
+    Two things show it, with ``UNGRANTED_SCOPE``, which the baseline leaves out. The
+    ``.default`` token lacks it. And asking for it by name cannot be done silently: it needs a
+    consent prompt, which a context that may not prompt refuses with an error instead of
+    opening.
+
+    Both requests go to Entra (``force_refresh``): a cached access token would answer for
+    whatever was granted when it was issued, not for what is granted now.
     """
     async with GraphClient(user_auth) as graph:
         require_cached_sign_in(graph)
-        token = await user_auth.aio.acquire_token(graph.scopes, client_id=graph.client_id)
+        token = await user_auth.aio.acquire_token(
+            graph.scopes, client_id=graph.client_id, force_refresh=True
+        )
     granted = token_scopes(token.token)
     print(f".default token scopes: {' '.join(sorted(granted))}")
 
     assert granted, "the .default token carries no delegated scopes at all"
-    assert UNGRANTED_SCOPE not in granted, (
-        f"{UNGRANTED_SCOPE} is granted in this tenant; set AZURE_AUTH_TEST_UNGRANTED_SCOPE to a"
-        " scope that is not"
-    )
+    assert UNGRANTED_SCOPE not in granted
 
-    async with GraphClient(cached_user_auth(cache_path), scopes=[UNGRANTED_SCOPE]) as graph:
+    ungranted = cached_user_auth(cache_path)
+    async with GraphClient(ungranted, scopes=[UNGRANTED_SCOPE]) as graph:
         with pytest.raises((ConsentRequired, InteractionRequired)):
-            await graph.get("/me", params={"$select": "id"})
+            await ungranted.aio.acquire_token(
+                graph.scopes, client_id=graph.client_id, force_refresh=True
+            )
 
 
 @needs_user

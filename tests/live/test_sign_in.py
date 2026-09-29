@@ -34,14 +34,10 @@ from tests.live.support import (
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
 
-# What the cancel test asks for. It must need admin consent and must not be granted in the
-# tenant, so that the administrator's sign-in stops at a consent screen, which is the one
-# page with a Cancel button. So it must not be in BASELINE_SCOPES (already granted: no
-# screen), nor UNGRANTED_SCOPE (an Accept by mistake would break the .default test), nor
-# NONADMIN_SCOPE. Admin consent rather than user consent on purpose: an Accept by mistake then
-# creates a tenant-wide grant, which the consent test's revoke removes and the baseline does
-# not put back, so the mistake heals itself. A per-user grant for the administrator would be
-# spared by that revoke for ever.
+# What the cancel and timeout tests ask for. It must not be granted, so that the
+# administrator's sign-in stops at a consent screen, the one page with a Cancel button. Being
+# outside BASELINE_SCOPES is enough: every test starts from exactly the baseline, and an
+# Accept by mistake is taken back out by restore_baseline after the test.
 CANCEL_SCOPE = "Domain.Read.All"
 
 
@@ -58,11 +54,8 @@ async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
     auth = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
     async with GraphClient(auth, scopes=BASELINE_SCOPES) as graph:
         with walkthrough_if_waiting(
-            f"Sign-in prompt for {USERNAME}, asking for {', '.join(BASELINE_SCOPES)}. Sign"
-            " in, and accept the consent screen if one appears.",
-            f"The browser may still be signed in as the non-administrator from the consent"
-            f" test. If it offers that account, choose 'Use another account' and sign in as"
-            f" {USERNAME}; signing in as the wrong one fails this test.",
+            f"Sign in as {USERNAME}. Other account offered: click 'Use another account'.",
+            "Consent screen, if shown: click Accept.",
         ):
             await graph.login(force=True)
         me = await graph.get("/me", params={"$select": "userPrincipalName"})
@@ -104,8 +97,8 @@ async def test_interactive_login_to_another_first_party_client(
     auth = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
     async with make_client(auth) as client:
         with walkthrough_if_waiting(
-            f"Sign-in prompt for {USERNAME} against the {application} client id, a different"
-            " application from the Graph one. Sign in and accept.",
+            f"Sign in as {USERNAME} ({application}).",
+            "Consent screen, if shown: click Accept.",
         ):
             await client.login(force=True)
 
@@ -122,7 +115,7 @@ async def test_a_cancelled_sign_in_is_reported_and_not_retried() -> None:
     """Cancelling the browser sign-in raises an error that says so, and opens nothing else.
 
     The one page in the sign-in with a Cancel button is Entra's consent screen, so this asks
-    for a scope the tenant has not granted (``CANCEL_SCOPE``) to make that screen appear.
+    for a scope the baseline does not grant (``CANCEL_SCOPE``) to make that screen appear.
 
     What Entra actually answers, measured 2026-09-25: ``consent_required`` with
     ``AADSTS65004: User declined to consent to access the app``. That is *not* the bare
@@ -138,11 +131,8 @@ async def test_a_cancelled_sign_in_is_reported_and_not_retried() -> None:
     tests share.
     """
     walkthrough(
-        f"Sign-in as {USERNAME}. The browser is probably still signed in, so this step may"
-        " pass by itself; if it asks, pick or type the admin.",
-        f"A consent screen listing {CANCEL_SCOPE}. Click CANCEL. Do NOT click Accept: that"
-        f" grants {CANCEL_SCOPE} tenant-wide, and this test fails until the consent test's"
-        " revoke, or scripts/revoke_consent.py, removes it again.",
+        f"Sign in as {USERNAME}, if asked.",
+        f"Consent screen ({CANCEL_SCOPE}): click CANCEL.",
     )
     auth = AuthContext(TENANT, username=USERNAME)
     async with GraphClient(auth, scopes=[CANCEL_SCOPE]) as graph:
@@ -152,8 +142,8 @@ async def test_a_cancelled_sign_in_is_reported_and_not_retried() -> None:
             caught = error
         else:
             pytest.fail(
-                f"the sign-in succeeded, so nothing was cancelled: either Accept was clicked,"
-                f" or {CANCEL_SCOPE} is already granted in this tenant. Revoke it and run again."
+                f"the sign-in succeeded, so nothing was cancelled: the baseline does not grant"
+                f" {CANCEL_SCOPE}, so Accept must have been clicked"
             )
 
     message = str(caught)
@@ -185,24 +175,24 @@ async def test_an_unanswered_sign_in_times_out() -> None:
     that never arrives. Nobody needs to close anything here -- leaving the page alone has the
     same effect, and is easier to get right.
 
-    The sign-in asks for ``CANCEL_SCOPE`` so that it stops at a consent screen rather than
-    completing silently from the browser session. Nothing is granted, because nobody clicks.
+    The sign-in asks for ``CANCEL_SCOPE``, which the baseline does not grant, so that it stops
+    at a consent screen rather than completing silently from the browser session. Nothing is
+    granted, because nobody clicks.
     Marked ``interactive`` because it opens a browser tab on the desktop and leaves it there,
     not because anyone has to act.
     """
-    print(
-        f"\n  A consent screen for {CANCEL_SCOPE} will open and be abandoned after"
-        f" {TIMEOUT_SECONDS}s. Do NOT click anything on it. Close the tab afterwards.",
-        flush=True,
+    walkthrough(
+        f"Consent screen ({CANCEL_SCOPE}): click NOTHING.",
+        f"After {TIMEOUT_SECONDS}s: close the tab.",
     )
     auth = AuthContext(TENANT, username=USERNAME, interactive_timeout=TIMEOUT_SECONDS)
-    started = time.monotonic()
     async with GraphClient(auth, scopes=[CANCEL_SCOPE]) as graph:
+        started = time.monotonic()
         with pytest.raises(
             AuthError, match=f"not completed within {TIMEOUT_SECONDS} seconds"
         ) as caught:
             await graph.login(force=True)
-    elapsed = time.monotonic() - started
+        elapsed = time.monotonic() - started
 
     assert not isinstance(caught.value, (ConsentRequired, InteractionRequired))
     # It waited the timeout, and not much more: the limit is real and not a fluke.

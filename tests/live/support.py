@@ -15,8 +15,9 @@ Environment variables:
 * ``AZURE_AUTH_TEST_GDAP=1``: the user's home tenant manages other tenants through GDAP.
 * ``AZURE_AUTH_TEST_EXCHANGE=1`` / ``AZURE_AUTH_TEST_IPPS=1``: the user may run Exchange /
   Security & Compliance cmdlets.
-* ``AZURE_AUTH_TEST_UNGRANTED_SCOPE``: a delegated Graph scope the tenant has never granted
-  the Graph command-line application. Defaults to ``Mail.ReadWrite``.
+* ``AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS``: how long :func:`restore_baseline` waits for
+  Entra to catch up with a grant change: a new grant to show up, or a removed scope to stop
+  being issued (default 300).
 * ``AZURE_AUTH_TEST_LONG_REFRESH=1``: run the test that waits out a real access token
   lifetime, about an hour.
 * ``AZURE_AUTH_TEST_PROMPT_ALARM_SECONDS``: how long a sign-in may take before the alarm
@@ -27,36 +28,46 @@ No secret is read from the environment; app flows use the certificate store.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import concurrent.futures
 import contextlib
 import functools
 import json
 import os
 import threading
-from collections.abc import Iterable, Iterator
+import time
+from collections.abc import Callable, Coroutine, Iterable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import pytest
 
-from azure_auth import AuthContext, Cloud, ConsentRequired, InteractionRequired, discover_tenant
+from azure_auth import (
+    AuthContext,
+    Cloud,
+    ConsentRequired,
+    GraphClient,
+    InteractionRequired,
+    discover_tenant,
+)
 from azure_auth.clients import ResourceClient
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from azure_auth.sync import ResourceClient as BlockingResourceClient
-from tests import alert_user
+from tests import alert_user, consent_reset
 
 # The GDAP test's scopes, on the home tenant and on each managed tenant.
 GDAP_SCOPES = ["DelegatedAdminRelationship.Read.All", "Organization.Read.All"]
 
-# The consent baseline: every Graph scope a live test needs, granted to the Graph
-# command-line application in the tenant. It is a floor, not an exact state. A tenant at
-# baseline holds at least these; grants beyond them are fine and left alone.
-# `ensure_consent_baseline` brings the tenant here before the first test that uses the shared
-# sign-in, and again after any test that revokes consent.
+# The consent baseline: exactly the Graph scopes the Graph command-line application is
+# granted in the tenant while the live tests run, no more and no fewer. restore_baseline()
+# puts the tenant there at the start of every live run and after every test that can change
+# consent, so every test starts from it and none has to arrange anything.
 #
-# A live test that needs a new Graph scope adds it here, or it only ever skips. Two scopes
-# must never appear here: NONADMIN_SCOPE in test_consent.py, which the non-administrator has
-# to be refused, and UNGRANTED_SCOPE in test_graph_client.py, which has to stay ungranted.
+# A live test that needs a new Graph scope adds it here, or it only ever skips. A scope a test
+# needs *not* granted must never appear here, and needs nothing else: the baseline leaves it
+# out. Those are NONADMIN_SCOPE (test_consent.py), CANCEL_SCOPE (test_sign_in.py) and
+# UNGRANTED_SCOPE (test_graph_client.py).
 BASELINE_SCOPES = [
     "User.Read",
     "Application.Read.All",
@@ -67,6 +78,18 @@ BASELINE_SCOPES = [
     "DelegatedPermissionGrant.ReadWrite.All",
     *(GDAP_SCOPES if os.environ.get("AZURE_AUTH_TEST_GDAP") == "1" else []),
 ]
+
+# What reading and rewriting the application's grants needs. Both are in BASELINE_SCOPES, so a
+# sign-in for them is silent.
+GRANT_ADMIN_SCOPES = ["DelegatedPermissionGrant.ReadWrite.All", "Application.Read.All"]
+
+# How long restore_baseline() waits for Entra to catch up with a grant change -- a grant just
+# consented to showing up in the grant list, a scope just taken out no longer being issued --
+# and how often it looks. Override the first with AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS.
+PROPAGATION_TIMEOUT_SECONDS = float(
+    os.environ.get("AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS", "300")
+)
+PROPAGATION_POLL_SECONDS = 10.0
 
 # How long a forced sign-in may take before the person at the desktop is called. A browser
 # that is still signed in answers it by itself well inside this; a sign-in page waiting for
@@ -184,7 +207,7 @@ def walkthrough(*steps: str) -> None:
         *steps: What will appear, in order, and what to click.
     """
     line = "=" * 78
-    print(f"\n{line}\n  WHAT YOU WILL SEE, IN ORDER -- this test waits for you:\n")
+    print(f"\n{line}\n  DO THIS, IN ORDER:\n")
     for number, step in enumerate(steps, 1):
         print(f"    {number}. {step}")
     print(f"\n{line}\n", flush=True)
@@ -278,13 +301,12 @@ def missing_scopes(token: str, required: Iterable[str]) -> set[str]:
 
     Returns:
         The required scopes absent from the token's ``scp`` claim; empty when all are there.
-        Scopes the token carries beyond ``required`` are not reported: the baseline is a floor.
     """
     return set(required) - token_scopes(token)
 
 
-def ensure_consent_baseline(cache_path: Path, *, force: bool) -> None:
-    """Bring the tenant to the consent baseline: at least ``BASELINE_SCOPES``, granted.
+def _consent_to_baseline(cache_path: Path, *, force: bool) -> None:
+    """Make sure every baseline scope is granted: the adding half of :func:`restore_baseline`.
 
     Only a human accepting Entra's consent screen grants consent, so this signs the
     administrator in asking for every baseline scope. Entra shows the screen for whatever is
@@ -301,8 +323,8 @@ def ensure_consent_baseline(cache_path: Path, *, force: bool) -> None:
     The token that comes back is then checked for every baseline scope, so a declined or
     partly accepted consent screen fails here and not three tests later.
 
-    Blocking, so a session-scoped fixture can call it. Prompts through
-    :func:`walkthrough_if_waiting`, so the person is only called when there is something to do.
+    Prompts through :func:`walkthrough_if_waiting`, so the person is only called when there is
+    something to do.
 
     Args:
         cache_path: The shared disk cache; the token lands there for the tests to use.
@@ -311,11 +333,8 @@ def ensure_consent_baseline(cache_path: Path, *, force: bool) -> None:
     admin = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
     scopes = graph_scopes(BASELINE_SCOPES)
     with walkthrough_if_waiting(
-        f"Sign-in prompt for the ADMIN, {USERNAME}, asking for {', '.join(BASELINE_SCOPES)}."
-        " If the browser offers another account, choose 'Use another account'; signing in as"
-        " anyone else fails here.",
-        "A consent screen listing those scopes. Tick 'Consent on behalf of your organization'"
-        " if offered, then Accept. This grants the tests' baseline.",
+        f"Sign in as {USERNAME}. Other account offered: click 'Use another account'.",
+        "Consent screen: tick 'Consent on behalf of your organization'. Click Accept.",
     ):
         if force:
             admin.login(client_id=GRAPH_CLI_CLIENT_ID, scopes=scopes, force=True)
@@ -326,4 +345,166 @@ def ensure_consent_baseline(cache_path: Path, *, force: bool) -> None:
             f"the tenant is not at the consent baseline: {USERNAME} signed in, but the token"
             f" lacks {' '.join(sorted(missing))}. Was the consent screen declined?"
         )
-    print(f"consent baseline: {USERNAME} holds {' '.join(sorted(BASELINE_SCOPES))}")
+
+
+_T = TypeVar("_T")
+
+
+def _run(coroutine: Coroutine[Any, Any, _T]) -> _T:
+    """Run a coroutine to completion from blocking code, whatever thread that is.
+
+    The baseline is restored from fixtures, some of which run while an asynchronous test's
+    event loop exists, so the coroutine gets a thread and a loop of its own.
+
+    Args:
+        coroutine: The coroutine.
+
+    Returns:
+        Its result.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coroutine).result()
+
+
+async def _grants_now(cache_path: Path) -> list[dict[str, Any]]:
+    """Read the Graph application's consent grants as the administrator."""
+    async with GraphClient(cached_user_auth(cache_path), scopes=GRANT_ADMIN_SCOPES) as graph:
+        return await consent_reset.application_grants(graph)
+
+
+async def _strip(cache_path: Path) -> consent_reset.StripResult:
+    """Take every scope beyond the baseline out of the Graph application's grants."""
+    async with GraphClient(cached_user_auth(cache_path), scopes=GRANT_ADMIN_SCOPES) as graph:
+        return await consent_reset.strip_grants(graph, BASELINE_SCOPES)
+
+
+async def _wait_until_refused(auth: AuthContext, scope: str) -> float:
+    """Wait until Entra refuses to issue ``scope`` silently.
+
+    Taking a scope out of a grant is not the end of it. A grant is read from one path and a
+    token issued from another, which catches up separately: measured 2026-09-20, a deleted
+    grant still let a user sign in silently seconds later. So Entra itself is asked, with a
+    refresh (``force_refresh``: a cached access token would answer without asking), until it
+    says no.
+
+    Args:
+        auth: A context that may not prompt, signed in to the Graph application.
+        scope: The scope, short form.
+
+    Returns:
+        How many seconds it took.
+    """
+    started = time.monotonic()
+    full = f"{auth.cloud.graph}/{scope}"
+    while True:
+        try:
+            await auth.aio.acquire_token([full], client_id=GRAPH_CLI_CLIENT_ID, force_refresh=True)
+        except (ConsentRequired, InteractionRequired):
+            return time.monotonic() - started
+        waited = time.monotonic() - started
+        if waited > PROPAGATION_TIMEOUT_SECONDS:
+            pytest.fail(
+                f"Entra still issues {scope} {waited:.0f}s after it was taken out of every"
+                " grant; raise AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS if it is just slow"
+            )
+        await asyncio.sleep(PROPAGATION_POLL_SECONDS)
+
+
+def _holds_baseline(grants: list[dict[str, Any]]) -> bool:
+    """Whether a tenant-wide grant carries every baseline scope."""
+    return any(
+        grant.get("consentType") == "AllPrincipals"
+        and set(BASELINE_SCOPES) <= consent_reset.grant_scopes(grant)
+        for grant in grants
+    )
+
+
+def _wait_for_baseline_grant(cache_path: Path) -> list[dict[str, Any]] | None:
+    """Read the grants until a tenant-wide one carries the baseline, or time runs out.
+
+    The grant list lags behind consent: measured 2026-09-29, a consent screen accepted for the
+    organization was followed by two empty reads, three seconds apart, while the grant was
+    live; later reads in the same run found it. So a missing grant is re-read before it is
+    believed.
+
+    Args:
+        cache_path: The shared disk cache, holding the administrator's sign-in.
+
+    Returns:
+        The grants once the baseline is among them, or ``None`` if it never showed up.
+    """
+    started = time.monotonic()
+    while True:
+        grants = _run(_grants_now(cache_path))
+        waited = time.monotonic() - started
+        if _holds_baseline(grants):
+            if waited >= PROPAGATION_POLL_SECONDS:
+                print(f"  the baseline grant showed up in the grant list after {waited:.0f}s")
+            return grants
+        if waited > PROPAGATION_TIMEOUT_SECONDS:
+            return None
+        time.sleep(PROPAGATION_POLL_SECONDS)
+
+
+def restore_baseline(cache_path: Path, *, may_remove: Callable[[], bool]) -> None:
+    """Bring the tenant to exactly the consent baseline, whatever state it is in.
+
+    What the tenant holds is read, never assumed, and fixed in both directions:
+
+    1. Missing: the administrator signs in for every baseline scope. That is silent when they
+       are granted, and a consent screen when not; accepting it is the grant, and only a
+       person can do that. The token alone is not trusted to say they are granted, because a
+       deleted grant keeps issuing tokens for a while, so the tenant-wide grant is read as
+       well, re-read until it catches up (the list lags behind a consent just given), and the
+       consent screen is forced when it still lacks any of them.
+    2. Beyond: every other scope is taken out of every grant of the application, each grant
+       keeping its baseline scopes, so nobody is asked to consent again. Then this waits
+       until Entra refuses to issue each scope it took out, so the next test cannot be handed
+       one the grant no longer carries.
+
+    Taking grants away changes the tenant, so step 2 runs only when ``may_remove`` says the
+    tenant is marked disposable. Otherwise the run fails, naming what is beyond the baseline.
+    Blocking, so fixtures of any scope can call it.
+
+    Args:
+        cache_path: The shared disk cache, holding the administrator's sign-in.
+        may_remove: Whether scopes may be taken out of this tenant's grants. Only called when
+            there is something to take out.
+    """
+    _consent_to_baseline(cache_path, force=False)
+    found = _wait_for_baseline_grant(cache_path)
+    if found is None:
+        print("  no tenant-wide grant carries the baseline; asking for consent")
+        _consent_to_baseline(cache_path, force=True)
+        found = _wait_for_baseline_grant(cache_path)
+        if found is None:
+            pytest.fail(
+                "no tenant-wide grant carries every baseline scope, even"
+                f" {PROPAGATION_TIMEOUT_SECONDS:.0f}s after a sign-in for them that Entra"
+                " accepted; raise AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS if it is just slow"
+            )
+    grants = found
+
+    beyond = sorted(
+        {
+            scope
+            for grant in grants
+            for scope in consent_reset.grant_scopes(grant)
+            - set(BASELINE_SCOPES)
+            - consent_reset.OIDC_SCOPES
+        }
+    )
+    if beyond:
+        if not may_remove():
+            pytest.fail(
+                f"the tenant grants {' '.join(beyond)} beyond the baseline, and it is not marked"
+                " disposable (tests/verify_remote_disposable.py), so they were left alone"
+            )
+        stripped = _run(_strip(cache_path))
+        if not stripped.ok:
+            pytest.fail(f"could not take the tenant down to the baseline: {stripped.failed}")
+        auth = cached_user_auth(cache_path)
+        for scope in sorted(stripped.removed):
+            waited = _run(_wait_until_refused(auth, scope))
+            print(f"  took {scope} out of the grants; Entra refused it after {waited:.0f}s")
+    print(f"consent baseline: exactly {' '.join(sorted(BASELINE_SCOPES))}")

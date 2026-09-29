@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ from tests.live.support import (
     NONADMIN,
     TENANT,
     USERNAME,
-    ensure_consent_baseline,
     needs_nonadmin,
     needs_user,
     walkthrough,
@@ -50,8 +48,8 @@ NONADMIN_SCOPE = "User.ReadWrite.All"
 
 
 @pytest.fixture
-async def consent_revoked(cache_path: Path) -> AsyncIterator[str]:
-    """Revoke the application's consent for the test, and restore the baseline afterwards.
+async def consent_revoked(cache_path: Path) -> str:
+    """Revoke the application's consent for the test.
 
     The consent test can only mean anything on a tenant where the application has *not* been
     consented: otherwise the non-administrator signs in silently and the test passes without
@@ -63,64 +61,48 @@ async def consent_revoked(cache_path: Path) -> AsyncIterator[str]:
     non-administrator through. The administrator's own grant is spared; revoking it would
     exercise nothing.
 
-    On the way out, pass or fail, :func:`ensure_consent_baseline` puts the grants back: the
-    administrator signs in again and accepts the consent screen. Whatever happened here, the
-    next test starts at baseline.
+    Putting the grants back is not this fixture's job: the test is ``destructive_remote``, so
+    ``restore_baseline`` runs after it, pass or fail, and finds the grant gone. The
+    administrator signs in again and accepts the consent screen.
 
-    Yields:
+    Returns:
         The signed-in administrator's object id, for the test to report on.
     """
     admin = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
-    try:
-        async with GraphClient(admin, scopes=REVOKE_SCOPES) as graph:
-            me = await graph.get("/me", params={"$select": "id"})
-            principal = await consent_reset.service_principal(
-                graph, consent_reset.GRAPH_CLI_CLIENT_ID
-            )
-            before = await consent_reset.find_grants(graph, str(principal["id"]))
-            for grant in before:
-                print(f"  before revoking: {consent_reset.describe(grant)}")
-            result = await consent_reset.revoke_grants(graph, keep_principal_id=str(me["id"]))
+    async with GraphClient(admin, scopes=REVOKE_SCOPES) as graph:
+        me = await graph.get("/me", params={"$select": "id"})
+        principal = await consent_reset.service_principal(graph, consent_reset.GRAPH_CLI_CLIENT_ID)
+        before = await consent_reset.find_grants(graph, str(principal["id"]))
+        for grant in before:
+            print(f"  before revoking: {consent_reset.describe(grant)}")
+        result = await consent_reset.revoke_grants(graph, keep_principal_id=str(me["id"]))
 
-        assert result.ok, f"could not revoke consent: {result.failed}"
-        print(
-            f"consent revoked: {len(result.deleted)} deleted, {len(result.kept)} kept, "
-            f"confirmed after {result.rounds} round(s)"
-        )
+    assert result.ok, f"could not revoke consent: {result.failed}"
+    print(
+        f"consent revoked: {len(result.deleted)} deleted, {len(result.kept)} kept, "
+        f"confirmed after {result.rounds} round(s)"
+    )
 
-        if result.deleted:
-            # Confirming the deletion through /oauth2PermissionGrants is not enough. That is
-            # the read path; a sign-in is served by the token issuance path, which catches up
-            # separately. Measured 2026-09-20: a revocation that re-read clean was followed
-            # seconds later by a token issued to a user the deleted grant had covered.
-            #
-            # There is no propagation signal to poll, so this is an empirical wait. Raise it
-            # if the test starts passing and failing at random; that symptom means it is too
-            # short.
-            print(f"  waiting {SETTLE_SECONDS}s for the deletion to reach token issuance")
-            await asyncio.sleep(SETTLE_SECONDS)
+    if result.deleted:
+        # Confirming the deletion through /oauth2PermissionGrants is not enough. That is
+        # the read path; a sign-in is served by the token issuance path, which catches up
+        # separately. Measured 2026-09-20: a revocation that re-read clean was followed
+        # seconds later by a token issued to a user the deleted grant had covered.
+        #
+        # There is no propagation signal to poll, so this is an empirical wait. Raise it
+        # if the test starts passing and failing at random; that symptom means it is too
+        # short.
+        print(f"  waiting {SETTLE_SECONDS}s for the deletion to reach token issuance")
+        await asyncio.sleep(SETTLE_SECONDS)
 
-        # The alarm sounds here, not at the start of the fixture: the admin's sign-in above
-        # is silent, and the revocation and the settle wait need nobody. A beep a minute
-        # before the first prompt teaches the person to ignore it.
-        walkthrough(
-            f"Sign-in prompt for the NON-ADMIN, {NONADMIN}. Pick or type that account -- not"
-            " the admin. If it signs in as the admin without asking, the test fails and tells"
-            " you to clear your browser cookies for login.microsoftonline.com.",
-            "'Need admin approval' for the non-admin. Click 'Return to the application without"
-            " granting consent'. Do NOT click 'Sign in with that account', and do NOT just close"
-            " the tab -- closing it leaves the test waiting for a redirect that never arrives.",
-            f"Sign-in prompt for the ADMIN again, {USERNAME}, to restore the baseline. The"
-            f" browser is signed in as {NONADMIN} at that point, so choose 'Use another"
-            " account'. Then a consent screen: tick 'Consent on behalf of your organization'"
-            " if offered, and Accept.",
-        )
-        yield str(me["id"])
-    finally:
-        # Whatever happened above, including a revocation that failed half way, the tenant
-        # goes back to baseline before the next test. Forced: the grants are known to be
-        # gone, so the consent screen is coming and there is nothing to probe.
-        await asyncio.to_thread(ensure_consent_baseline, cache_path, force=True)
+    # The alarm sounds here, not at the start of the fixture: the admin's sign-in above
+    # is silent, and the revocation and the settle wait need nobody. A beep a minute
+    # before the first prompt teaches the person to ignore it.
+    walkthrough(
+        f"Sign in as {NONADMIN} (the NON-ADMIN).",
+        "'Need admin approval': click 'Return to the application without granting consent'.",
+    )
+    return str(me["id"])
 
 
 @needs_user

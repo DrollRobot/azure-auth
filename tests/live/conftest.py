@@ -2,16 +2,21 @@
 
 Nothing here runs unless the environment names a tenant; ``support.py`` lists the variables.
 
-Every live run starts from the consent baseline: the Graph application holds at least
-``BASELINE_SCOPES`` in the tenant (see ``support.py``). The ``consent_baseline`` fixture makes
-that so before the first test that uses the shared sign-in, and the one test that revokes
-consent brings the tenant back in its teardown. So no test depends on another having run,
-and no order of tests can leave the tenant unusable for the next run.
+Every live test starts from the consent baseline: the Graph application is granted exactly
+``BASELINE_SCOPES`` in the tenant, no more and no fewer (see ``support.py``).
+:func:`~tests.live.support.restore_baseline` puts it there -- reading what is granted, adding
+what is missing, taking out what is beyond -- at the start of every live run, and again after
+every test that can change consent: every ``interactive`` test, since a consent screen can be
+accepted, and every ``destructive_remote`` one. It runs whether the test passed or failed. So
+no test depends on another having run, none has to arrange its own consent, and no order of
+tests can leave the tenant unusable for the next run.
 
-``consent_baseline`` is not marked ``interactive``, although it can prompt. It has to run for
-every live run, and marking it would make it optional. It is silent when the cache and the
-tenant are already fine, which is the normal case, and prompts once when they are not; so a
-``-m "not interactive"`` run can open one sign-in at the start if the tenant was disturbed.
+Restoring the baseline is not marked ``interactive``, although it can prompt. It has to run
+for every live run, and marking it would make it optional. It is silent when the tenant is
+already at the baseline, which is the normal case, and prompts once when a baseline scope is
+missing; so a ``-m "not interactive"`` run can open one sign-in at the start if the tenant was
+disturbed. Taking scopes out needs no prompt, but it changes the tenant, so it is only done to
+a tenant marked disposable; on any other the run fails and says what is beyond the baseline.
 
 Tests marked ``interactive`` will prompt: a forced browser sign-in for each first-party client
 id, and the consent test, which signs in a second user. Every other user-flow test only *uses*
@@ -28,13 +33,14 @@ start. That is a convenience for the person at the desktop; nothing depends on i
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from azure_auth import AuthContext
 from azure_auth.auth.cache import default_cache_path
-from tests.live.support import TENANT, USERNAME, cached_user_auth, ensure_consent_baseline
+from tests.live.support import TENANT, USERNAME, cached_user_auth, restore_baseline
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -56,24 +62,50 @@ def _live_cache_path() -> Path:
     return default_cache_path().with_name("live_tests_token_cache.bin")
 
 
-@pytest.fixture(scope="session")
-def consent_baseline(_live_cache_path: Path) -> None:
-    """Bring the tenant to the consent baseline once, before any test uses the sign-in.
+@pytest.fixture(scope="session", autouse=True)
+def consent_baseline(_live_cache_path: Path, request: pytest.FixtureRequest) -> None:
+    """Restore the exact consent baseline once, before the first live test runs.
 
-    Not marked ``interactive``, although it can prompt; the module docstring says why.
+    Not marked ``interactive``, although it can prompt; the module docstring says why. Does
+    nothing when no tenant is configured, so the live tests that need no account still run.
     """
-    if not (TENANT and USERNAME):
-        pytest.skip("set AZURE_AUTH_TEST_TENANT_ID and AZURE_AUTH_TEST_USERNAME")
-    ensure_consent_baseline(_live_cache_path, force=False)
+    if TENANT and USERNAME:
+        restore_baseline(
+            _live_cache_path,
+            may_remove=lambda: bool(request.getfixturevalue("_remote_disposable_confirmed")),
+        )
+
+
+@pytest.fixture(autouse=True)
+def _baseline_after_state_changes(
+    request: pytest.FixtureRequest, _live_cache_path: Path
+) -> Iterator[None]:
+    """Restore the exact consent baseline after a test that can change consent, pass or fail.
+
+    Those are the ``interactive`` tests, since a consent screen can be accepted, and the
+    ``destructive_remote`` ones. Whether the tenant may have scopes taken out is settled
+    before the test, while fixtures can still be asked for.
+    """
+    node = request.node
+    changes_state = node.get_closest_marker("interactive") or node.get_closest_marker(
+        "destructive_remote"
+    )
+    if not (changes_state and TENANT and USERNAME):
+        yield
+        return
+    disposable = bool(request.getfixturevalue("_remote_disposable_confirmed"))
+    yield
+    restore_baseline(_live_cache_path, may_remove=lambda: disposable)
 
 
 @pytest.fixture(scope="module")
-def cache_path(_live_cache_path: Path, consent_baseline: None) -> Path:
-    """The shared disk cache, with the tenant at the consent baseline.
+def cache_path(_live_cache_path: Path) -> Path:
+    """The shared disk cache the sign-ins fill; the tenant is at the consent baseline.
 
-    Every test that uses the shared sign-in takes this, so each starts at baseline without
-    asking for it.
+    Skips the test when no tenant is configured.
     """
+    if not (TENANT and USERNAME):
+        pytest.skip("set AZURE_AUTH_TEST_TENANT_ID and AZURE_AUTH_TEST_USERNAME")
     return _live_cache_path
 
 
