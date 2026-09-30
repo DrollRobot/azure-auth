@@ -57,9 +57,12 @@ Tests marked `interactive` open a sign-in prompt and need a human at the machine
 running pytest. Nothing gates them, because a missing human is obvious: the run
 blocks and then times out.
 
-`interactive` means the test *will* prompt, for whatever reason: a consent screen, a
-second user signing in, a forced sign-in. A step that only *might* prompt is not marked.
-The one such step is restoring the consent baseline (`restore_baseline` in
+`interactive` means the test cannot pass unless a person acts, every time it runs: a
+consent screen, a second user signing in, the account picker of a forced sign-in. A test
+that can pass with nobody there -- on a cached credential, or a sign-in that completes by
+itself -- is not marked, even if it opens a window. A test that only sometimes needs a person
+is made to always or never need one. The one step that might prompt and is not marked is
+restoring the consent baseline (`restore_baseline` in
 `tests/live/support.py`). It runs at the start of every live run and after every
 `interactive` or `destructive_remote` test, so marking it would make it optional. It brings
 the tenant to exactly the tests' baseline consent: silent when the tenant is already there,

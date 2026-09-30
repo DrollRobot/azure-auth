@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 
 from azure_auth import AuthContext, ConsentRequired, GraphClient, InteractionRequired
-from tests.live.support import GDAP_SCOPES, _flag, needs_user, require_cached_sign_in
+from tests.live.support import GDAP_SCOPES, _flag, needs_graph, needs_user, require_cached_sign_in
 
-pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
+pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio, needs_graph]
 
 
 @needs_user

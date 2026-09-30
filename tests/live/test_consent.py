@@ -12,14 +12,17 @@ from azure_auth import AuthContext, AuthError, ConsentRequired, GraphClient
 from tests import consent_reset
 from tests.live.support import (
     NONADMIN,
+    SIGN_IN_TIMEOUT_SECONDS,
     TENANT,
     USERNAME,
+    needs_graph,
     needs_nonadmin,
     needs_user,
+    sign_in_step,
     walkthrough,
 )
 
-pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
+pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio, needs_graph]
 
 # What the revoking fixture signs in with: deleting a grant needs the first, resolving the
 # application's service principal the second, and /me the third. All three are in
@@ -99,7 +102,7 @@ async def consent_revoked(cache_path: Path) -> str:
     # is silent, and the revocation and the settle wait need nobody. A beep a minute
     # before the first prompt teaches the person to ignore it.
     walkthrough(
-        f"Sign in as {NONADMIN} (the NON-ADMIN).",
+        sign_in_step("browser", NONADMIN),
         "'Need admin approval': click 'Return to the application without granting consent'.",
     )
     return str(me["id"])
@@ -136,7 +139,7 @@ async def test_a_user_who_may_not_consent_is_refused_with_a_useful_error(
     instead leaves MSAL waiting for a redirect that never comes. Then the administrator's
     sign-in and consent screen in the fixture's teardown, which restores the baseline.
     """
-    auth = AuthContext(TENANT, username=NONADMIN)
+    auth = AuthContext(TENANT, username=NONADMIN, interactive_timeout=SIGN_IN_TIMEOUT_SECONDS)
     async with GraphClient(auth, scopes=[NONADMIN_SCOPE]) as graph:
         with pytest.raises(AuthError) as caught:
             await graph.get("/users", params={"$top": "1"})

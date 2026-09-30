@@ -3,8 +3,11 @@
 Environment variables:
 
 * ``AZURE_AUTH_TEST_TENANT_ID`` and ``AZURE_AUTH_TEST_USERNAME``: user-flow tests. The
-  tenant may be in any cloud; every context the tests build finds which by itself. (The
-  Graph tests need Microsoft Graph Command Line Tools, which the China cloud does not have.)
+  tenant may be in any cloud; every context the tests build finds which by itself.
+* ``AZURE_AUTH_TEST_GRAPH=1``: the user may sign in to Microsoft Graph Command Line Tools in
+  the tenant. The Graph tests and the consent baseline need it; without it they skip, and the
+  Exchange and ARM tests run on their own. A tenant can block the application, and the China
+  cloud does not have it.
 * ``AZURE_AUTH_TEST_APP_CLIENT_ID`` and ``AZURE_AUTH_TEST_CERT_THUMBPRINT``: app-flow tests
   with a certificate in ``CurrentUser\\My`` (needs ``Organization.Read.All`` on Graph).
 * ``AZURE_AUTH_TEST_NONADMIN_USERNAME``: a second user in the same tenant who may *not*
@@ -39,7 +42,7 @@ import threading
 import time
 from collections.abc import Callable, Coroutine, Iterable, Iterator
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import pytest
 
@@ -91,13 +94,19 @@ PROPAGATION_TIMEOUT_SECONDS = float(
 )
 PROPAGATION_POLL_SECONDS = 10.0
 
-# How long a forced sign-in may take before the person at the desktop is called. A browser
-# that is still signed in answers it by itself well inside this; a sign-in page waiting for
+# How long a sign-in that may be silent can take before the person at the desktop is called.
+# A browser that is still signed in answers well inside this; a sign-in page waiting for
 # somebody does not. Override with AZURE_AUTH_TEST_PROMPT_ALARM_SECONDS.
 PROMPT_ALARM_SECONDS = float(os.environ.get("AZURE_AUTH_TEST_PROMPT_ALARM_SECONDS", "5"))
 
+# How long a test's browser sign-in waits before it fails. Enough to type a password and
+# approve MFA; half the package default, so a sign-in that can never finish -- stopped at a
+# Conditional Access block, which never returns to the test -- costs a minute, not two.
+SIGN_IN_TIMEOUT_SECONDS = 60
+
 TENANT = os.environ.get("AZURE_AUTH_TEST_TENANT_ID", "")
 USERNAME = os.environ.get("AZURE_AUTH_TEST_USERNAME", "")
+GRAPH = os.environ.get("AZURE_AUTH_TEST_GRAPH") == "1"
 NONADMIN = os.environ.get("AZURE_AUTH_TEST_NONADMIN_USERNAME", "")
 APP_CLIENT_ID = os.environ.get("AZURE_AUTH_TEST_APP_CLIENT_ID", "")
 THUMBPRINT = os.environ.get("AZURE_AUTH_TEST_CERT_THUMBPRINT", "")
@@ -118,6 +127,16 @@ needs_app = pytest.mark.skipif(
 
 def _flag(name: str) -> pytest.MarkDecorator:
     return pytest.mark.skipif(os.environ.get(name) != "1", reason=f"set {name}=1")
+
+
+needs_graph = _flag("AZURE_AUTH_TEST_GRAPH")
+
+# The Exchange Online PowerShell client id serves both the Exchange and the IPPS tests, so a
+# sign-in to it needs only one of them.
+needs_exchange_or_ipps = pytest.mark.skipif(
+    "1" not in (os.environ.get("AZURE_AUTH_TEST_EXCHANGE"), os.environ.get("AZURE_AUTH_TEST_IPPS")),
+    reason="set AZURE_AUTH_TEST_EXCHANGE=1 or AZURE_AUTH_TEST_IPPS=1",
+)
 
 
 @functools.cache
@@ -189,6 +208,19 @@ def require_cached_sign_in(client: ResourceClient | BlockingResourceClient) -> N
         )
 
 
+def sign_in_step(window: Literal["WAM", "browser"], user: str = USERNAME) -> str:
+    """The walkthrough step for a sign-in.
+
+    Args:
+        window: Where the sign-in appears: the broker's window or the browser.
+        user: The account to sign in with.
+
+    Returns:
+        The step.
+    """
+    return f"In the {window} window, sign in with {user}."
+
+
 def walkthrough(*steps: str) -> None:
     """Tell the person at the desktop what they are about to see, and sound the alarm.
 
@@ -198,13 +230,19 @@ def walkthrough(*steps: str) -> None:
     look like product failures. So each test states its prompts in order, and what to do with
     each one.
 
+    Each step is an instruction and nothing else: "In the WAM window, sign in with X.",
+    "Consent screen: click CANCEL." It names the window the person acts in (WAM or browser),
+    not the application. No reasons, no explanation, no hints on finding a window, no
+    fallbacks, and no step for a prompt that has not been seen to appear. Explanations belong
+    in the test's docstring.
+
     Call this directly only when somebody will certainly have to act, such as a second user
     signing in. Otherwise use :func:`walkthrough_if_waiting`.
 
     Needs ``pytest -s``; without it pytest captures this and the person sees nothing.
 
     Args:
-        *steps: What will appear, in order, and what to click.
+        *steps: The instructions, in order.
     """
     line = "=" * 78
     print(f"\n{line}\n  DO THIS, IN ORDER:\n")
@@ -218,11 +256,12 @@ def walkthrough(*steps: str) -> None:
 def walkthrough_if_waiting(*steps: str) -> Iterator[None]:
     """Announce a sign-in only if it is still waiting after ``PROMPT_ALARM_SECONDS``.
 
-    Wrap a forced sign-in, ``login(force=True)``. It always opens a browser window, but a
-    browser that is still signed in often answers it by itself, and nobody needs calling for
+    Wrap a sign-in that is not forced but may still open a window: the baseline restore's.
+    A browser that is still signed in answers it by itself, and nobody needs calling for
     that. So the sign-in is timed, and only when it is still waiting after the delay does
     :func:`walkthrough` print the steps and sound the alarm. An alarm on every test would
-    teach the person to ignore it.
+    teach the person to ignore it. A forced sign-in always waits for the person at the
+    account picker, so it calls :func:`walkthrough` before it starts.
 
     Args:
         *steps: What will appear, in order, and what to click.
@@ -330,10 +369,16 @@ def _consent_to_baseline(cache_path: Path, *, force: bool) -> None:
         cache_path: The shared disk cache; the token lands there for the tests to use.
         force: Prompt even when a silent sign-in would do.
     """
-    admin = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
+    admin = AuthContext(
+        TENANT,
+        username=USERNAME,
+        cache="disk",
+        cache_path=cache_path,
+        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+    )
     scopes = graph_scopes(BASELINE_SCOPES)
     with walkthrough_if_waiting(
-        f"Sign in as {USERNAME}. Other account offered: click 'Use another account'.",
+        sign_in_step("browser"),
         "Consent screen: tick 'Consent on behalf of your organization'. Click Accept.",
     ):
         if force:

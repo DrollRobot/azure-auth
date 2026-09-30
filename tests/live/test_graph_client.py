@@ -17,12 +17,13 @@ from azure_auth.sync import GraphClient as BlockingGraphClient
 from tests.live.support import (
     USERNAME,
     cached_user_auth,
+    needs_graph,
     needs_user,
     require_cached_sign_in,
     token_scopes,
 )
 
-pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
+pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio, needs_graph]
 
 # A delegated scope the baseline does not grant the Graph command-line application. The
 # .default test asserts it is missing from a .default token and cannot be had without a

@@ -12,9 +12,15 @@ from azure.core.credentials import AccessTokenInfo
 from azure_auth import AuthContext, GraphClient, InteractionRequired
 from azure_auth.auth.cache import build_cache
 from tests import cache_aging
-from tests.live.support import _flag, cached_user_auth, needs_user, require_cached_sign_in
+from tests.live.support import (
+    _flag,
+    cached_user_auth,
+    needs_graph,
+    needs_user,
+    require_cached_sign_in,
+)
 
-pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
+pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio, needs_graph]
 
 # What the refresh tests sign in for. Anything every user may consent to would do.
 REFRESH_SCOPES = ["User.Read"]

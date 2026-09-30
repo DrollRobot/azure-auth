@@ -3,7 +3,9 @@
 Nothing here runs unless the environment names a tenant; ``support.py`` lists the variables.
 
 Every live test starts from the consent baseline: the Graph application is granted exactly
-``BASELINE_SCOPES`` in the tenant, no more and no fewer (see ``support.py``).
+``BASELINE_SCOPES`` in the tenant, no more and no fewer (see ``support.py``). A tenant whose
+users may not use the Graph application (``AZURE_AUTH_TEST_GRAPH`` unset) has no baseline to
+keep; its Graph tests skip, and nothing else depends on the baseline.
 :func:`~tests.live.support.restore_baseline` puts it there -- reading what is granted, adding
 what is missing, taking out what is beyond -- at the start of every live run, and again after
 every test that can change consent: every ``interactive`` test, since a consent screen can be
@@ -18,11 +20,12 @@ missing; so a ``-m "not interactive"`` run can open one sign-in at the start if 
 disturbed. Taking scopes out needs no prompt, but it changes the tenant, so it is only done to
 a tenant marked disposable; on any other the run fails and says what is beyond the baseline.
 
-Tests marked ``interactive`` will prompt: a forced browser sign-in for each first-party client
-id, and the consent test, which signs in a second user. Every other user-flow test only *uses*
-the signed-in account and cannot open a prompt: it takes its token from the encrypted disk
-cache, which outlives the run, and skips when there is none. So do the prompts once, walk
-away, and run the rest unattended for as long as the refresh token lasts::
+Tests marked ``interactive`` cannot pass without a person: a forced sign-in, which shows the
+account picker, for each first-party client id and through the broker, and the consent test,
+which signs in a second user. Every other user-flow test needs nobody. Most only *use* the
+signed-in account: they take their token from the encrypted disk cache, which outlives the
+run, and skip when there is none. So do the prompts once, walk away, and run the rest
+unattended for as long as the refresh token lasts::
 
     uv run --env-file .env pytest tests/live -s -m interactive --run-destructive-remote --no-cov
     uv run --env-file .env pytest tests/live -s -m "not interactive" --no-cov  # unattended
@@ -40,7 +43,7 @@ import pytest
 
 from azure_auth import AuthContext
 from azure_auth.auth.cache import default_cache_path
-from tests.live.support import TENANT, USERNAME, cached_user_auth, restore_baseline
+from tests.live.support import GRAPH, TENANT, USERNAME, cached_user_auth, restore_baseline
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -67,9 +70,10 @@ def consent_baseline(_live_cache_path: Path, request: pytest.FixtureRequest) -> 
     """Restore the exact consent baseline once, before the first live test runs.
 
     Not marked ``interactive``, although it can prompt; the module docstring says why. Does
-    nothing when no tenant is configured, so the live tests that need no account still run.
+    nothing when no tenant is configured, so the live tests that need no account still run,
+    or when the tenant's users may not use the Graph application.
     """
-    if TENANT and USERNAME:
+    if TENANT and USERNAME and GRAPH:
         restore_baseline(
             _live_cache_path,
             may_remove=lambda: bool(request.getfixturevalue("_remote_disposable_confirmed")),
@@ -90,7 +94,7 @@ def _baseline_after_state_changes(
     changes_state = node.get_closest_marker("interactive") or node.get_closest_marker(
         "destructive_remote"
     )
-    if not (changes_state and TENANT and USERNAME):
+    if not (changes_state and TENANT and USERNAME and GRAPH):
         yield
         return
     disposable = bool(request.getfixturevalue("_remote_disposable_confirmed"))

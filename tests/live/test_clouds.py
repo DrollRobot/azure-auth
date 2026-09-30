@@ -48,16 +48,19 @@ from azure_auth.constants import (
 from tests.live.support import (
     APP_CLIENT_ID,
     BASELINE_SCOPES,
+    SIGN_IN_TIMEOUT_SECONDS,
     TENANT,
     THUMBPRINT,
     USERNAME,
     _flag,
     live_cloud,
     needs_app,
+    needs_graph,
     needs_user,
     require_cached_sign_in,
+    sign_in_step,
     token_claims,
-    walkthrough_if_waiting,
+    walkthrough,
 )
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live]
@@ -346,6 +349,7 @@ def discovered_auth(cache_path: Path) -> AuthContext:
 
 
 @needs_user
+@needs_graph
 @pytest.mark.anyio
 async def test_a_cloud_of_the_callers_own_is_used_as_given(cache_path: Path) -> None:
     """A :class:`Cloud` the caller built is used as it is, from sign-in to a Graph call.
@@ -365,6 +369,7 @@ async def test_a_cloud_of_the_callers_own_is_used_as_given(cache_path: Path) -> 
 
 
 @needs_user
+@needs_graph
 @pytest.mark.interactive
 @pytest.mark.anyio
 async def test_a_user_given_the_wrong_cloud_is_refused() -> None:
@@ -376,10 +381,12 @@ async def test_a_user_given_the_wrong_cloud_is_refused() -> None:
     ``InvalidAuthenticationToken: InvalidCloudInstance``.
     """
     wrong = COMMERCIAL if live_cloud() != COMMERCIAL else US_GOV
-    auth = AuthContext(TENANT, username=USERNAME, cloud=wrong, interactive_timeout=60)
+    walkthrough(sign_in_step("browser"))
+    auth = AuthContext(
+        TENANT, username=USERNAME, cloud=wrong, interactive_timeout=SIGN_IN_TIMEOUT_SECONDS
+    )
     async with GraphClient(auth, scopes=["User.Read"]) as graph:
-        with walkthrough_if_waiting(f"Sign in as {USERNAME}, if asked."):
-            await graph.login(force=True)
+        await graph.login(force=True)
         token = await auth.aio.acquire_token(graph.scopes, client_id=graph.client_id)
         claims = token_claims(token.token)
         print(f"{TENANT} as {wrong.name}: token aud={claims.get('aud')} iss={claims.get('iss')}")
@@ -403,6 +410,7 @@ def test_the_configured_tenant_is_the_same_by_id_and_by_the_users_domain() -> No
 
 
 @needs_user
+@needs_graph
 @pytest.mark.anyio
 async def test_a_discovered_context_reaches_graph_in_its_cloud(cache_path: Path) -> None:
     auth = discovered_auth(cache_path)
