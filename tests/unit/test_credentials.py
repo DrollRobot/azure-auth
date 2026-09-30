@@ -363,6 +363,27 @@ def test_interaction_errors_are_recognised(code: str) -> None:
     assert isinstance(error, InteractionRequired)
 
 
+def broker_error(status: str) -> dict[str, Any]:
+    """Build what MSAL returns for a broker failure: the status only in the description."""
+    return {
+        "error": "broker_error",
+        "error_description": f"(pii). Status: Response_Status.{status}, Error code: 1, Tag: 2",
+    }
+
+
+@pytest.mark.parametrize("status", ["Status_InteractionRequired", "Status_AccountUnusable"])
+def test_broker_statuses_that_need_a_sign_in_are_interaction_required(status: str) -> None:
+    error = error_from_msal_result(broker_error(status), tenant_id="t", scopes=["a"])
+    assert isinstance(error, InteractionRequired)
+    assert status in str(error)
+
+
+@pytest.mark.parametrize("status", ["Status_UserCanceled", "Status_Unexpected"])
+def test_other_broker_statuses_are_plain_errors(status: str) -> None:
+    error = error_from_msal_result(broker_error(status), tenant_id="t", scopes=["a"])
+    assert type(error) is AuthError
+
+
 def test_other_errors_keep_their_description_but_not_the_dictionary() -> None:
     error = error_from_msal_result(
         {"error": "invalid_client", "error_description": " AADSTS7000215: bad secret ", "x": 1},

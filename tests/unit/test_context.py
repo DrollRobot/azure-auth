@@ -158,7 +158,7 @@ def test_a_failed_sign_in_is_reported_rather_than_retried(fake_msal: FakeMsal) -
 
     assert caught.value.scopes == ("User.Read.All",)
     assert fake_msal.methods() == ["interactive"]
-    assert "prompt" not in fake_msal.calls[0].kwargs
+    assert fake_msal.calls[0].kwargs["prompt"] is None
 
 
 def test_a_non_consent_failure_is_not_retried(fake_msal: FakeMsal) -> None:
@@ -253,6 +253,15 @@ def test_forced_login_always_prompts(fake_msal: FakeMsal) -> None:
     user_context().login(client_id=GRAPH_CLI_CLIENT_ID, scopes=["User.Read"], force=True)
 
     assert fake_msal.methods() == ["interactive"]
+    # A still signed-in browser would otherwise complete the page with nobody choosing.
+    assert fake_msal.calls[0].kwargs["prompt"] == "select_account"
+
+
+def test_a_sign_in_that_is_not_forced_shows_no_account_picker(fake_msal: FakeMsal) -> None:
+    user_context().acquire_token([ARM_SCOPE])
+
+    assert fake_msal.methods() == ["interactive"]
+    assert fake_msal.calls[0].kwargs["prompt"] is None
 
 
 # ---------------------------------------------------------------------------- client id rule
@@ -524,10 +533,61 @@ def test_broker_error_result_falls_back_to_the_browser(
 def test_user_cancelling_in_the_broker_does_not_open_a_browser(
     fake_msal: FakeMsal, broker_installed: None
 ) -> None:
-    fake_msal.interactive = lambda call: error_result("user_cancelled")
-    with pytest.raises(AuthError, match="user_cancelled"):
+    # What MSAL makes of a cancel: the same error as any broker failure, told apart only by
+    # the status in the description.
+    fake_msal.interactive = lambda call: error_result(
+        "broker_error",
+        "User canceled the Accounts Control Operation.. "
+        "Status: Response_Status.Status_UserCanceled, Error code: 0, Tag: 528315210",
+    )
+    with pytest.raises(AuthError, match="Status_UserCanceled"):
         user_context(broker=True).acquire_token([ARM_SCOPE])
     assert len(fake_msal.calls) == 1
+
+
+def test_a_sibling_the_broker_cannot_serve_silently_asks_for_a_sign_in(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    # What MSAL returned live when the broker held no sign-in for the application.
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: error_result(
+        "broker_error",
+        "(pii). Status: Response_Status.Status_InteractionRequired, Error code: 3399614476, "
+        "Tag: 557973645",
+    )
+    with pytest.raises(InteractionRequired, match="Sibling contexts never prompt") as caught:
+        user_context(broker=True).for_tenant("customer").acquire_token([ARM_SCOPE])
+    assert caught.value.tenant_id == "customer"
+    assert fake_msal.methods() == ["silent"]
+
+
+def test_a_forced_broker_sign_in_shows_the_account_picker(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: token_result()
+
+    user_context(broker=True).login(client_id="app", scopes=["a"], force=True)
+
+    # Without it the broker answers silently for an account it holds, and force does nothing.
+    call = fake_msal.calls[0]
+    assert (call.method, call.app.broker, call.kwargs["prompt"]) == (
+        "interactive",
+        True,
+        "select_account",
+    )
+
+
+def test_signing_in_as_someone_else_through_the_broker_is_rejected(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    fake_msal.interactive = lambda call: token_result(
+        id_token_claims={"preferred_username": "other@partner.com"}
+    )
+
+    with pytest.raises(AuthError, match=r"Signed in as 'other@partner\.com'"):
+        user_context(broker=True).acquire_token([ARM_SCOPE])
+    assert [call.app.broker for call in fake_msal.calls] == [True]
 
 
 def test_broker_failure_without_fallback_raises(

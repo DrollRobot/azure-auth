@@ -6,6 +6,7 @@ package; :func:`error_from_msal_result` turns them into the exception hierarchy 
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -22,6 +23,16 @@ _INTERACTION_ERRORS = frozenset({"interaction_required", "login_required", "inva
 # distinguish it from someone pressing Cancel on an ordinary consent screen. So it cannot be
 # classified as a consent failure, and the message has to cover both readings.
 _DECLINED_ERRORS = frozenset({"access_denied"})
+
+# MSAL reports every failure of the Windows broker as ``broker_error`` and drops the broker's
+# own status, which survives only in the description as ``Status: Response_Status.<name>``
+# (msal 1.39 ``broker.py``; seen live 2026-09-29).
+_BROKER_STATUS = re.compile(r"Status: (?:Response_Status\.)?(Status_\w+)")
+
+# Broker statuses that mean somebody has to sign in: the two MSAL itself answers by opening the
+# broker's window (msal 1.39 ``application.py``). Status_InteractionRequired seen live
+# 2026-09-29, for an application the broker held no sign-in for.
+_BROKER_INTERACTION_STATUSES = frozenset({"Status_InteractionRequired", "Status_AccountUnusable"})
 
 
 class AuthError(Exception):
@@ -129,6 +140,22 @@ class AmbiguousTenant(AuthError):
         self.candidates = tuple(candidates)
 
 
+def broker_status(result: Mapping[str, Any] | None) -> str | None:
+    """Read the Windows broker's own status out of a failed MSAL result.
+
+    Args:
+        result: The dictionary MSAL returned, or ``None``.
+
+    Returns:
+        The status, such as ``Status_UserCanceled``, or ``None`` when the result is not a
+        broker failure or names no status.
+    """
+    if not result or result.get("error") != "broker_error":
+        return None
+    match = _BROKER_STATUS.search(str(result.get("error_description", "")))
+    return match.group(1) if match else None
+
+
 def error_from_msal_result(
     result: Mapping[str, Any] | None,
     *,
@@ -160,7 +187,7 @@ def error_from_msal_result(
 
     if markers & _CONSENT_MARKERS or codes & _CONSENT_ERROR_CODES:
         return ConsentRequired(message, tenant_id=tenant_id, scopes=scopes)
-    if error in _INTERACTION_ERRORS:
+    if error in _INTERACTION_ERRORS or broker_status(result) in _BROKER_INTERACTION_STATUSES:
         return InteractionRequired(message, tenant_id=tenant_id, scopes=scopes)
     if error in _DECLINED_ERRORS:
         return AuthError(

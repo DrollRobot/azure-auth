@@ -40,6 +40,7 @@ from azure_auth.auth.errors import (
     AuthError,
     BrokerUnavailable,
     InteractionRequired,
+    broker_status,
     error_from_msal_result,
 )
 from azure_auth.clouds import Cloud, get_cloud
@@ -60,6 +61,9 @@ _TokenKey = tuple[str, frozenset[str]]
 # Authorities that name no single tenant, so there is no one cloud to look up.
 _MULTI_TENANT_AUTHORITIES = frozenset({"common", "organizations", "consumers"})
 
+# The broker's status for a person who closed its sign-in window (seen live 2026-09-29).
+_BROKER_CANCELLED_STATUS = "Status_UserCanceled"
+
 
 def _broker_installed() -> bool:
     """Report whether the Windows authentication broker runtime can be used.
@@ -68,6 +72,22 @@ def _broker_installed() -> bool:
         ``True`` on Windows with the ``broker`` extra installed.
     """
     return sys.platform == "win32" and importlib.util.find_spec("pymsalruntime") is not None
+
+
+def _broker_failed(result: dict[str, Any]) -> bool:
+    """Tell a broker that could not sign the person in from a person who said no.
+
+    Args:
+        result: What the broker's interactive sign-in returned.
+
+    Returns:
+        ``True`` when the broker failed, so the browser may take over. ``False`` for a token,
+        for a cancel, which is the person's answer and must not open a browser, and for an
+        error from Entra.
+    """
+    if result.get("error") != "broker_error":
+        return False
+    return broker_status(result) != _BROKER_CANCELLED_STATUS
 
 
 def _as_text(value: str | bytes | None) -> str | None:
@@ -441,7 +461,9 @@ class AuthContext:
         Args:
             client_id: Client id to sign in to.
             scopes: Scopes to request.
-            force: Prompt even when a cached token or account exists. Ignored by app flows.
+            force: Show the account picker, even when a cached token or account exists or
+                the broker or browser could sign in by itself. Someone other than the
+                configured user is refused. Ignored by app flows.
 
         Raises:
             InteractionRequired: If this is a sibling context and the user must sign in.
@@ -673,22 +695,35 @@ class AuthContext:
         # AADSTS65004 (measured 2026-09-25), which is the user's decision. Reopening the
         # browser on either would be wrong, and the retry could never fire in the case it was
         # written for.
-        result = self._interactive(client_id, scopes, claims, use_broker=use_broker)
+        result = self._interactive(
+            client_id, scopes, claims, use_broker=use_broker, pick_account=force_interactive
+        )
         if "access_token" not in result:
             raise error_from_msal_result(result, tenant_id=self._tenant_id, scopes=scopes)
         self._check_signed_in_user(result)
         return result
 
     def _interactive(
-        self, client_id: str, scopes: list[str], claims: str | None, *, use_broker: bool
+        self,
+        client_id: str,
+        scopes: list[str],
+        claims: str | None,
+        *,
+        use_broker: bool,
+        pick_account: bool = False,
     ) -> dict[str, Any]:
         """Prompt the user, through the broker when enabled, else in the browser.
+
+        Without ``pick_account`` the sign-in may still finish with nobody acting: the broker
+        answers silently for an account it holds, and a browser that is still signed in
+        completes the page by itself.
 
         Args:
             client_id: Client id of the public client application.
             scopes: Scopes to request.
             claims: Claims challenge to satisfy.
             use_broker: Whether to try the Windows broker first.
+            pick_account: Show the account picker, so a person always chooses the account.
 
         Returns:
             The MSAL result, successful or not.
@@ -696,11 +731,14 @@ class AuthContext:
         Raises:
             BrokerUnavailable: If the broker fails and ``broker_fallback`` is off.
         """
+        # The broker then skips its silent attempts and drops the login hint (msal 1.39).
+        prompt = "select_account" if pick_account else None
         if use_broker:
             broker_app = self._app(client_id, use_broker=True)
             try:
                 result = broker_app.acquire_token_interactive(
                     scopes,
+                    prompt=prompt,
                     login_hint=self._username,
                     claims_challenge=claims,
                     parent_window_handle=broker_app.CONSOLE_WINDOW_HANDLE,
@@ -710,7 +748,7 @@ class AuthContext:
                     raise BrokerUnavailable(f"The authentication broker failed: {exc}") from exc
                 _LOGGER.warning("Authentication broker failed (%s); using the browser", exc)
             else:
-                if "access_token" in result or result.get("error") != "broker_error":
+                if not _broker_failed(result):
                     return dict(result)
                 if not self._broker_fallback:
                     raise BrokerUnavailable(
@@ -722,6 +760,7 @@ class AuthContext:
         try:
             result = app.acquire_token_interactive(
                 scopes,
+                prompt=prompt,
                 login_hint=self._username,
                 claims_challenge=claims,
                 timeout=self._interactive_timeout,
@@ -729,7 +768,9 @@ class AuthContext:
         except BrowserInteractionTimeoutError as exc:
             raise AuthError(
                 f"The browser sign-in was not completed within {self._interactive_timeout:g} "
-                "seconds. The window was probably closed, or nobody was there to answer it."
+                "seconds. The window was closed, nobody answered it, or the sign-in page stopped "
+                "at an error that never returns to the application, such as a Conditional "
+                "Access block."
             ) from exc
         return dict(result)
 
@@ -858,7 +899,7 @@ class AsyncAuthContext:
         Args:
             client_id: Client id to sign in to.
             scopes: Scopes to request.
-            force: Prompt even when a cached token or account exists.
+            force: Show the account picker; see :meth:`AuthContext.login`.
         """
         await asyncio.to_thread(self._sync.login, client_id=client_id, scopes=scopes, force=force)
 

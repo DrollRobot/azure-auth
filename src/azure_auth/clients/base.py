@@ -217,7 +217,9 @@ class ResourceClient:
         """Sign in now instead of at the first request.
 
         Args:
-            force: Prompt even when a cached token or account exists.
+            force: Show the account picker, even when a cached token or account exists or
+                the broker or browser could sign in by itself. Someone other than the
+                configured user is refused.
         """
         await self._tokens.login(client_id=self._client_id, scopes=self._scopes, force=force)
 

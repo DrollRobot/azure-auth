@@ -31,13 +31,15 @@ from source or a plain-text file.
 ### Signing in
 
 Signing in is lazy: the first request prompts if it has to. To choose the moment, call
-`await client.login()`. Pass `force=True` to prompt even when a token is cached.
+`await client.login()`. Pass `force=True` to show the account picker even when a token is
+cached, or the broker or a still signed-in browser could sign in by itself.
 
 `username` selects the cached account and pre-fills the sign-in page. If somebody else signs
 in, the context raises `AuthError`, because their tokens would never be found again.
 
-A browser sign-in that nobody completes -- the window closed, or left alone -- fails with
-`AuthError` after `interactive_timeout` seconds (default 120) rather than waiting for ever.
+A browser sign-in that is never completed -- the window closed or left alone, or stopped at an
+error page such as a Conditional Access block, which never returns to the application -- fails
+with `AuthError` after `interactive_timeout` seconds (default 120) rather than waiting for ever.
 
 ### The Windows broker
 
