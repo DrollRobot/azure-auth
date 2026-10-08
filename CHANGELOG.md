@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A context given a domain name could not sign in for Key Vault, or any other Azure SDK
   client that names the tenant by ID; it reported that a sign-in was needed instead.
+- The Key Vault client could not make a request: a package the Azure SDK needs for async
+  HTTP was missing from the `keyvault` extra. The blocking client was unaffected.
 
 ## [0.2.0] - 2026-09-29 - every Microsoft cloud, Exchange validated
 

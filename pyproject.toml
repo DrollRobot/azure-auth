@@ -53,6 +53,9 @@ constraint-dependencies = [
 
 [project.optional-dependencies]
 keyvault = [
+    # The HTTP transport of the Azure SDK's async clients; no azure-keyvault-* package
+    # depends on it, and without it the async KeyVaultClient cannot make a request.
+    "aiohttp>=3.14.4",
     "azure-keyvault-certificates>=4.11.2",
     "azure-keyvault-keys>=4.11.2",
     "azure-keyvault-secrets>=4.11.2",

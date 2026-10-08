@@ -64,6 +64,8 @@ class KeyVaultClient:
 
         Raises:
             ValueError: If the secret has no value.
+            azure.core.exceptions.ResourceNotFoundError: If the vault has no such secret, or
+                no such version of it.
         """
         secret = await self._secrets.get_secret(name, version)
         if secret.value is None:

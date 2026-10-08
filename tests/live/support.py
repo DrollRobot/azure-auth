@@ -18,6 +18,9 @@ Environment variables:
 * ``AZURE_AUTH_TEST_GDAP=1``: the user's home tenant manages other tenants through GDAP.
 * ``AZURE_AUTH_TEST_EXCHANGE=1`` / ``AZURE_AUTH_TEST_IPPS=1``: the user may run Exchange /
   Security & Compliance cmdlets.
+* ``AZURE_AUTH_TEST_KEYVAULT_URL`` and ``AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME``: a vault in the
+  tenant and the name of a secret in it the user may read. Naming both runs the Key Vault
+  tests. They read the value but never print it, so it should be a throwaway made for them.
 * ``AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS``: how long :func:`restore_baseline` waits for
   Entra to catch up with a grant change: a new grant to show up, or a removed scope to stop
   being issued (default 300).
@@ -26,7 +29,8 @@ Environment variables:
 * ``AZURE_AUTH_TEST_PROMPT_ALARM_SECONDS``: how long a sign-in may take before the alarm
   sounds (default 5). A browser that is still signed in answers faster than this.
 
-No secret is read from the environment; app flows use the certificate store.
+No secret is read from the environment; app flows use the certificate store, and the Key
+Vault tests are given their secret's name, not its value.
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import Callable, Coroutine, Iterable, Iterator
+from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
@@ -110,6 +114,8 @@ GRAPH = os.environ.get("AZURE_AUTH_TEST_GRAPH") == "1"
 NONADMIN = os.environ.get("AZURE_AUTH_TEST_NONADMIN_USERNAME", "")
 APP_CLIENT_ID = os.environ.get("AZURE_AUTH_TEST_APP_CLIENT_ID", "")
 THUMBPRINT = os.environ.get("AZURE_AUTH_TEST_CERT_THUMBPRINT", "")
+KEYVAULT_URL = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_URL", "")
+KEYVAULT_SECRET_NAME = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME", "")
 
 needs_user = pytest.mark.skipif(
     not (TENANT and USERNAME),
@@ -122,6 +128,10 @@ needs_nonadmin = pytest.mark.skipif(
 needs_app = pytest.mark.skipif(
     not (TENANT and APP_CLIENT_ID and THUMBPRINT),
     reason="set AZURE_AUTH_TEST_TENANT_ID, _APP_CLIENT_ID and _CERT_THUMBPRINT",
+)
+needs_keyvault = pytest.mark.skipif(
+    not (KEYVAULT_URL and KEYVAULT_SECRET_NAME),
+    reason="set AZURE_AUTH_TEST_KEYVAULT_URL and AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME",
 )
 
 
@@ -136,6 +146,13 @@ needs_graph = _flag("AZURE_AUTH_TEST_GRAPH")
 needs_exchange_or_ipps = pytest.mark.skipif(
     "1" not in (os.environ.get("AZURE_AUTH_TEST_EXCHANGE"), os.environ.get("AZURE_AUTH_TEST_IPPS")),
     reason="set AZURE_AUTH_TEST_EXCHANGE=1 or AZURE_AUTH_TEST_IPPS=1",
+)
+
+# The Azure PowerShell client id serves both the ARM and the Key Vault tests, so a sign-in to
+# it needs only one of them.
+needs_arm_or_keyvault = pytest.mark.skipif(
+    not (os.environ.get("AZURE_AUTH_TEST_ARM") == "1" or KEYVAULT_URL),
+    reason="set AZURE_AUTH_TEST_ARM=1 or AZURE_AUTH_TEST_KEYVAULT_URL",
 )
 
 
@@ -187,8 +204,10 @@ def cached_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
     return auth
 
 
-def require_cached_sign_in(client: ResourceClient | BlockingResourceClient) -> None:
-    """Skip the test unless its client can get a token from the cache.
+def require_cached_token(
+    auth: AuthContext, scopes: Sequence[str], client_id: str | None = None
+) -> None:
+    """Skip the test unless the context can get a token for the scopes from the cache.
 
     A missing sign-in is a missing precondition, like a missing environment variable, so it
     skips rather than fails. Only the two errors that mean "somebody has to sign in or
@@ -197,15 +216,27 @@ def require_cached_sign_in(client: ResourceClient | BlockingResourceClient) -> N
     The token is kept, so the test that follows uses it without asking again.
 
     Args:
-        client: The client the test is about to use. Its context must not prompt.
+        auth: The context the test is about to use. It must not prompt.
+        scopes: The scopes the test's requests will need.
+        client_id: The client id they will be made with; the context's default when omitted.
     """
     try:
-        client.auth.acquire_token(client.scopes, client_id=client.client_id)
+        auth.acquire_token(scopes, client_id=client_id)
     except (InteractionRequired, ConsentRequired) as error:
         pytest.skip(
-            f"no cached sign-in for client {client.client_id} with {' '.join(client.scopes)}"
-            f" ({type(error).__name__}); sign in first with: pytest tests/live -s -m interactive"
+            f"no cached sign-in for client {auth.resolve_client_id(client_id)} with"
+            f" {' '.join(scopes)} ({type(error).__name__}); sign in first with: pytest"
+            " tests/live -s -m interactive"
         )
+
+
+def require_cached_sign_in(client: ResourceClient | BlockingResourceClient) -> None:
+    """Skip the test unless its client can get a token from the cache.
+
+    Args:
+        client: The client the test is about to use. Its context must not prompt.
+    """
+    require_cached_token(client.auth, client.scopes, client.client_id)
 
 
 def sign_in_step(window: Literal["WAM", "browser"], user: str = USERNAME) -> str:

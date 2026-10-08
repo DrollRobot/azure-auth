@@ -27,8 +27,8 @@ from tests.live.support import (
     SIGN_IN_TIMEOUT_SECONDS,
     TENANT,
     USERNAME,
-    _flag,
     cached_user_auth,
+    needs_arm_or_keyvault,
     needs_exchange_or_ipps,
     needs_graph,
     needs_user,
@@ -83,7 +83,7 @@ async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
             marks=needs_exchange_or_ipps,
             id="exchange",
         ),
-        pytest.param(AzureClient, "Azure PowerShell", marks=_flag("AZURE_AUTH_TEST_ARM"), id="arm"),
+        pytest.param(AzureClient, "Azure PowerShell", marks=needs_arm_or_keyvault, id="arm"),
     ],
 )
 async def test_interactive_login_to_another_first_party_client(
