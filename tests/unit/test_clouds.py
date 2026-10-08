@@ -200,7 +200,7 @@ def test_a_guid_that_is_a_tenant_in_two_clouds_is_ambiguous() -> None:
     }
     recorder = by_host({COM: COMMERCIAL_DOC, US: in_gcc_high, CN: COMMERCIAL_DOC})
 
-    with pytest.raises(AmbiguousTenant, match="Pass cloud= to choose") as caught:
+    with pytest.raises(AmbiguousTenant, match="Pass the GUID of the one you mean") as caught:
         discover_tenant(COMMERCIAL_ID, transport=recorder.transport)
 
     assert [(i.tenant_id, i.cloud) for i in caught.value.candidates] == [

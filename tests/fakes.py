@@ -11,6 +11,7 @@ each lookup.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -121,11 +122,27 @@ class FakeApp:
         self.removed_tokens += 1
 
 
+def tenant_guid(tenant: str) -> str:
+    """The GUID the fake lookup answers for a tenant: a GUID is its own, a name gets a stable one.
+
+    Args:
+        tenant: Tenant id (GUID) or domain name, as a test passes it to ``AuthContext``.
+
+    Returns:
+        The GUID in its canonical spelling.
+    """
+    try:
+        return str(uuid.UUID(tenant))
+    except ValueError:
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, tenant.lower()))
+
+
 @dataclass
 class FakeDiscovery:
     """Replacement for :func:`azure_auth.auth.discovery.discover_tenant`."""
 
     cloud: Cloud = COMMERCIAL
+    region_sub_scope: str | None = None
     error: Exception | None = None
     tenants: list[str] = field(default_factory=list)
 
@@ -134,4 +151,4 @@ class FakeDiscovery:
         self.tenants.append(tenant)
         if self.error is not None:
             raise self.error
-        return TenantInfo("00000000-0000-0000-0000-000000000001", self.cloud)
+        return TenantInfo(tenant_guid(tenant), self.cloud, region_sub_scope=self.region_sub_scope)

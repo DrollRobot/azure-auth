@@ -157,7 +157,8 @@ def discover_tenant(
     if len(tenants) > 1:
         listed = "; ".join(f"{info.tenant_id} in {info.cloud.name}" for info in tenants)
         raise AmbiguousTenant(
-            f"{tenant!r} names a different tenant in each cloud: {listed}. Pass cloud= to choose.",
+            f"{tenant!r} names a different tenant in each cloud: {listed}. Pass the GUID of the "
+            "one you mean, with its cloud=.",
             tenant=tenant,
             candidates=tenants,
         )

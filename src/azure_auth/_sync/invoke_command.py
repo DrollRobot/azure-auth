@@ -186,11 +186,12 @@ class InvokeCommandClient(ResourceClient):
     def _tenant(self) -> str:
         """Return the tenant GUID for the request path.
 
-        The service wants the GUID, and the context may have been given a domain name, so
-        the GUID is read from the ``tid`` claim of the access token.
+        The service wants the GUID. It is read from the ``tid`` claim of the access token,
+        which names the tenant the token is really for; the context's own GUID stands in
+        when the token cannot be decoded.
 
         Returns:
-            The tenant GUID, or the context's tenant id when the token cannot be decoded.
+            The tenant GUID.
         """
         if self._tenant_guid is None:
             token = self._tokens.acquire_token(self._scopes, client_id=self._client_id)

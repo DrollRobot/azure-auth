@@ -57,7 +57,14 @@ it uses that cloud's endpoints.
 
 ```python
 auth = AuthContext("contoso.us", username="admin@contoso.us")  # found to be in GCC High
+auth.tenant_id  # the tenant's GUID: what the context signs in to and what errors carry
+auth.tenant_name  # "contoso.us", as given, for messages and logs
+auth.tenant  # everything the lookup found, see below; None when no lookup was made
 ```
+
+The context holds its tenant as the GUID, whichever way it was named, because that is how
+the Azure SDK clients and Entra itself name it: a Key Vault challenge names the tenant by
+GUID, and it must come back to the same context.
 
 | Cloud | `cloud=` | Sign-in | Graph |
 |---|---|---|---|
@@ -69,7 +76,8 @@ auth = AuthContext("contoso.us", username="admin@contoso.us")  # found to be in 
 The Resource Manager, Exchange and Security & Compliance hosts are in `azure_auth.clouds`,
 with each cloud as a constant (`COMMERCIAL`, `US_GOV`, `US_GOV_DOD`, `CHINA`).
 
-Pass `cloud=` to skip the lookup, or to override it. The cloud is then taken as given and
+Pass `cloud=` with the tenant's GUID to skip the lookup, or with a domain name to override
+what it finds; the name is still looked up, for the GUID. The cloud is then taken as given and
 not checked, so a wrong one fails when it is used. An app sign-in with a certificate is
 refused at once (`AADSTS700023`). A user sign-in succeeds, and the first request fails: the
 wrong cloud's Graph answers `401 InvalidAuthenticationToken: InvalidCloudInstance`.
@@ -79,8 +87,8 @@ The lookup fails the constructor when it cannot place the tenant:
 - `TenantNotFound`: no tenant has that id or domain name in any cloud.
 - `AmbiguousTenant`: each cloud is a separate directory, so one name can be a different
   tenant in each of two clouds: a domain verified in a commercial and a China tenant, or a
-  GUID that is both a commercial and a US government tenant. The error lists them; pass
-  `cloud=` to choose.
+  GUID that is both a commercial and a US government tenant. The error lists them; pass the
+  GUID of the one you mean with its `cloud=`.
 - `ValueError`: `common`, `organizations` and `consumers` name no single tenant, so they
   need `cloud=`.
 
@@ -99,6 +107,18 @@ tenant.cloud.name  # "Commercial", "USGov", "USGovDoD" or "China"
 tenant.cloud.graph  # that cloud's Graph, and every other endpoint in the table
 tenant.region_sub_scope  # "GCC" for a GCC tenant, "DODCON" for GCC High, "DOD" for DoD
 tenant.document  # the whole OpenID Connect discovery document
+```
+
+A context keeps the same answer as `auth.tenant`, so nothing has to be looked up twice. To
+look first and sign in after -- to refuse a cloud, say -- hand the answer to the context in
+place of the tenant's name, and it makes no lookup of its own:
+
+```python
+tenant = discover_tenant("contoso.com")
+if tenant.cloud is CHINA:
+    raise SystemExit("no service in this cloud")
+auth = AuthContext(tenant, username="admin@contoso.com")
+auth.tenant is tenant  # True
 ```
 
 It raises `TenantNotFound` and `AmbiguousTenant` as above.
@@ -189,8 +209,8 @@ plain text and never silently switches to the memory cache.
 ## Multi-tenant access (GDAP)
 
 `auth.for_tenant(tenant_id)` returns a sibling context for another tenant. It shares the
-credentials, the cache, the username and the cloud, and makes no network call, so it is cheap
-to call in a loop.
+credentials, the cache, the username and the cloud. A GUID costs no network call, so it is
+cheap to call in a loop; a domain name is looked up once, for its GUID, and remembered.
 
 ```python
 home = GraphClient(auth, scopes=["DelegatedAdminRelationship.Read.All"])

@@ -259,13 +259,12 @@ def test_warnings_are_collected_from_the_header_and_the_body(auth: AuthContext) 
 
 def test_undecodable_token_falls_back_to_the_configured_tenant(fake_msal: FakeMsal) -> None:
     recorder = Recorder([ok({"value": []})])
-    exchange = ExchangeClient(
-        AuthContext("tenant-guid", username=USER), transport=recorder.transport
-    )
+    guid = "11111111-2222-3333-4444-555555555555"
+    exchange = ExchangeClient(AuthContext(guid, username=USER), transport=recorder.transport)
 
     exchange.run("Get-Mailbox")
 
-    assert "/adminapi/beta/tenant-guid/InvokeCommand" in str(recorder.requests[0].url)
+    assert f"/adminapi/beta/{guid}/InvokeCommand" in str(recorder.requests[0].url)
 
 
 @pytest.mark.parametrize(

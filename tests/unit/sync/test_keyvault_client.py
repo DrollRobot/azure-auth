@@ -11,7 +11,7 @@ import pytest
 
 from azure_auth import AuthContext
 from azure_auth._sync.keyvault import KeyVaultClient
-from tests.fakes import FakeMsal
+from tests.fakes import FakeMsal, tenant_guid
 
 pytestmark = pytest.mark.unit
 
@@ -67,7 +67,9 @@ def test_sdk_clients_get_the_vault_and_the_async_credential(vault: KeyVaultClien
     assert vault.vault_url == secrets.target == certificates.target == VAULT
     assert secrets.credential is certificates.credential
     # The async wrapper hands over ``auth``; the generated blocking one hands over ``auth``.
-    assert getattr(secrets.credential, "sync", secrets.credential).tenant_id == "tenant"
+    assert getattr(secrets.credential, "sync", secrets.credential).tenant_id == tenant_guid(
+        "tenant"
+    )
 
 
 def test_get_secret(vault: KeyVaultClient) -> None:

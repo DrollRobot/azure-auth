@@ -424,6 +424,12 @@ async def test_a_discovered_context_reaches_graph_in_its_cloud(cache_path: Path)
     assert graph.base_url.startswith(auth.cloud.graph)
     assert token_claims(token.token)["tid"] == tenant_guid
     assert [item["id"] for item in organization] == [tenant_guid]
+    # The context holds the tenant the token is really for, by GUID, and remembers the name.
+    assert auth.tenant_id == tenant_guid
+    assert auth.tenant_name == USERNAME.rsplit("@", 1)[-1]
+    assert auth.tenant is not None
+    assert (auth.tenant.tenant_id, auth.tenant.cloud) == (tenant_guid, auth.cloud)
+    assert auth.for_tenant(tenant_guid) is auth
 
 
 @needs_user

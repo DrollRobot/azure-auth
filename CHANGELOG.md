@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The context keeps what the tenant lookup found: the tenant's ID, its cloud, and whether it
+  is a GCC tenant. A tenant looked up first, with `discover_tenant()`, can be handed to the
+  context in place of its name, so nothing is looked up twice.
+
+### Changed
+
+- A context names its tenant by ID, whether it was given the ID or a domain name; the name
+  given is kept beside it for messages. Naming the cloud skips the lookup only with the ID.
+- Another tenant can be named to `for_tenant()` by domain name, which is looked up once.
+
+### Fixed
+
+- A context given a domain name could not sign in for Key Vault, or any other Azure SDK
+  client that names the tenant by ID; it reported that a sign-in was needed instead.
+
 ## [0.2.0] - 2026-09-29 - every Microsoft cloud, Exchange validated
 
 ### Added

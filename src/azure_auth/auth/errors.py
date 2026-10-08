@@ -161,20 +161,24 @@ def error_from_msal_result(
     *,
     tenant_id: str,
     scopes: Sequence[str],
+    tenant_name: str | None = None,
 ) -> AuthError:
     """Translate a failed MSAL result into an exception.
 
     Args:
         result: The dictionary MSAL returned, or ``None`` when MSAL found nothing to return.
-        tenant_id: Tenant the token was requested from.
+        tenant_id: Tenant the token was requested from, as the exception carries it.
         scopes: Scopes that were requested.
+        tenant_name: The tenant as the message names it, when a domain name reads better
+            than the GUID. Defaults to ``tenant_id``.
 
     Returns:
         The exception to raise. The MSAL dictionary itself is never exposed.
     """
+    tenant_name = tenant_name or tenant_id
     if not result:
         return InteractionRequired(
-            f"No cached token for tenant {tenant_id}; the user must sign in.",
+            f"No cached token for tenant {tenant_name}; the user must sign in.",
             tenant_id=tenant_id,
             scopes=scopes,
         )
@@ -192,7 +196,7 @@ def error_from_msal_result(
     if error in _DECLINED_ERRORS:
         return AuthError(
             f"{message}. No token was issued for {' '.join(scopes) or '(no scopes)'} in tenant "
-            f"{tenant_id}. Either the sign-in was cancelled, or the account is not allowed to "
+            f"{tenant_name}. Either the sign-in was cancelled, or the account is not allowed to "
             "consent to these scopes and was shown 'Need admin approval' -- in which case an "
             "administrator has to grant them before this account can use them."
         )
