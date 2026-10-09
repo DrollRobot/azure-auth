@@ -17,9 +17,10 @@ from azure_auth.sync import GraphClient as BlockingGraphClient
 from tests.live.support import (
     USERNAME,
     cached_user_auth,
+    ensure_sign_in,
+    live_user_auth,
     needs_graph,
     needs_user,
-    require_cached_sign_in,
     token_scopes,
 )
 
@@ -103,7 +104,7 @@ async def test_graph_paging_follows_next_links(user_auth: AuthContext) -> None:
     """
     page_size = 5
     async with GraphClient(user_auth, scopes=["Application.Read.All"]) as graph:
-        require_cached_sign_in(graph)
+        ensure_sign_in(graph)
         pages = 0
         async for page in graph.iter_pages("/servicePrincipals", params={"$top": str(page_size)}):
             pages += 1
@@ -141,7 +142,7 @@ async def test_post_sends_a_batch_and_the_answers_come_back_in_order(
         {"method": "GET", "url": "/users/00000000-0000-0000-0000-000000000000"},
     ]
     async with GraphClient(user_auth, scopes=["User.Read"]) as graph:
-        require_cached_sign_in(graph)
+        ensure_sign_in(graph)
         responses = await graph.batch(requests)
 
     assert [response["id"] for response in responses] == ["0", "1", "2"]
@@ -172,7 +173,7 @@ async def test_default_scope_carries_only_what_the_tenant_already_granted(
     whatever was granted when it was issued, not for what is granted now.
     """
     async with GraphClient(user_auth) as graph:
-        require_cached_sign_in(graph)
+        ensure_sign_in(graph)
         token = await user_auth.aio.acquire_token(
             graph.scopes, client_id=graph.client_id, force_refresh=True
         )
@@ -221,7 +222,7 @@ async def test_graph_throttling_is_waited_out(user_auth: AuthContext) -> None:
     async with GraphClient(
         user_auth, scopes=["AuditLog.Read.All"], transport=counter, max_retries=THROTTLE_RETRIES
     ) as graph:
-        require_cached_sign_in(graph)
+        ensure_sign_in(graph)
         while sent < THROTTLE_MAX_REQUESTS and not counter.throttled:
             wave = min(THROTTLE_BURST, THROTTLE_MAX_REQUESTS - sent)
             # $top=1 keeps every answer tiny: the limit counts requests, not what they return.
@@ -260,7 +261,7 @@ def test_the_blocking_client_calls_graph(cache_path: Path) -> None:
     The blocking clients are generated from the asynchronous ones and unit-tested through the
     same generated tests, but none had ever made a live call.
     """
-    with BlockingGraphClient(cached_user_auth(cache_path), scopes=["User.Read"]) as graph:
-        require_cached_sign_in(graph)
+    with BlockingGraphClient(live_user_auth(cache_path), scopes=["User.Read"]) as graph:
+        ensure_sign_in(graph)
         me = graph.get("/me", params={"$select": "userPrincipalName"})
     assert me["userPrincipalName"].lower() == USERNAME.lower()

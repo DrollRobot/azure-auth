@@ -1,7 +1,7 @@
 """The Exchange and Security & Compliance clients against the real ``InvokeCommand`` endpoint.
 
-Every test here uses the delegated sign-in to the Exchange Online PowerShell client id that
-``test_sign_in.py`` leaves in the shared cache, and none can prompt. Together they cover what
+Every test here uses the delegated sign-in to the Exchange Online PowerShell client id from
+the shared cache, signing in when there is none. Together they cover what
 a delegated user does with the client: the token is theirs and for the right resource, a
 cmdlet runs, results page, parameters of every kind reach the cmdlet, failures come back as
 :class:`InvokeCommandError` with the cmdlet's own reason, a domain name works as the tenant,
@@ -29,9 +29,9 @@ from azure_auth.sync import IppsClient as BlockingIppsClient
 from tests.live.support import (
     USERNAME,
     _flag,
-    cached_user_auth,
+    ensure_sign_in,
+    live_user_auth,
     needs_user,
-    require_cached_sign_in,
     token_claims,
     token_scopes,
     token_user,
@@ -100,7 +100,7 @@ async def test_exchange_runs_a_cmdlet_as_the_signed_in_user(user_auth: AuthConte
     calling, and that a string parameter reaches the cmdlet.
     """
     async with ExchangeClient(user_auth) as exchange:
-        require_cached_sign_in(exchange)
+        ensure_sign_in(exchange)
         token = await user_auth.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
         config = await exchange.run("Get-OrganizationConfig")
         mailbox = await exchange.run("Get-Mailbox", Identity=USERNAME)
@@ -131,7 +131,7 @@ async def test_exchange_paging_follows_next_links(user_auth: AuthContext) -> Non
     discovery mailbox count, licences do not.
     """
     async with ExchangeClient(user_auth, page_size=PAGE_SIZE) as exchange:
-        require_cached_sign_in(exchange)
+        ensure_sign_in(exchange)
         pages = 0
         paged: list[str] = []
         async for page in exchange.iter_pages("Get-Recipient"):
@@ -164,7 +164,7 @@ async def test_cmdlet_parameters_of_every_kind_reach_the_cmdlet(user_auth: AuthC
     have refused with a 400.
     """
     async with ExchangeClient(user_auth) as exchange:
-        require_cached_sign_in(exchange)
+        ensure_sign_in(exchange)
         everyone = await exchange.run("Get-Recipient")
         by_type = collections.Counter(recipient["RecipientTypeDetails"] for recipient in everyone)
         if len(by_type) < 2:
@@ -202,7 +202,7 @@ async def test_cmdlet_failures_carry_the_cmdlets_own_reason(user_auth: AuthConte
     """
     missing = str(uuid.uuid4())
     async with ExchangeClient(user_auth) as exchange:
-        require_cached_sign_in(exchange)
+        ensure_sign_in(exchange)
         with pytest.raises(InvokeCommandError) as not_found:
             await exchange.run("Get-Mailbox", Identity=missing)
         with pytest.raises(InvokeCommandError) as bad_parameter:
@@ -244,9 +244,9 @@ async def test_a_domain_name_works_as_the_tenant(cache_path: Path) -> None:
     domain = USERNAME.rsplit("@", 1)[1]
     recording = Recording()
     async with ExchangeClient(
-        cached_user_auth(cache_path, tenant=domain), transport=recording
+        live_user_auth(cache_path, tenant=domain), transport=recording
     ) as exchange:
-        require_cached_sign_in(exchange)
+        ensure_sign_in(exchange)
         config = await exchange.run("Get-OrganizationConfig")
 
     assert config
@@ -275,7 +275,7 @@ async def test_the_reconstructed_headers_are_not_required(
     """
     recording = Recording(*dropped)
     async with ExchangeClient(user_auth, transport=recording) as exchange:
-        require_cached_sign_in(exchange)
+        ensure_sign_in(exchange)
         config = await exchange.run("Get-OrganizationConfig")
 
     assert config
@@ -294,7 +294,7 @@ async def test_ipps_runs_a_cmdlet_through_the_regional_host(user_auth: AuthConte
     the cmdlet (measured 2026-09-25), unlike Exchange's empty one.
     """
     async with IppsClient(user_auth) as ipps:
-        require_cached_sign_in(ipps)
+        ensure_sign_in(ipps)
         labels = await ipps.run("Get-Label")
         with pytest.raises(InvokeCommandError) as unknown:
             await ipps.run("Get-NoSuchCmdlet")
@@ -315,8 +315,8 @@ async def test_ipps_runs_a_cmdlet_through_the_regional_host(user_auth: AuthConte
 @needs_exchange
 def test_the_blocking_exchange_client_runs_a_cmdlet(cache_path: Path) -> None:
     """The generated blocking Exchange client works against the real service."""
-    with BlockingExchangeClient(cached_user_auth(cache_path)) as exchange:
-        require_cached_sign_in(exchange)
+    with BlockingExchangeClient(live_user_auth(cache_path)) as exchange:
+        ensure_sign_in(exchange)
         config = exchange.run("Get-OrganizationConfig")
     assert config
     assert config[0]["Name"]
@@ -326,8 +326,8 @@ def test_the_blocking_exchange_client_runs_a_cmdlet(cache_path: Path) -> None:
 @needs_ipps
 def test_the_blocking_ipps_client_runs_a_cmdlet(cache_path: Path) -> None:
     """The generated blocking Security & Compliance client follows the redirect too."""
-    with BlockingIppsClient(cached_user_auth(cache_path)) as ipps:
-        require_cached_sign_in(ipps)
+    with BlockingIppsClient(live_user_auth(cache_path)) as ipps:
+        ensure_sign_in(ipps)
         labels = ipps.run("Get-Label")
     assert isinstance(labels, list)
     assert httpx.URL(ipps.base_url).host.endswith(f".{httpx.URL(ipps.resource).host}")
@@ -395,7 +395,7 @@ async def test_exchange_creates_changes_and_removes_an_object(user_auth: AuthCon
     name = f"azure-auth live test {marker}"
     address = f"azure-auth-live-test-{marker}@example.com"
     async with ExchangeClient(user_auth) as exchange:
-        require_cached_sign_in(exchange)
+        ensure_sign_in(exchange)
         created = await exchange.run("New-MailContact", Name=name, ExternalEmailAddress=address)
         assert len(created) == 1, created
         guid = created[0]["Guid"]

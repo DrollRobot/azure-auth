@@ -91,6 +91,7 @@ markers = [
     # Dependency
     "live: requires a real external resource (network, live tenant, secrets, third-party API)",
     "interactive: requires a human at this desktop to complete a sign-in prompt",
+    "cached_credential: tests signing in from the cache; runs after the other live tests",
     "destructive_local: mutates the host/device; guarded to prevent accidental execution",
     "destructive_remote: mutates a remote/external system; guarded to prevent accidental execution",
     # Performance

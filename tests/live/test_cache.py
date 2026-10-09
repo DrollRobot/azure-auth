@@ -15,12 +15,20 @@ from tests import cache_aging
 from tests.live.support import (
     _flag,
     cached_user_auth,
+    ensure_sign_in,
+    ensure_token,
+    live_user_auth,
     needs_graph,
     needs_user,
-    require_cached_sign_in,
 )
 
-pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio, needs_graph]
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.live,
+    pytest.mark.cached_credential,
+    pytest.mark.anyio,
+    needs_graph,
+]
 
 # What the refresh tests sign in for. Anything every user may consent to would do.
 REFRESH_SCOPES = ["User.Read"]
@@ -46,8 +54,7 @@ async def assert_refreshed_without_prompting(
     """
     # Prompting being off is what proves the new token came from the refresh token. With it
     # on, a broken refresh would open a browser, somebody would sign in, and the test would
-    # pass. Live contexts already have it off; it is set again so this check never depends
-    # on how the caller built its context.
+    # pass. Live contexts may prompt, so it is switched off here.
     auth._interactive_allowed = False
     try:
         me = await graph.get("/me", params={"$select": "id"})
@@ -63,10 +70,10 @@ async def assert_refreshed_without_prompting(
 @needs_user
 async def test_disk_cache_makes_the_second_run_silent(cache_path: Path) -> None:
     # A second context on the same cache file stands in for a second script run. It cannot
-    # prompt, which proves the token really came from the cache.
+    # prompt, which proves the token really came from the cache the first one filled.
     second_run = cached_user_auth(cache_path)
     async with GraphClient(second_run, scopes=["User.Read"]) as graph:
-        require_cached_sign_in(graph)
+        ensure_token(live_user_auth(cache_path), graph.scopes, graph.client_id)
         me = await graph.get("/me", params={"$select": "id"})
     assert me["id"]
 
@@ -84,9 +91,9 @@ async def test_an_expired_access_token_is_refreshed_without_prompting(cache_path
     A second context stands in for the later run. The first one would not do: its in-process
     memo still holds the token with its real expiry, so it would never look at the cache.
     """
-    auth = cached_user_auth(cache_path)
+    auth = live_user_auth(cache_path)
     async with GraphClient(auth, scopes=REFRESH_SCOPES) as graph:
-        require_cached_sign_in(graph)
+        ensure_sign_in(graph)
         me = await graph.get("/me", params={"$select": "id"})
         expiring = await auth.aio.acquire_token(graph.scopes, client_id=graph.client_id)
 
@@ -112,9 +119,9 @@ async def test_a_real_token_lifetime_ends_in_a_silent_refresh(cache_path: Path) 
     so it also covers what the fast test cannot: the context's in-process memo declining a
     token within ``_REFRESH_MARGIN_SECONDS`` of expiry, and handing the request to MSAL.
     """
-    auth = cached_user_auth(cache_path)
+    auth = live_user_auth(cache_path)
     async with GraphClient(auth, scopes=REFRESH_SCOPES) as graph:
-        require_cached_sign_in(graph)
+        ensure_sign_in(graph)
         me = await graph.get("/me", params={"$select": "id"})
         expiring = await auth.aio.acquire_token(graph.scopes, client_id=graph.client_id)
 

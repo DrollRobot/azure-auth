@@ -29,9 +29,9 @@ from tests.live.support import (
     TENANT,
     USERNAME,
     _flag,
+    ensure_token,
     needs_exchange_sign_in,
     needs_user,
-    require_cached_sign_in,
     sign_in_step,
     token_claims,
     token_user,
@@ -145,6 +145,7 @@ async def test_a_broker_sign_in_is_the_brokers(
 
 
 @needs_user
+@pytest.mark.cached_credential
 @pytest.mark.parametrize(("make_client", "application"), BROKER_CLIENTS)
 async def test_the_broker_renews_a_token_without_prompting(
     make_client: Callable[[AuthContext], ResourceClient],
@@ -154,12 +155,13 @@ async def test_the_broker_renews_a_token_without_prompting(
     """A context that may not prompt gets a new token from the broker's sign-in.
 
     ``force_refresh`` skips the cached access token, and MSAL has no refresh token of its own,
-    so the token can only come from the broker.
+    so the token can only come from the broker. When the broker holds no sign-in, a context
+    that may prompt makes one first.
     """
     auth = broker_auth(broker_cache_path)
     auth._interactive_allowed = False
     async with make_client(auth) as client:
-        require_cached_sign_in(client)
+        ensure_token(broker_auth(broker_cache_path), client.scopes, client.client_id)
         token = await auth.aio.acquire_token(
             client.scopes, client_id=client.client_id, force_refresh=True
         )

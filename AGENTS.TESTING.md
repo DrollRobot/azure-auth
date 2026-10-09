@@ -20,6 +20,7 @@
 | `functional` | Purpose | Tests behavior/output of a feature without regard to internal structure. |
 | `live` | Dependency | Requires a real external resource — network, live tenant, secrets, third-party API. |
 | `interactive` | Dependency | Requires a human at this desktop to complete a sign-in prompt. Tell the user a prompt is coming before starting one. |
+| `cached_credential` | Dependency | Tests signing in from the cache, so it must not prompt. Runs after the other live tests. |
 | `destructive_local` | Dependency | Mutates the host/device running pytest. Skipped by default. |
 | `destructive_remote` | Dependency | Mutates a remote/external system. Skipped by default. |
 | `slow` | Performance | Long-running: anything that would push the pre-push run past 60 seconds. See below. |

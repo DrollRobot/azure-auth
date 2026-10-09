@@ -53,11 +53,11 @@ from tests.live.support import (
     THUMBPRINT,
     USERNAME,
     _flag,
+    ensure_sign_in,
     live_cloud,
     needs_app,
     needs_graph,
     needs_user,
-    require_cached_sign_in,
     sign_in_step,
     token_claims,
     walkthrough,
@@ -340,16 +340,14 @@ def test_an_app_sign_in_reaches_its_clouds_token_server() -> None:
 
 
 def discovered_auth(cache_path: Path) -> AuthContext:
-    """A context built by a caller who knows only the user: the tenant is their domain.
-
-    The context never prompts, so the tests below use the sign-ins the interactive tests left
-    in the shared cache.
-    """
-    auth = AuthContext(
-        USERNAME.rsplit("@", 1)[-1], username=USERNAME, cache="disk", cache_path=cache_path
+    """A context built by a caller who knows only the user: the tenant is their domain."""
+    return AuthContext(
+        USERNAME.rsplit("@", 1)[-1],
+        username=USERNAME,
+        cache="disk",
+        cache_path=cache_path,
+        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
-    auth._interactive_allowed = False
-    return auth
 
 
 @needs_user
@@ -362,10 +360,16 @@ async def test_a_cloud_of_the_callers_own_is_used_as_given(cache_path: Path) -> 
     cloud outside the table is taken as given.
     """
     custom = dataclasses.replace(live_cloud(), name="Custom")
-    auth = AuthContext(TENANT, username=USERNAME, cloud=custom, cache="disk", cache_path=cache_path)
-    auth._interactive_allowed = False
+    auth = AuthContext(
+        TENANT,
+        username=USERNAME,
+        cloud=custom,
+        cache="disk",
+        cache_path=cache_path,
+        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+    )
     async with GraphClient(auth, scopes=BASELINE_SCOPES) as graph:
-        require_cached_sign_in(graph)
+        ensure_sign_in(graph)
         organization = await graph.get_all("/organization", params={"$select": "id"})
 
     assert auth.cloud is custom
@@ -419,7 +423,7 @@ def test_the_configured_tenant_is_the_same_by_id_and_by_the_users_domain() -> No
 async def test_a_discovered_context_reaches_graph_in_its_cloud(cache_path: Path) -> None:
     auth = discovered_auth(cache_path)
     async with GraphClient(auth, scopes=BASELINE_SCOPES) as graph:
-        require_cached_sign_in(graph)
+        ensure_sign_in(graph)
         token = await auth.aio.acquire_token(graph.scopes, client_id=graph.client_id)
         organization = await graph.get_all("/organization", params={"$select": "id"})
 
@@ -442,7 +446,7 @@ async def test_a_discovered_context_reaches_graph_in_its_cloud(cache_path: Path)
 async def test_a_discovered_context_runs_exchange_cmdlets_in_its_cloud(cache_path: Path) -> None:
     auth = discovered_auth(cache_path)
     async with ExchangeClient(auth) as exchange:
-        require_cached_sign_in(exchange)
+        ensure_sign_in(exchange)
         token = await auth.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
         config = await exchange.run("Get-OrganizationConfig")
 
@@ -458,7 +462,7 @@ async def test_a_discovered_context_runs_compliance_cmdlets_in_its_cloud(
 ) -> None:
     auth = discovered_auth(cache_path)
     async with IppsClient(auth) as ipps:
-        require_cached_sign_in(ipps)
+        ensure_sign_in(ipps)
         labels = await ipps.run("Get-Label")
 
     assert isinstance(labels, list)

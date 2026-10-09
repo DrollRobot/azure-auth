@@ -93,9 +93,9 @@ async def test_interactive_login_to_another_first_party_client(
 
     Each resource client defaults to its own Microsoft application, and a refresh token for
     one cannot be spent on another, so each needs its own interactive sign-in. This does that
-    sign-in, and then checks what the live tests rely on: a context that may not prompt finds
-    the token in the cache, and the token is for the configured user and the client's
-    resource. There is no ``/me`` on these resources, so the token itself is the witness.
+    sign-in, and then checks that a context that may not prompt finds the token in the cache,
+    and that the token is for the configured user and the client's resource. There is no
+    ``/me`` on these resources, so the token itself is the witness.
     """
     walkthrough(sign_in_step("browser"), "Consent screen, if shown: click Accept.")
     auth = AuthContext(

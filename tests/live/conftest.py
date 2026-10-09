@@ -16,22 +16,19 @@ tests can leave the tenant unusable for the next run.
 Restoring the baseline is not marked ``interactive``, although it can prompt. It has to run
 for every live run, and marking it would make it optional. It is silent when the tenant is
 already at the baseline, which is the normal case, and prompts once when a baseline scope is
-missing; so a ``-m "not interactive"`` run can open one sign-in at the start if the tenant was
-disturbed. Taking scopes out needs no prompt, but it changes the tenant, so it is only done to
+missing. Taking scopes out needs no prompt, but it changes the tenant, so it is only done to
 a tenant marked disposable; on any other the run fails and says what is beyond the baseline.
 
 Tests marked ``interactive`` cannot pass without a person: a forced sign-in, which shows the
 account picker, for each first-party client id and through the broker, and the consent test,
-which signs in a second user. Every other user-flow test needs nobody. Most only *use* the
-signed-in account: they take their token from the encrypted disk cache, which outlives the
-run, and skip when there is none. So do the prompts once, walk away, and run the rest
-unattended for as long as the refresh token lasts::
+which signs in a second user. Every other user-flow test takes its token from the encrypted
+disk cache, which outlives the run, and signs in when there is none
+(:func:`~tests.live.support.ensure_sign_in`)::
 
-    uv run --env-file .env pytest tests/live -s -m interactive --run-destructive-remote --no-cov
-    uv run --env-file .env pytest tests/live -s -m "not interactive" --no-cov  # unattended
+    uv run --env-file .env pytest tests/live -s --run-destructive-remote --no-cov
 
 The ``interactive`` tests are collected first, so every prompt comes in one stretch at the
-start. That is a convenience for the person at the desktop; nothing depends on it.
+start, and the ``cached_credential`` tests last, when the cache is full.
 """
 
 from __future__ import annotations
@@ -43,15 +40,22 @@ import pytest
 
 from azure_auth import AuthContext
 from azure_auth.auth.cache import default_cache_path
-from tests.live.support import GRAPH, TENANT, USERNAME, cached_user_auth, restore_baseline
+from tests.live.support import GRAPH, TENANT, USERNAME, live_user_auth, restore_baseline
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Put the ``interactive`` tests first, so the prompts come in one stretch.
+    """Put the ``interactive`` tests first, and the ``cached_credential`` tests last.
 
+    The prompts come in one stretch, and the tests of signing in from the cache find it full.
     A stable sort: within each group the collection order stands.
     """
-    items.sort(key=lambda item: 0 if "interactive" in item.keywords else 1)
+
+    def group(item: pytest.Item) -> int:
+        if "interactive" in item.keywords:
+            return 0
+        return 2 if "cached_credential" in item.keywords else 1
+
+    items.sort(key=group)
 
 
 @pytest.fixture(scope="session")
@@ -115,4 +119,4 @@ def cache_path(_live_cache_path: Path) -> Path:
 
 @pytest.fixture
 def user_auth(cache_path: Path) -> AuthContext:
-    return cached_user_auth(cache_path)
+    return live_user_auth(cache_path)

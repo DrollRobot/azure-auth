@@ -1,10 +1,10 @@
 """One home-tenant sign-in, then silent sibling contexts on each GDAP managed tenant.
 
-Every test here only reads, so it can run against any customer tenant. None can open a
-sign-in window in a customer tenant: a sibling context never prompts, so no consent screen can
-come up there. The Exchange tests send every request through
-:class:`~tests.live.support.ReadOnlyCmdlets`, which fails the test, without sending, any
-request that is not one of its read-only cmdlets.
+Every test here only reads, so it can run against any customer tenant. A sign-in window
+can open only in the home tenant: a sibling context, which is what reaches a customer tenant,
+never prompts, so no consent screen can come up there. The Exchange tests send every request
+through :class:`~tests.live.support.ReadOnlyCmdlets`, which fails the test, without sending,
+any request that is not one of its read-only cmdlets.
 """
 
 from __future__ import annotations
@@ -28,12 +28,12 @@ from tests.live.support import (
     USERNAME,
     ReadOnlyCmdlets,
     _flag,
-    cached_user_auth,
+    ensure_sign_in,
+    ensure_token,
+    live_user_auth,
     needs_gdap_tenant,
     needs_graph,
     needs_user,
-    require_cached_sign_in,
-    require_cached_token,
     token_claims,
     token_user,
 )
@@ -48,7 +48,7 @@ async def test_gdap_loop_reaches_managed_tenants_without_prompting(
     user_auth: AuthContext,
 ) -> None:
     async with GraphClient(user_auth, scopes=GDAP_SCOPES) as home:
-        require_cached_sign_in(home)
+        ensure_sign_in(home)
         managed = await home.list_managed_tenant_ids()
     assert managed, "the home tenant manages no tenants through GDAP"
 
@@ -88,7 +88,7 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     same tenant: the answer came from the customer, not from home.
     """
     async with ExchangeClient(user_auth) as home:
-        require_cached_sign_in(home)
+        ensure_sign_in(home)
     sibling = user_auth.for_tenant(GDAP_TENANT)
     assert sibling is not user_auth, "AZURE_AUTH_TEST_GDAP_TENANT_ID names the home tenant"
 
@@ -118,9 +118,9 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
 @needs_gdap_tenant
 def test_the_blocking_exchange_client_reads_a_customers_exchange(cache_path: Path) -> None:
     """The generated blocking Exchange client reaches a customer through GDAP too."""
-    home = cached_user_auth(cache_path)
+    home = live_user_auth(cache_path)
     sibling = home.for_tenant(GDAP_TENANT)
     with BlockingExchangeClient(sibling, transport=ReadOnlyCmdlets()) as exchange:
-        require_cached_token(home, exchange.scopes, exchange.client_id)
+        ensure_token(home, exchange.scopes, exchange.client_id)
         config = exchange.run("Get-OrganizationConfig")
     assert len(config) == 1

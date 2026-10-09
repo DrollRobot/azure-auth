@@ -190,13 +190,12 @@ def graph_scopes(scopes: Iterable[str]) -> list[str]:
     return [f"{live_cloud().graph}/{scope}" for scope in scopes]
 
 
-def cached_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
-    """Return a user-flow context that can never open a sign-in prompt.
+def live_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
+    """Return the user-flow context the live tests use: the shared cache first, then a prompt.
 
-    Every test that only *uses* a signed-in account is marked ``live`` and not
-    ``interactive``, so it runs unattended under ``-m "not interactive"``. That is only true
-    if it cannot prompt, so its context has prompting switched off: tokens come from the
-    cache the interactive tests filled, or not at all.
+    A token comes from the encrypted disk cache when it holds one. When it does not, the
+    browser opens for the configured user. Sign in through :func:`ensure_sign_in`, so the
+    person at the desktop is called when a window is waiting.
 
     Args:
         cache_path: The shared disk cache.
@@ -208,44 +207,59 @@ def cached_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
     Returns:
         The context.
     """
+    return AuthContext(
+        tenant,
+        username=USERNAME,
+        cache="disk",
+        cache_path=cache_path,
+        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+    )
+
+
+def cached_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
+    """Return a user-flow context that can never open a sign-in prompt.
+
+    Only for what must not prompt: a test of signing in from the cache, where a prompt would
+    hide a cache that did not answer, and a check that Entra refuses something, where a
+    prompt would open a window instead of the refusal. Every other test uses
+    :func:`live_user_auth`.
+
+    Args:
+        cache_path: The shared disk cache.
+        tenant: As for :func:`live_user_auth`.
+
+    Returns:
+        The context.
+    """
     auth = AuthContext(tenant, username=USERNAME, cache="disk", cache_path=cache_path)
     auth._interactive_allowed = False
     return auth
 
 
-def require_cached_token(
-    auth: AuthContext, scopes: Sequence[str], client_id: str | None = None
-) -> None:
-    """Skip the test unless the context can get a token for the scopes from the cache.
+def ensure_token(auth: AuthContext, scopes: Sequence[str], client_id: str | None = None) -> None:
+    """Make sure the context can get a token for the scopes, signing in when it has to.
 
-    A missing sign-in is a missing precondition, like a missing environment variable, so it
-    skips rather than fails. Only the two errors that mean "somebody has to sign in or
-    consent" are treated that way; any other failure is left to fail the test.
-
-    The token is kept, so the test that follows uses it without asking again.
+    A cached sign-in answers silently. Without one, the browser or the broker's window opens,
+    and if it is still waiting after ``PROMPT_ALARM_SECONDS`` the person at the desktop is
+    called (:func:`walkthrough_if_waiting`). The token is kept, so the test that follows uses
+    it without asking again.
 
     Args:
-        auth: The context the test is about to use. It must not prompt.
+        auth: The context the test is about to use.
         scopes: The scopes the test's requests will need.
         client_id: The client id they will be made with; the context's default when omitted.
     """
-    try:
+    with walkthrough_if_waiting(sign_in_step("WAM" if auth._broker else "browser")):
         auth.acquire_token(scopes, client_id=client_id)
-    except (InteractionRequired, ConsentRequired) as error:
-        pytest.skip(
-            f"no cached sign-in for client {auth.resolve_client_id(client_id)} with"
-            f" {' '.join(scopes)} ({type(error).__name__}); sign in first with: pytest"
-            " tests/live -s -m interactive"
-        )
 
 
-def require_cached_sign_in(client: ResourceClient | BlockingResourceClient) -> None:
-    """Skip the test unless its client can get a token from the cache.
+def ensure_sign_in(client: ResourceClient | BlockingResourceClient) -> None:
+    """Make sure the client can get a token, signing in when it has to.
 
     Args:
-        client: The client the test is about to use. Its context must not prompt.
+        client: The client the test is about to use.
     """
-    require_cached_token(client.auth, client.scopes, client.client_id)
+    ensure_token(client.auth, client.scopes, client.client_id)
 
 
 # The only cmdlets the GDAP tests may run, each of which only reads, so the tests can run against
@@ -380,12 +394,13 @@ def walkthrough(*steps: str) -> None:
 def walkthrough_if_waiting(*steps: str) -> Iterator[None]:
     """Announce a sign-in only if it is still waiting after ``PROMPT_ALARM_SECONDS``.
 
-    Wrap a sign-in that is not forced but may still open a window: the baseline restore's.
-    A browser that is still signed in answers it by itself, and nobody needs calling for
-    that. So the sign-in is timed, and only when it is still waiting after the delay does
-    :func:`walkthrough` print the steps and sound the alarm. An alarm on every test would
-    teach the person to ignore it. A forced sign-in always waits for the person at the
-    account picker, so it calls :func:`walkthrough` before it starts.
+    Wrap a sign-in that is not forced but may still open a window: the baseline restore's,
+    and every test's first sign-in (:func:`ensure_token`). A browser that is still signed in
+    answers it by itself, and nobody needs calling for that. So the sign-in is timed, and
+    only when it is still waiting after the delay does :func:`walkthrough` print the steps and
+    sound the alarm. An alarm on every test would teach the person to ignore it. A forced
+    sign-in always waits for the person at the account picker, so it calls
+    :func:`walkthrough` before it starts.
 
     Args:
         *steps: What will appear, in order, and what to click.

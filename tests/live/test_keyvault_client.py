@@ -20,10 +20,10 @@ from azure_auth.sync.keyvault import KeyVaultClient as BlockingKeyVaultClient
 from tests.live.support import (
     KEYVAULT_SECRET_NAME,
     KEYVAULT_URL,
-    cached_user_auth,
+    ensure_token,
+    live_user_auth,
     needs_keyvault,
     needs_user,
-    require_cached_token,
 )
 
 pytestmark = [
@@ -35,8 +35,8 @@ pytestmark = [
 ]
 
 
-def require_vault_sign_in(auth: AuthContext) -> None:
-    """Skip the test unless the cache holds a sign-in that can get a token for the vault.
+def sign_in_to_vault(auth: AuthContext) -> None:
+    """Make sure the context can get a token for the vault, signing in when it has to.
 
     The client asks for its token through the Azure SDK, which learns the resource from the
     vault's challenge to a first, unauthenticated request. The scope is worked out here the
@@ -44,10 +44,10 @@ def require_vault_sign_in(auth: AuthContext) -> None:
     ``contoso.vault.azure.net`` is ``https://vault.azure.net/.default`` in every cloud.
 
     Args:
-        auth: The context the test is about to use. It must not prompt.
+        auth: The context the test is about to use.
     """
     host = urlsplit(KEYVAULT_URL).hostname or ""
-    require_cached_token(auth, [f"https://{host.partition('.')[2]}/.default"])
+    ensure_token(auth, [f"https://{host.partition('.')[2]}/.default"])
 
 
 async def test_a_secret_is_read_by_name_and_by_version(user_auth: AuthContext) -> None:
@@ -57,7 +57,7 @@ async def test_a_secret_is_read_by_name_and_by_version(user_auth: AuthContext) -
     the wrapper does not cover, is the witness: it supplies the value and the version id the
     wrapper is checked against.
     """
-    require_vault_sign_in(user_auth)
+    sign_in_to_vault(user_auth)
     async with SecretClient(KEYVAULT_URL, user_auth.aio) as sdk:
         expected = await sdk.get_secret(KEYVAULT_SECRET_NAME)
     has_value = bool(expected.value)
@@ -75,7 +75,7 @@ async def test_a_secret_is_read_by_name_and_by_version(user_auth: AuthContext) -
 
 async def test_a_missing_secret_is_not_found(user_auth: AuthContext) -> None:
     """A name the vault does not hold raises the SDK's not-found error, as documented."""
-    require_vault_sign_in(user_auth)
+    sign_in_to_vault(user_auth)
     async with KeyVaultClient(user_auth, KEYVAULT_URL) as vault:
         with pytest.raises(ResourceNotFoundError):
             await vault.get_secret(f"azure-auth-missing-{uuid.uuid4().hex}")
@@ -87,8 +87,8 @@ def test_the_blocking_client_reads_a_secret(cache_path: Path) -> None:
     It hands the SDK ``auth`` itself rather than ``auth.aio``, so it is a path of its own
     through the Azure SDK credential protocol.
     """
-    auth = cached_user_auth(cache_path)
-    require_vault_sign_in(auth)
+    auth = live_user_auth(cache_path)
+    sign_in_to_vault(auth)
     with BlockingKeyVaultClient(auth, KEYVAULT_URL) as vault:
         value = vault.get_secret(KEYVAULT_SECRET_NAME)
     has_value = bool(value)
