@@ -25,26 +25,6 @@ from tests.fakes import FakeMsal
 # ---------------------------------------------------------------------------
 # Destructive-test opt-in gates
 # ---------------------------------------------------------------------------
-#
-# Destructive tests mutate real state outside a test's own tmp_path and must
-# be opted into deliberately. "Local" and "remote" are gated completely
-# independently, at both layers, so that clearing one category can never
-# accidentally arm the other:
-#
-#   destructive_local:  mutates the host/device running pytest.
-#     Collection gate: --run-destructive-local.
-#     Execution gate:  DISPOSABLE_ENVIRONMENT=1, a MACHINE-wide env var --
-#     "is this machine disposable" does not depend on which project runs.
-#
-#   destructive_remote: mutates a remote/external system (cloud resource,
-#   database, API tenant, ...).
-#     Collection gate: --run-destructive-remote.
-#     Execution gate:  tests/verify_remote_disposable.py exits 0. The
-#     marker lives ON the remote target itself (see that script's docstring
-#     and AGENTS.TESTING.md), not in any local file, so repointing this
-#     project's configuration at a different/unmarked target fails closed on
-#     its own -- there is nothing local left over to accidentally leave
-#     enabled.
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

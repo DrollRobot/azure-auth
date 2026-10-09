@@ -52,32 +52,6 @@ uv run pytest -m "not live"         # offline tests
 uv run pytest                       # live and not-live tests (when credentialed)
 ```
 
-## Interactive tests
-Tests marked `interactive` open a sign-in prompt and need a human at the machine
-running pytest. Nothing gates them, because a missing human is obvious: the run
-blocks and then times out.
-
-`interactive` means the test cannot pass unless a person acts, every time it runs: a
-consent screen, a second user signing in, the account picker of a forced sign-in. A test
-that can pass with nobody there -- on a cached credential, or a sign-in that completes by
-itself -- is not marked, even if it opens a window. A test that only sometimes needs a person
-is made to always or never need one. The one step that might prompt and is not marked is
-restoring the consent baseline (`restore_baseline` in
-`tests/live/support.py`). It runs at the start of every live run and after every
-`interactive` or `destructive_remote` test, so marking it would make it optional. It brings
-the tenant to exactly the tests' baseline consent: silent when the tenant is already there,
-one prompt when a baseline scope is missing, and no prompt to take out scopes beyond it --
-which it does only to a tenant marked disposable, failing the run on any other.
-
-Agents should run them only when the user has said they are present, and should
-say a prompt is coming before starting one. Everything else can be run freely
-and repeatedly:
-```
-uv run pytest -m "not interactive"              # safe to repeat unattended
-uv run pytest -m "live and not interactive"     # live, but no prompt
-uv run pytest -m "interactive"                  # only with a user present
-```
-
 ## Destructive tests
 Destructive tests never run in the normal procedure above. Two independent
 categories, each needing BOTH its own layers (flag + gate).
@@ -130,25 +104,3 @@ If the user has approved running destructive tests in the current session, run f
 ```
 uv run pytest --run-destructive-remote
 ```
-
-#### The marker is generic, and shared between projects
-A disposable target is disposable for everyone. Nothing in the marker names a
-project, so a throwaway target can be marked once and every repository carrying
-this script pair recognises it — no project has to know anything about its
-neighbours. Treat the value as a cross-repo contract: changing it breaks every
-other repo using the convention.
-
-For an **Entra tenant**, the marker is this address in the organization's
-`marketingNotificationEmails`:
-```
-disposable-environment@example.invalid
-```
-`marketingNotificationEmails` is used because reading it needs only
-`Organization.Read.All`, so no project needs an extra permission just to check.
-The `.invalid` TLD is reserved by RFC 2606, so the address can never resolve or
-receive mail. It is the remote counterpart of `DISPOSABLE_ENVIRONMENT=1`: one
-says *this machine* is throwaway, the other says *this tenant* is.
-
-The value is defined once, as `SENTINEL` in `tests/verify_remote_disposable.py`;
-`scripts/mark_remote_disposable.py` imports it so the writer and reader cannot
-drift apart.
