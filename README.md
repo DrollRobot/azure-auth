@@ -13,13 +13,13 @@ The high-level goals of this package.
 
 - Supports delegated user and application auth.
 - For delegated user, supports interactive browser auth.
-- For applications, supports secret and non-exportable certificate auth.
+- For applications, supports secret and certificate auth. (including TMP-bound certs)
 - Provides clients for Graph, Exchange, IPPS, Azure (ARM) and Keyvault.
 - Azure auth object from this library can be passed to Azure SDKs.
 - Defaults to first-party Microsoft client ids, but can connect to any client id.
-- Supports saving the MSAL cache in memory, or on disk. Refuses to save tokens/credentials
-  unencrypted.
+- Supports saving the MSAL cache in memory, or on disk.
 - Supports async operation wherever possible.
+- Supports accessing multiple tenants through GDAP permissions.
 - Platform support: Windows, Linux, MacOs
 - Supports all Microsoft clouds: Commercial, Gov, DoD, China.
 
@@ -30,8 +30,8 @@ The high-level goals of this package.
 ### Todo
 
 - Supports using WAM credentials on Windows systems.
-  Built, but untested: `broker=True` has never been run against a live tenant, and whether a
-  broker sign-in can reach a managed tenant silently through `for_tenant()` is unverified.
+  Sign-in through the broker is live-tested. Still unverified: whether a broker sign-in can
+  reach a managed tenant silently through `for_tenant()`.
 - Exchange(done) and IPPS clients.
   Delegated user access is live-tested end to end: the sign-in, cmdlets with every kind of
   parameter, paging, failures reported with the cmdlet's own reason, the Security & Compliance
@@ -39,8 +39,8 @@ The high-level goals of this package.
   undocumented, `ResultSize` is not a cmdlet parameter there so results cannot be capped, and
   the app-only and GDAP paths have not been run.
 - Azure (ARM) and Keyvault clients.
-  Built, but untested: ARM needs a user with a subscription, Key Vault needs a vault.
-- Supports accessing multiple tenants through GDAP.
+  Key Vault is live-tested. ARM is built, but untested: it needs a user with a subscription.
+- Supports accessing multiple tenants through GDAP permissions.
   Built, but untested: live testing is on hold until an account with sign-in rights to a
   GDAP partner tenant is available.
 - Platform support: Linux, MacOs

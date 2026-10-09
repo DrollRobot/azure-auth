@@ -7,24 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-08 - Key Vault client, tenant held by ID
+
 ### Added
 
-- The context keeps what the tenant lookup found: the tenant's ID, its cloud, and whether it
-  is a GCC tenant. A tenant looked up first, with `discover_tenant()`, can be handed to the
-  context in place of its name, so nothing is looked up twice.
+- Key Vault client, for reading secrets.
 
 ### Changed
 
-- A context names its tenant by ID, whether it was given the ID or a domain name; the name
-  given is kept beside it for messages. Naming the cloud skips the lookup only with the ID.
-- Another tenant can be named to `for_tenant()` by domain name, which is looked up once.
+- AuthContext's tenant ID is always the tenant's GUID, even when it was initialized with a
+  domain name.
+- Switching to another tenant accepts a domain name as well as a GUID.
 
 ### Fixed
 
-- A context given a domain name could not sign in for Key Vault, or any other Azure SDK
-  client that names the tenant by ID; it reported that a sign-in was needed instead.
-- The Key Vault client could not make a request: a package the Azure SDK needs for async
-  HTTP was missing from the `keyvault` extra. The blocking client was unaffected.
+- Azure SDK clients failed with a sign-in error when the context was created with a domain
+  name.
+- Closing the Windows broker's sign-in window opened a browser instead of cancelling.
+- A forced sign-in could finish without showing the account picker.
 
 ## [0.2.0] - 2026-09-29 - every Microsoft cloud, Exchange validated
 
@@ -68,6 +68,7 @@ Also included, but not yet verified: application sign-in with a secret or certif
 Windows broker, clients for Azure Resource Manager, Exchange Online, Security & Compliance
 and Key Vault, blocking versions of every client, and GDAP access to managed tenants.
 
-[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/DrollRobot/azure-auth/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/DrollRobot/azure-auth/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DrollRobot/azure-auth/releases/tag/v0.1.0
