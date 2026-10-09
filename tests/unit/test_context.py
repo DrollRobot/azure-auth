@@ -11,6 +11,7 @@ from msal import BrowserInteractionTimeoutError
 
 from azure_auth import (
     AccountSelectionRequired,
+    AmbiguousTenant,
     AuthContext,
     AuthError,
     BrokerUnavailable,
@@ -722,6 +723,45 @@ def test_a_given_cloud_with_a_domain_name_still_looks_the_guid_up(
     assert auth.tenant is not None
     assert auth.tenant.cloud is US_GOV_DOD
     assert fake_msal.apps[0].authority == f"https://login.microsoftonline.us/{TENANT_GUID}"
+
+
+# A name verified in a commercial and a China tenant, as the lookup reports it.
+COMMERCIAL_TWIN = tenant_guid("twin-commercial")
+CHINA_TWIN = tenant_guid("twin-china")
+TWINS = AmbiguousTenant(
+    "a tenant in each cloud",
+    tenant=TENANT,
+    candidates=[TenantInfo(COMMERCIAL_TWIN, COMMERCIAL), TenantInfo(CHINA_TWIN, CHINA)],
+)
+
+
+def test_a_given_cloud_settles_a_name_that_is_a_tenant_in_two_clouds(
+    fake_discovery: FakeDiscovery,
+) -> None:
+    fake_discovery.error = TWINS
+
+    china = user_context(cloud=CHINA)
+    commercial = user_context(cloud="Commercial")
+
+    assert (china.tenant_id, china.tenant_name, china.cloud) == (CHINA_TWIN, TENANT, CHINA)
+    assert china.tenant is TWINS.candidates[1]
+    assert commercial.tenant_id == COMMERCIAL_TWIN
+    with pytest.raises(AmbiguousTenant):
+        user_context()
+    # Neither tenant is in the US government cloud, so naming it settles nothing.
+    with pytest.raises(AmbiguousTenant):
+        user_context(cloud=US_GOV)
+
+
+def test_a_sibling_named_by_an_ambiguous_name_takes_the_one_in_the_parents_cloud(
+    fake_discovery: FakeDiscovery,
+) -> None:
+    auth = AuthContext(TENANT_GUID, username=USER, cloud=CHINA)
+    fake_discovery.error = TWINS
+
+    sibling = auth.for_tenant(CUSTOMER)
+
+    assert (sibling.tenant_id, sibling.tenant_name, sibling.cloud) == (CHINA_TWIN, CUSTOMER, CHINA)
 
 
 def test_a_domain_name_is_held_as_the_guid_the_lookup_found(

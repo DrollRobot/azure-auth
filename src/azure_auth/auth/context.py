@@ -38,6 +38,7 @@ from azure_auth.auth.credentials import (
 from azure_auth.auth.discovery import discover_tenant
 from azure_auth.auth.errors import (
     AccountSelectionRequired,
+    AmbiguousTenant,
     AuthError,
     BrokerUnavailable,
     InteractionRequired,
@@ -79,6 +80,37 @@ def _as_guid(tenant: str) -> str | None:
         return str(uuid.UUID(tenant))
     except ValueError:
         return None
+
+
+def _look_up(tenant: str, cloud: Cloud | None) -> TenantInfo:
+    """Look a tenant up, settling a name that is a tenant in several clouds by the one given.
+
+    Each cloud is a separate directory, so one name can be a different tenant in each of two.
+    Naming the cloud says which: the tenant found in it is taken. GCC High and DoD share one
+    directory, so either names the tenant found there.
+
+    Args:
+        tenant: Tenant id (GUID) or verified domain name.
+        cloud: The cloud as given, or ``None`` when it was not.
+
+    Returns:
+        The tenant.
+
+    Raises:
+        AmbiguousTenant: If no cloud was given, or none of the tenants found is in it.
+        TenantNotFound, AuthError: From the lookup.
+    """
+    try:
+        return discover_tenant(tenant)
+    except AmbiguousTenant as error:
+        if cloud is None:
+            raise
+        found = [
+            info for info in error.candidates if info.cloud.authority_host == cloud.authority_host
+        ]
+        if len(found) != 1:
+            raise
+        return found[0]
 
 
 def _broker_installed() -> bool:
@@ -244,9 +276,10 @@ class AuthContext:
                 uses. Leave it out to have it looked up. Give it, as a
                 :class:`~azure_auth.clouds.Cloud` or its name (``Commercial``, ``USGov``,
                 ``USGovDoD``, ``China``), with the tenant's GUID to skip the lookup. A domain
-                name is still looked up, for the GUID. A given cloud is taken as given, and a
-                wrong one fails when used: an app sign-in at once, a user's at the first
-                request.
+                name is still looked up, for the GUID; when it is a different tenant in each
+                of two clouds, the one in this cloud is taken. A given cloud is taken as
+                given, and a wrong one fails when used: an app sign-in at once, a user's at
+                the first request.
             interactive_timeout: Seconds a browser sign-in waits for the person before it
                 fails with :class:`AuthError` (default 120). A closed window would otherwise
                 wait for ever.
@@ -259,7 +292,8 @@ class AuthContext:
             CacheEncryptionUnavailable: If ``cache='disk'`` cannot be encrypted here.
             CertificateUnavailable: If a PFX archive cannot be read.
             TenantNotFound: If the lookup finds no such tenant.
-            AmbiguousTenant: If the lookup finds the tenant in more than one cloud.
+            AmbiguousTenant: If the lookup finds a different tenant in each of two clouds,
+                and ``cloud`` does not say which.
             AuthError: If the lookup gets an answer it cannot use.
         """
         if not tenant_id:
@@ -324,7 +358,7 @@ class AuthContext:
             self._tenant_id = guid or tenant
             self._cloud = cloud
             return
-        self._tenant = discover_tenant(tenant)
+        self._tenant = _look_up(tenant, cloud)
         self._tenant_id = self._tenant.tenant_id
         self._cloud = cloud or self._tenant.cloud
 
@@ -448,7 +482,7 @@ class AuthContext:
         if guid is None:
             info = self._lookups.get(tenant_id.lower())
             if info is None:
-                info = self._lookups[tenant_id.lower()] = discover_tenant(tenant_id)
+                info = self._lookups[tenant_id.lower()] = _look_up(tenant_id, self._cloud)
             guid = info.tenant_id
         if guid == self._tenant_id:
             return self

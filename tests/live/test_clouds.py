@@ -245,7 +245,8 @@ def test_a_context_finds_its_tenants_cloud_by_itself(domain: str, cloud: Cloud) 
     auth = AuthContext(domain, username=f"nobody@{domain}")
 
     assert auth.cloud is cloud
-    assert auth.authority == f"{cloud.authority_host}/{domain}"
+    assert auth.tenant_name == domain
+    assert auth.authority == f"{cloud.authority_host}/{auth.tenant_id}"
     assert GraphClient(auth, client_id="unused").base_url.startswith(cloud.graph)
     assert ExchangeClient(auth).resource == cloud.exchange
 
@@ -279,11 +280,14 @@ def test_the_sign_in_library_sets_up_in_every_cloud(domain: str, cloud: Cloud) -
 def test_a_context_for_an_ambiguous_name_takes_the_cloud_it_is_given(
     tenant: str, clouds: set[Cloud]
 ) -> None:
-    # Given the cloud, the context does not look: the lookup is what would have refused it.
+    # The name is a tenant in each cloud; the cloud given says which one is meant.
     with pytest.raises(AmbiguousTenant):
         AuthContext(tenant, username="nobody@example.invalid")
     for cloud in clouds:
-        assert AuthContext(tenant, username="nobody@example.invalid", cloud=cloud).cloud is cloud
+        auth = AuthContext(tenant, username="nobody@example.invalid", cloud=cloud)
+        assert auth.cloud is cloud
+        # A domain name is still looked up, and the tenant taken is the one in that cloud.
+        assert auth.tenant is None or auth.tenant.cloud is cloud
 
 
 def test_a_context_for_a_tenant_that_does_not_exist_fails_when_it_is_created() -> None:

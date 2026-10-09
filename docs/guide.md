@@ -87,8 +87,8 @@ The lookup fails the constructor when it cannot place the tenant:
 - `TenantNotFound`: no tenant has that id or domain name in any cloud.
 - `AmbiguousTenant`: each cloud is a separate directory, so one name can be a different
   tenant in each of two clouds: a domain verified in a commercial and a China tenant, or a
-  GUID that is both a commercial and a US government tenant. The error lists them; pass the
-  GUID of the one you mean with its `cloud=`.
+  GUID that is both a commercial and a US government tenant. The error lists them; pass
+  `cloud=` to take the one in that cloud.
 - `ValueError`: `common`, `organizations` and `consumers` name no single tenant, so they
   need `cloud=`.
 
