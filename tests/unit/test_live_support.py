@@ -4,6 +4,9 @@
 run. What is tested here are the checks it makes: that a token missing a baseline scope is
 caught, and that the tenant-wide grant is what has to carry the baseline. Scopes beyond the
 baseline are found in the grants, not the token, so the token check does not report them.
+
+The GDAP tests' read-only guard is tested here too, offline, because the live tests that use it
+must never be the first place it is seen to refuse a write.
 """
 
 from __future__ import annotations
@@ -11,11 +14,16 @@ from __future__ import annotations
 import base64
 import json
 
+import httpx
 import pytest
 
-from tests.http import fake_jwt
+from azure_auth import AuthContext, ExchangeClient
+from azure_auth.sync import ExchangeClient as BlockingExchangeClient
+from tests.fakes import FakeMsal, token_result
+from tests.http import Recorder, fake_jwt, ok
 from tests.live.support import (
     BASELINE_SCOPES,
+    ReadOnlyCmdlets,
     _holds_baseline,
     missing_scopes,
     token_claims,
@@ -84,3 +92,98 @@ def test_the_baseline_has_to_be_in_a_tenant_wide_grant() -> None:
         [{"consentType": "AllPrincipals", "scope": " ".join(BASELINE_SCOPES[1:])}]
     )
     assert not _holds_baseline([])
+
+
+TENANT_GUID = "11111111-2222-3333-4444-555555555555"
+INVOKE_COMMAND = f"https://outlook.office365.com/adminapi/beta/{TENANT_GUID}/InvokeCommand"
+
+
+def invoke_command(cmdlet: str) -> httpx.Request:
+    """Build the request an Exchange client sends to run a cmdlet.
+
+    Args:
+        cmdlet: The cmdlet's name.
+
+    Returns:
+        The request.
+    """
+    body = {"CmdletInput": {"CmdletName": cmdlet, "Parameters": {}}}
+    return httpx.Request("POST", INVOKE_COMMAND, json=body)
+
+
+def test_the_read_only_guard_sends_a_listed_cmdlet() -> None:
+    recorder = Recorder([ok({"value": []})])
+    guard = ReadOnlyCmdlets(recorder.transport)
+    response = guard.handle_request(invoke_command("Get-OrganizationConfig"))
+    assert response.status_code == 200
+    assert len(recorder.requests) == len(guard.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        invoke_command("Set-OrganizationConfig"),
+        invoke_command("Remove-Mailbox"),
+        invoke_command("Get-Mailbox"),
+        httpx.Request("POST", INVOKE_COMMAND, content=b"not json"),
+        httpx.Request("POST", INVOKE_COMMAND, json={"CmdletInput": {"CmdletName": ["Get-X"]}}),
+        httpx.Request("GET", INVOKE_COMMAND),
+        httpx.Request(
+            "POST",
+            INVOKE_COMMAND.replace("InvokeCommand", "Other"),
+            json={"CmdletInput": {"CmdletName": "Get-OrganizationConfig"}},
+        ),
+    ],
+    ids=["write", "remove", "unlisted-read", "no-json", "odd-name", "get", "other-endpoint"],
+)
+def test_the_read_only_guard_refuses_anything_else_unsent(request_: httpx.Request) -> None:
+    recorder = Recorder([ok()])
+    guard = ReadOnlyCmdlets(recorder.transport)
+    with pytest.raises(pytest.fail.Exception, match="refused to send"):
+        guard.handle_request(request_)
+    assert recorder.requests == guard.requests == []
+
+
+@pytest.mark.anyio
+async def test_the_read_only_guard_checks_asynchronous_requests_too() -> None:
+    recorder = Recorder([ok({"value": []})])
+    guard = ReadOnlyCmdlets(recorder.transport)
+    await guard.handle_async_request(invoke_command("Get-OrganizationConfig"))
+    with pytest.raises(pytest.fail.Exception, match="refused to send"):
+        await guard.handle_async_request(invoke_command("Set-OrganizationConfig"))
+    assert len(recorder.requests) == 1
+
+
+@pytest.fixture
+def exchange_auth(fake_msal: FakeMsal) -> AuthContext:
+    """A user-flow context whose every token request succeeds, for the Exchange clients."""
+    token = fake_jwt(tid=TENANT_GUID)
+    fake_msal.accounts = [{"username": "admin@partner.com"}]
+    fake_msal.silent = lambda call: token_result(token)
+    return AuthContext(TENANT_GUID, username="admin@partner.com", cloud="Commercial")
+
+
+@pytest.mark.anyio
+async def test_no_exchange_client_can_get_a_write_past_the_read_only_guard(
+    exchange_auth: AuthContext,
+) -> None:
+    """The refusal reaches the caller through the client, which neither sends nor retries.
+
+    The clients catch exceptions to retry and to report errors; the guard fails the test with
+    a ``BaseException``, which they cannot catch.
+    """
+    recorder = Recorder([ok({"value": [{"Name": "partner.onmicrosoft.com"}]})])
+    guard = ReadOnlyCmdlets(recorder.transport)
+    async with ExchangeClient(exchange_auth, transport=guard) as exchange:
+        assert await exchange.run("Get-OrganizationConfig") == [{"Name": "partner.onmicrosoft.com"}]
+        with pytest.raises(pytest.fail.Exception, match="refused to send"):
+            await exchange.run("Set-OrganizationConfig", Confirm=False)
+    guard = ReadOnlyCmdlets(recorder.transport)
+    with (
+        BlockingExchangeClient(exchange_auth, transport=guard) as blocking,
+        pytest.raises(pytest.fail.Exception, match="refused to send"),
+    ):
+        blocking.run("Remove-Mailbox", Identity="a@partner.com", Confirm=False)
+    assert [body["CmdletInput"]["CmdletName"] for body in recorder.bodies()] == [
+        "Get-OrganizationConfig"
+    ]

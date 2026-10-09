@@ -16,6 +16,9 @@ Environment variables:
   no Azure access still answers ``/subscriptions`` with an empty list, which is why this is a
   flag and not something the test can work out for itself.
 * ``AZURE_AUTH_TEST_GDAP=1``: the user's home tenant manages other tenants through GDAP.
+* ``AZURE_AUTH_TEST_GDAP_TENANT_ID``: a customer tenant the user reaches through GDAP, by
+  id or verified domain. Naming one runs the GDAP Exchange tests, which only read
+  (:class:`ReadOnlyCmdlets`).
 * ``AZURE_AUTH_TEST_EXCHANGE=1`` / ``AZURE_AUTH_TEST_IPPS=1``: the user may run Exchange /
   Security & Compliance cmdlets.
 * ``AZURE_AUTH_TEST_KEYVAULT_URL`` and ``AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME``: a vault in the
@@ -48,6 +51,7 @@ from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
+import httpx
 import pytest
 
 from azure_auth import (
@@ -116,6 +120,7 @@ APP_CLIENT_ID = os.environ.get("AZURE_AUTH_TEST_APP_CLIENT_ID", "")
 THUMBPRINT = os.environ.get("AZURE_AUTH_TEST_CERT_THUMBPRINT", "")
 KEYVAULT_URL = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_URL", "")
 KEYVAULT_SECRET_NAME = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME", "")
+GDAP_TENANT = os.environ.get("AZURE_AUTH_TEST_GDAP_TENANT_ID", "")
 
 needs_user = pytest.mark.skipif(
     not (TENANT and USERNAME),
@@ -133,6 +138,7 @@ needs_keyvault = pytest.mark.skipif(
     not (KEYVAULT_URL and KEYVAULT_SECRET_NAME),
     reason="set AZURE_AUTH_TEST_KEYVAULT_URL and AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME",
 )
+needs_gdap_tenant = pytest.mark.skipif(not GDAP_TENANT, reason="set AZURE_AUTH_TEST_GDAP_TENANT_ID")
 
 
 def _flag(name: str) -> pytest.MarkDecorator:
@@ -141,11 +147,14 @@ def _flag(name: str) -> pytest.MarkDecorator:
 
 needs_graph = _flag("AZURE_AUTH_TEST_GRAPH")
 
-# The Exchange Online PowerShell client id serves both the Exchange and the IPPS tests, so a
-# sign-in to it needs only one of them.
-needs_exchange_or_ipps = pytest.mark.skipif(
-    "1" not in (os.environ.get("AZURE_AUTH_TEST_EXCHANGE"), os.environ.get("AZURE_AUTH_TEST_IPPS")),
-    reason="set AZURE_AUTH_TEST_EXCHANGE=1 or AZURE_AUTH_TEST_IPPS=1",
+# The Exchange Online PowerShell client id serves the Exchange, the IPPS and the GDAP Exchange
+# tests, so a sign-in to it needs only one of them.
+needs_exchange_sign_in = pytest.mark.skipif(
+    not (
+        "1" in (os.environ.get("AZURE_AUTH_TEST_EXCHANGE"), os.environ.get("AZURE_AUTH_TEST_IPPS"))
+        or GDAP_TENANT
+    ),
+    reason="set AZURE_AUTH_TEST_EXCHANGE=1, _IPPS=1 or _GDAP_TENANT_ID",
 )
 
 # The Azure PowerShell client id serves both the ARM and the Key Vault tests, so a sign-in to
@@ -237,6 +246,90 @@ def require_cached_sign_in(client: ResourceClient | BlockingResourceClient) -> N
         client: The client the test is about to use. Its context must not prompt.
     """
     require_cached_token(client.auth, client.scopes, client.client_id)
+
+
+# The only cmdlets the GDAP tests may run, each of which only reads, so the tests can run against
+# any customer tenant. ReadOnlyCmdlets refuses every other.
+GDAP_CMDLETS = frozenset({"Get-OrganizationConfig"})
+
+
+class ReadOnlyCmdlets(httpx.BaseTransport, httpx.AsyncBaseTransport):
+    """A transport that sends nothing but ``InvokeCommand`` requests for ``GDAP_CMDLETS``.
+
+    The GDAP tests only read, so they can run against any customer tenant. A test that calls
+    only read cmdlets is a promise; this makes it a check. Every request is read before it leaves
+    the machine, and one that does not run a listed cmdlet fails the test without being sent.
+    It serves the asynchronous and the blocking clients alike, and keeps what it sent.
+
+    Attributes:
+        requests: Every request it let through, in order.
+    """
+
+    def __init__(self, inner: httpx.MockTransport | None = None) -> None:
+        """Send over the network, or through ``inner``.
+
+        Args:
+            inner: A mock transport to send through instead, for testing the guard itself.
+        """
+        self._sync: httpx.BaseTransport = inner or httpx.HTTPTransport()
+        self._async: httpx.AsyncBaseTransport = inner or httpx.AsyncHTTPTransport()
+        self.requests: list[httpx.Request] = []
+
+    def _check(self, request: httpx.Request) -> None:
+        """Fail the test, with the request unsent, unless it runs a listed cmdlet.
+
+        ``pytest.fail`` raises a ``BaseException``, so no ``except Exception`` in the client
+        can catch the refusal and carry on.
+
+        Args:
+            request: The outgoing request.
+        """
+        try:
+            cmdlet = json.loads(request.content)["CmdletInput"]["CmdletName"]
+        except (ValueError, TypeError, KeyError):
+            cmdlet = None
+        allowed = isinstance(cmdlet, str) and cmdlet in GDAP_CMDLETS
+        if not (
+            allowed and request.method == "POST" and request.url.path.endswith("/InvokeCommand")
+        ):
+            pytest.fail(
+                f"refused to send {request.method} {request.url.path} ({cmdlet or 'no cmdlet'}):"
+                f" the GDAP tests may only run {', '.join(sorted(GDAP_CMDLETS))}",
+                pytrace=False,
+            )
+        self.requests.append(request)
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        """Check the request, then send it (blocking clients).
+
+        Args:
+            request: The outgoing request.
+
+        Returns:
+            The response, untouched.
+        """
+        self._check(request)
+        return self._sync.handle_request(request)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """Check the request, then send it (asynchronous clients).
+
+        Args:
+            request: The outgoing request.
+
+        Returns:
+            The response, untouched.
+        """
+        self._check(request)
+        return await self._async.handle_async_request(request)
+
+    def close(self) -> None:
+        """Close the blocking transport."""
+        self._sync.close()
+
+    async def aclose(self) -> None:
+        """Close the asynchronous transport."""
+        await self._async.aclose()
 
 
 def sign_in_step(window: Literal["WAM", "browser"], user: str = USERNAME) -> str:

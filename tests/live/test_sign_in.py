@@ -29,7 +29,7 @@ from tests.live.support import (
     USERNAME,
     cached_user_auth,
     needs_arm_or_keyvault,
-    needs_exchange_or_ipps,
+    needs_exchange_sign_in,
     needs_graph,
     needs_user,
     sign_in_step,
@@ -80,7 +80,7 @@ async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
         pytest.param(
             ExchangeClient,
             "Exchange Online PowerShell",
-            marks=needs_exchange_or_ipps,
+            marks=needs_exchange_sign_in,
             id="exchange",
         ),
         pytest.param(AzureClient, "Azure PowerShell", marks=needs_arm_or_keyvault, id="arm"),

@@ -29,7 +29,7 @@ from tests.live.support import (
     TENANT,
     USERNAME,
     _flag,
-    needs_exchange_or_ipps,
+    needs_exchange_sign_in,
     needs_user,
     require_cached_sign_in,
     sign_in_step,
@@ -51,7 +51,7 @@ pytestmark = [
 # The first-party applications with the broker's redirect URI registered, one per resource.
 BROKER_CLIENTS = [
     pytest.param(
-        ExchangeClient, "Exchange Online PowerShell", marks=needs_exchange_or_ipps, id="exchange"
+        ExchangeClient, "Exchange Online PowerShell", marks=needs_exchange_sign_in, id="exchange"
     ),
     pytest.param(AzureClient, "Azure PowerShell", marks=_flag("AZURE_AUTH_TEST_ARM"), id="arm"),
 ]
