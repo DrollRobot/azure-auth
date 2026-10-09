@@ -67,7 +67,7 @@ from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from azure_auth.sync import ResourceClient as BlockingResourceClient
 from tests import alert_user, consent_reset
 
-# The GDAP test's scopes, on the home tenant and on each managed tenant.
+# The GDAP test's scopes, on the home tenant and on each customer tenant.
 GDAP_SCOPES = ["DelegatedAdminRelationship.Read.All", "Organization.Read.All"]
 
 # The consent baseline: exactly the Graph scopes the Graph command-line application is

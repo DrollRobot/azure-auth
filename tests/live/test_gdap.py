@@ -1,4 +1,4 @@
-"""One home-tenant sign-in, then silent sibling contexts on each GDAP managed tenant.
+"""One home-tenant sign-in, then silent sibling contexts on GDAP customer tenants.
 
 Every test here only reads, so it can run against any customer tenant. A sign-in window
 can open only in the home tenant: a sibling context, which is what reaches a customer tenant,
@@ -44,29 +44,29 @@ pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
 @needs_user
 @needs_graph
 @_flag("AZURE_AUTH_TEST_GDAP")
-async def test_gdap_loop_reaches_managed_tenants_without_prompting(
+async def test_gdap_loop_reaches_customer_tenants_without_prompting(
     user_auth: AuthContext,
 ) -> None:
     async with GraphClient(user_auth, scopes=GDAP_SCOPES) as home:
         ensure_sign_in(home)
-        managed = await home.list_managed_tenant_ids()
-    assert managed, "the home tenant manages no tenants through GDAP"
+        customers = await home.list_customer_tenant_ids()
+    assert customers, "the home tenant has no GDAP customers"
 
     reached = 0
     skipped: list[str] = []
-    for tenant_id in managed[:5]:
+    for tenant_id in customers[:5]:
         sibling = user_auth.for_tenant(tenant_id)
         async with GraphClient(sibling, scopes=GDAP_SCOPES[1:]) as graph:
             try:
                 organization = await graph.get_all("/organization")
             except (ConsentRequired, InteractionRequired) as error:
-                # Expected for a managed tenant without consent; the error names the tenant.
+                # Expected for a customer tenant without consent; the error names the tenant.
                 skipped.append(error.tenant_id)
                 continue
         assert organization[0]["id"] == tenant_id
         reached += 1
-    assert reached, "no managed tenant could be reached silently"
-    assert set(skipped) <= set(managed)
+    assert reached, "no customer tenant could be reached silently"
+    assert set(skipped) <= set(customers)
 
 
 @needs_user

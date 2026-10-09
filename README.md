@@ -31,7 +31,7 @@ The high-level goals of this package.
 
 - Supports using WAM credentials on Windows systems.
   Sign-in through the broker is live-tested. Still unverified: whether a broker sign-in can
-  reach a managed tenant silently through `for_tenant()`.
+  reach a customer tenant silently through `for_tenant()`.
 - Exchange(done) and IPPS clients.
   Delegated user access is live-tested end to end: the sign-in, cmdlets with every kind of
   parameter, paging, failures reported with the cmdlet's own reason, the Security & Compliance

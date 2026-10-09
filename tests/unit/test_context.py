@@ -883,7 +883,7 @@ def test_a_sibling_named_by_domain_is_looked_up_once_and_keeps_the_parents_cloud
         CUSTOMER,
         US_GOV,
     )
-    # What the lookup found is kept, though a managed tenant is always in the parent's cloud.
+    # What the lookup found is kept, though a customer tenant is always in the parent's cloud.
     assert sibling.tenant is not None
     assert sibling.tenant.cloud is CHINA
 
