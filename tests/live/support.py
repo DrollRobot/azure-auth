@@ -50,6 +50,7 @@ import time
 from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, Literal, TypeVar
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -251,6 +252,21 @@ def ensure_token(auth: AuthContext, scopes: Sequence[str], client_id: str | None
     """
     with walkthrough_if_waiting(sign_in_step("WAM" if auth._broker else "browser")):
         auth.acquire_token(scopes, client_id=client_id)
+
+
+def sign_in_to_vault(auth: AuthContext) -> None:
+    """Make sure the context can get a token for the vault, signing in when it has to.
+
+    The client asks for its token through the Azure SDK, which learns the resource from the
+    vault's challenge to a first, unauthenticated request. The scope is worked out here the
+    way that challenge gives it: the vault's host without the vault's name, so
+    ``contoso.vault.azure.net`` is ``https://vault.azure.net/.default`` in every cloud.
+
+    Args:
+        auth: The context the test is about to use.
+    """
+    host = urlsplit(KEYVAULT_URL).hostname or ""
+    ensure_token(auth, [f"https://{host.partition('.')[2]}/.default"])
 
 
 def ensure_sign_in(client: ResourceClient | BlockingResourceClient) -> None:

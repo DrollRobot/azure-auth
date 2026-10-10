@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import pytest
 from azure.core.exceptions import ResourceNotFoundError
@@ -20,10 +19,10 @@ from azure_auth.sync.keyvault import KeyVaultClient as BlockingKeyVaultClient
 from tests.live.support import (
     KEYVAULT_SECRET_NAME,
     KEYVAULT_URL,
-    ensure_token,
     live_user_auth,
     needs_keyvault,
     needs_user,
+    sign_in_to_vault,
 )
 
 pytestmark = [
@@ -33,21 +32,6 @@ pytestmark = [
     needs_user,
     needs_keyvault,
 ]
-
-
-def sign_in_to_vault(auth: AuthContext) -> None:
-    """Make sure the context can get a token for the vault, signing in when it has to.
-
-    The client asks for its token through the Azure SDK, which learns the resource from the
-    vault's challenge to a first, unauthenticated request. The scope is worked out here the
-    way that challenge gives it: the vault's host without the vault's name, so
-    ``contoso.vault.azure.net`` is ``https://vault.azure.net/.default`` in every cloud.
-
-    Args:
-        auth: The context the test is about to use.
-    """
-    host = urlsplit(KEYVAULT_URL).hostname or ""
-    ensure_token(auth, [f"https://{host.partition('.')[2]}/.default"])
 
 
 async def test_a_secret_is_read_by_name_and_by_version(user_auth: AuthContext) -> None:
