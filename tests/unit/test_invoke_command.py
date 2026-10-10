@@ -306,6 +306,42 @@ async def test_ipps_follows_the_regional_redirect_with_its_token(
     assert fake_msal.calls[0].scopes == [f"https://{IPPS_HOST}/.default"]
 
 
+async def test_ipps_app_flow_names_the_system_mailbox_by_the_given_domain(
+    auth: AuthContext,
+) -> None:
+    app = AuthContext("contoso.onmicrosoft.com", client_id="app", client_secret="s3cret")
+    recorder = Recorder([ok({"value": []})])
+
+    await IppsClient(app, transport=recorder.transport).run("Get-Label")
+
+    assert [r.url.host for r in recorder.requests] == [IPPS_HOST]
+    anchor = recorder.requests[0].headers["X-AnchorMailbox"]
+    assert anchor == f"UPN:{SYSTEM_MAILBOX}@contoso.onmicrosoft.com"
+
+
+async def test_ipps_app_flow_given_a_guid_asks_exchange_for_the_domain_once(
+    auth: AuthContext,
+) -> None:
+    app = AuthContext(TENANT_GUID, client_id="app", client_secret="s3cret")
+    recorder = Recorder(
+        lambda request: ok(
+            {"value": [{"Name": "contoso.onmicrosoft.com"}]}
+            if request.url.host == "outlook.office365.com"
+            else {"value": []}
+        )
+    )
+    ipps = IppsClient(app, transport=recorder.transport)
+
+    await ipps.run("Get-Label")
+    await ipps.run("Get-Label")
+
+    exchange_host = "outlook.office365.com"
+    assert [r.url.host for r in recorder.requests] == [exchange_host, IPPS_HOST, IPPS_HOST]
+    assert recorder.bodies()[0]["CmdletInput"]["CmdletName"] == "Get-OrganizationConfig"
+    anchors = {r.headers["X-AnchorMailbox"] for r in recorder.requests[1:]}
+    assert anchors == {f"UPN:{SYSTEM_MAILBOX}@contoso.onmicrosoft.com"}
+
+
 async def test_ipps_ignores_a_redirect_to_a_foreign_host_name(auth: AuthContext) -> None:
     recorder = Recorder(
         lambda request: (

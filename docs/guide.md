@@ -344,6 +344,10 @@ from module version 3.10.1:
 - Routing header `X-AnchorMailbox`: `UPN:<username>` for a user in their own tenant, and the
   tenant's system mailbox for app flows and for sibling (GDAP) contexts. Override it with
   `anchor_mailbox=`.
+- Security & Compliance in an app flow finds the tenant only by its domain name, never its
+  GUID, so the client uses `auth.tenant.domain`. When the tenant has none, it asks Exchange
+  once (`Get-OrganizationConfig`) and stores the answer there; the application then needs an
+  Exchange role that can read the organization's settings.
 - Security & Compliance redirects the first call to a regional host. The client follows that
   redirect itself, because HTTP libraries drop the `Authorization` header on a cross-host
   redirect, and keeps using the regional host. In the DoD cloud the first call goes to

@@ -139,7 +139,8 @@ class InvokeCommandClient(ResourceClient):
             scopes: Scopes to request. Defaults to the service's ``.default``.
             anchor_mailbox: Value of the ``X-AnchorMailbox`` routing header. Defaults to the
                 signed-in user for a user flow in its own tenant, and to the tenant's system
-                mailbox for app flows and for sibling (GDAP) contexts.
+                mailbox for app flows and for sibling (GDAP) contexts; see
+                :class:`~azure_auth.clients.ipps.IppsClient` for how it names the tenant.
             page_size: Preferred number of results per page.
             timeout: Timeout for each HTTP request, in seconds. Cmdlets can be slow.
             max_retries: How often a throttled request is retried.
@@ -163,6 +164,7 @@ class InvokeCommandClient(ResourceClient):
         # requests start at: DoD sends them to l5.<resource host>.
         self._domain = httpx.URL(resource).host
         self._anchor_mailbox = anchor_mailbox
+        self._transport = transport
         self._page_size = page_size
         self._connection_id = str(uuid.uuid4())
         self._tenant_guid: str | None = None
@@ -196,7 +198,7 @@ class InvokeCommandClient(ResourceClient):
             self._tenant_guid = tenant_id_from_token(token.token) or self._auth.tenant.id
         return self._tenant_guid
 
-    def _anchor(self, tenant: str) -> str:
+    async def _anchor(self, tenant: str) -> str:
         """Build the ``X-AnchorMailbox`` routing header.
 
         Args:
@@ -236,7 +238,7 @@ class InvokeCommandClient(ResourceClient):
             "Accept": "application/json",
             "Content-Type": "application/json;odata.metadata=minimal",
             "Prefer": f"odata.maxpagesize={self._page_size}",
-            "X-AnchorMailbox": self._anchor(tenant),
+            "X-AnchorMailbox": await self._anchor(tenant),
             "X-CmdletName": cmdlet,
             "X-ResponseFormat": "json",
             "connection-id": self._connection_id,

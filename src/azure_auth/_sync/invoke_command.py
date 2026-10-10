@@ -141,7 +141,8 @@ class InvokeCommandClient(ResourceClient):
             scopes: Scopes to request. Defaults to the service's ``.default``.
             anchor_mailbox: Value of the ``X-AnchorMailbox`` routing header. Defaults to the
                 signed-in user for a user flow in its own tenant, and to the tenant's system
-                mailbox for app flows and for sibling (GDAP) contexts.
+                mailbox for app flows and for sibling (GDAP) contexts; see
+                :class:`~azure_auth._sync.ipps.IppsClient` for how it names the tenant.
             page_size: Preferred number of results per page.
             timeout: Timeout for each HTTP request, in seconds. Cmdlets can be slow.
             max_retries: How often a throttled request is retried.
@@ -165,6 +166,7 @@ class InvokeCommandClient(ResourceClient):
         # requests start at: DoD sends them to l5.<resource host>.
         self._domain = httpx.URL(resource).host
         self._anchor_mailbox = anchor_mailbox
+        self._transport = transport
         self._page_size = page_size
         self._connection_id = str(uuid.uuid4())
         self._tenant_guid: str | None = None

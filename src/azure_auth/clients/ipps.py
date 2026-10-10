@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from azure_auth.clients.invoke_command import InvokeCommandClient
+from azure_auth.clients.exchange import ExchangeClient
+from azure_auth.clients.invoke_command import SYSTEM_MAILBOX, InvokeCommandClient
 from azure_auth.clouds import Cloud
 
 
@@ -12,6 +13,12 @@ class IppsClient(InvokeCommandClient):
     The service redirects the first call to a regional host. The client follows that
     redirect itself and keeps using the regional host, while tokens stay scoped to the
     global host.
+
+    In an app flow the service finds the tenant by the domain in the routing header, so the
+    client needs the tenant's domain name (``auth.tenant.domain``). When the tenant has none,
+    the client asks Exchange for it once (``Get-OrganizationConfig``) and keeps the answer on
+    the tenant; that needs an Exchange role on the application that can read the
+    organization's settings.
 
     Example:
         >>> ipps = IppsClient(auth)  # doctest: +SKIP
@@ -29,3 +36,38 @@ class IppsClient(InvokeCommandClient):
             The resource, and the host requests go to first.
         """
         return cloud.ipps, cloud.ipps_host
+
+    async def _anchor(self, tenant: str) -> str:
+        """Route an app flow through the system mailbox, named by the tenant's domain.
+
+        Measured 2026-10-10: an app-only request is answered only with
+        ``UPN:SystemMailbox{...}@<domain>``. The ``APP:`` form Exchange takes, and every form
+        naming the tenant GUID, is answered 500 "Could not find the organization container".
+        The PowerShell module likewise refuses a GUID as the organization of an app sign-in.
+
+        Args:
+            tenant: Tenant GUID.
+
+        Returns:
+            The routing header value.
+        """
+        if self._auth.is_app_flow and not self._anchor_mailbox:
+            return f"UPN:{SYSTEM_MAILBOX}@{await self._tenant_domain()}"
+        return await super()._anchor(tenant)
+
+    async def _tenant_domain(self) -> str:
+        """Return the tenant's domain name, asking Exchange for it when the tenant has none.
+
+        The answer is kept on the tenant, so every client of the context reuses it.
+
+        Returns:
+            The domain name.
+        """
+        tenant = self._auth.tenant
+        if tenant.domain is None:
+            async with ExchangeClient(
+                self._auth, client_id=self._client_id, transport=self._transport
+            ) as exchange:
+                (config,) = await exchange.run("Get-OrganizationConfig")
+            tenant.domain = str(config["Name"])
+        return tenant.domain
