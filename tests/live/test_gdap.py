@@ -49,12 +49,18 @@ async def test_gdap_loop_reaches_customer_tenants_without_prompting(
 ) -> None:
     async with GraphClient(user_auth, scopes=GDAP_SCOPES) as home:
         ensure_sign_in(home)
-        customers = await home.list_customer_tenant_ids()
+        customers = await home.list_customers()
+        tenant_ids = await home.list_customer_tenant_ids()
     assert customers, "the home tenant has no GDAP customers"
+    # Every customer comes with its id and name, each tenant once, and the ids are the names'.
+    assert all(customer["tenantId"] and customer["displayName"] for customer in customers)
+    assert len({customer["tenantId"] for customer in customers}) == len(customers)
+    assert tenant_ids == [customer["tenantId"] for customer in customers]
+    print(f"{len(customers)} customers: " + ", ".join(c["displayName"] for c in customers[:5]))
 
     reached = 0
     skipped: list[str] = []
-    for tenant_id in customers[:5]:
+    for tenant_id in tenant_ids[:5]:
         sibling = user_auth.for_tenant(tenant_id)
         async with GraphClient(sibling, scopes=GDAP_SCOPES[1:]) as graph:
             try:
@@ -66,7 +72,7 @@ async def test_gdap_loop_reaches_customer_tenants_without_prompting(
         assert organization[0]["id"] == tenant_id
         reached += 1
     assert reached, "no customer tenant could be reached silently"
-    assert set(skipped) <= set(customers)
+    assert set(skipped) <= set(tenant_ids)
 
 
 @needs_user

@@ -358,14 +358,46 @@ async def test_batch_is_chunked_and_order_is_restored(auth: AuthContext) -> None
 # ---------------------------------------------------------------------------- GDAP helper
 
 
-async def test_customer_tenants_come_from_delegated_admin_customers(auth: AuthContext) -> None:
+async def test_customers_are_what_graph_returns(auth: AuthContext) -> None:
+    # Graph's objects come back whole, so a field it adds tomorrow is kept today.
+    first = {"id": "t1", "tenantId": "t1", "displayName": "A", "serviceManagementDetails": []}
+    second = {"tenantId": "t2"}
+    recorder = Recorder([ok({"value": [first, second]})])
+    graph = GraphClient(auth, transport=recorder.transport)
+
+    assert await graph.list_customers() == [first, second]
+    assert recorder.urls() == [f"{GRAPH}/tenantRelationships/delegatedAdminCustomers"]
+
+
+async def test_customer_tenant_ids_are_the_customers_ids_each_once(auth: AuthContext) -> None:
     recorder = Recorder(
-        [ok({"value": [{"tenantId": "t1", "displayName": "A"}, {"tenantId": "t2"}]})]
+        [ok({"value": [{"tenantId": "t1"}, {"tenantId": "t2"}, {"tenantId": "t1"}]})]
     )
     graph = GraphClient(auth, transport=recorder.transport)
 
     assert await graph.list_customer_tenant_ids() == ["t1", "t2"]
-    assert recorder.urls() == [f"{GRAPH}/tenantRelationships/delegatedAdminCustomers"]
+
+
+async def test_a_customer_under_several_relationships_is_listed_once(auth: AuthContext) -> None:
+    # The first appearance wins, and the order of first appearances is kept, across pages.
+    pages = [
+        ok(
+            {
+                "value": [{"tenantId": "t1", "displayName": "A"}, {"tenantId": "t2"}],
+                "@odata.nextLink": f"{GRAPH}/tenantRelationships/delegatedAdminCustomers?p=2",
+            }
+        ),
+        ok({"value": [{"tenantId": "t1", "displayName": "A again"}, {"tenantId": "t3"}]}),
+    ]
+    graph = GraphClient(auth, transport=Recorder(pages).transport)
+
+    customers = await graph.list_customers()
+
+    assert customers == [
+        {"tenantId": "t1", "displayName": "A"},
+        {"tenantId": "t2"},
+        {"tenantId": "t3"},
+    ]
 
 
 async def test_a_body_the_service_mislabels_is_reported_with_its_status(

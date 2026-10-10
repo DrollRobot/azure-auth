@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- GDAP customers can be listed with their display names, and everything else Graph says
+  about them, not only their tenant IDs.
+
 ## [0.3.0] - 2026-10-08 - Key Vault client, tenant held by ID
 
 ### Added

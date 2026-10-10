@@ -245,14 +245,31 @@ class GraphClient(ResourceClient):
             responses.update({str(item["id"]): item for item in result.get("responses", [])})
         return [responses[item["id"]] for item in prepared]
 
-    def list_customer_tenant_ids(self) -> list[str]:
-        """List the tenants of this home tenant's GDAP customers.
+    def list_customers(self) -> list[dict[str, Any]]:
+        """List this home tenant's GDAP customers, as Graph describes them.
 
         Call this on a client for the home tenant. It needs the delegated or application
         permission ``DelegatedAdminRelationship.Read.All``.
 
+        Each customer is the object Graph returns from
+        ``GET /tenantRelationships/delegatedAdminCustomers``, unchanged: ``tenantId``,
+        ``displayName``, and whatever else Graph adds. A customer reached through several
+        relationships is listed once, by its first appearance.
+
         Returns:
-            The customer tenant ids.
+            One object per customer tenant, in Graph's order.
         """
-        customers = self.get_all("/tenantRelationships/delegatedAdminCustomers")
-        return [str(customer["tenantId"]) for customer in customers]
+        customers: dict[str, dict[str, Any]] = {}
+        for customer in self.get_all("/tenantRelationships/delegatedAdminCustomers"):
+            customers.setdefault(str(customer["tenantId"]), customer)
+        return list(customers.values())
+
+    def list_customer_tenant_ids(self) -> list[str]:
+        """List the tenants of this home tenant's GDAP customers.
+
+        The ids of :meth:`list_customers`, for a loop that needs nothing else.
+
+        Returns:
+            The customer tenant ids, each once.
+        """
+        return [str(customer["tenantId"]) for customer in self.list_customers()]

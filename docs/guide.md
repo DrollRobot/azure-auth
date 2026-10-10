@@ -220,19 +220,21 @@ cheap to call in a loop; a domain name is looked up once, for its GUID, and reme
 home = GraphClient(auth, scopes=["DelegatedAdminRelationship.Read.All"])
 await home.login()
 
-for tenant_id in await home.list_customer_tenant_ids():
-    graph = GraphClient(auth.for_tenant(tenant_id), scopes=["User.Read.All"])
+for customer in await home.list_customers():
+    graph = GraphClient(auth.for_tenant(customer["tenantId"]), scopes=["User.Read.All"])
     try:
         users = await graph.get_all("/users")
     except (ConsentRequired, InteractionRequired) as error:
-        print(f"skipping {error.tenant_id}: {error}")
+        print(f"skipping {customer['displayName']}: {error}")
 ```
 
 - A sibling **never prompts.** When a token cannot be obtained silently it raises
   `InteractionRequired` or `ConsentRequired`, and the error carries the tenant id. Sign in on
   a client of the root context first.
-- `list_customer_tenant_ids()` reads `GET /tenantRelationships/delegatedAdminCustomers` and
-  needs `DelegatedAdminRelationship.Read.All` consented in the home tenant.
+- `list_customers()` reads `GET /tenantRelationships/delegatedAdminCustomers` and needs
+  `DelegatedAdminRelationship.Read.All` consented in the home tenant. Each customer is the
+  object Graph returns, whole (`tenantId`, `displayName`, and whatever Graph adds), listed
+  once however many relationships reach it. `list_customer_tenant_ids()` is the ids alone.
 - The application must be consented to in each customer tenant for the scopes you request.
 - In app flows each sibling builds its own client assertion, because the assertion audience
   is the tenant's token endpoint.
