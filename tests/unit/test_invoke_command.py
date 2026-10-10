@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from azure_auth import AuthContext
+from azure_auth import AuthContext, Tenant
 from azure_auth.clients import ExchangeClient, InvokeCommandError, IppsClient
 from azure_auth.clients.invoke_command import (
     SYSTEM_MAILBOX,
@@ -343,7 +343,7 @@ def cloud_context(fake_msal: FakeMsal, cloud: Cloud) -> AuthContext:
     token = fake_jwt(tid=TENANT_GUID)
     fake_msal.accounts = [{"username": USER}]
     fake_msal.silent = lambda call: token_result(token)
-    return AuthContext("partner.onmicrosoft.com", username=USER, cloud=cloud)
+    return AuthContext(Tenant(TENANT_GUID, cloud), username=USER)
 
 
 @pytest.mark.parametrize("cloud", [US_GOV, US_GOV_DOD, CHINA], ids=lambda cloud: cloud.name)

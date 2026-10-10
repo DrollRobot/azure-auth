@@ -192,7 +192,7 @@ async def run(args: argparse.Namespace) -> int:
 
     async with GraphClient(auth, scopes=scopes) as graph:
         _cli.section("Target")
-        _cli.info("tenant", auth.tenant_id)
+        _cli.info("tenant", auth.tenant.id)
         _cli.info("sign-in", "certificate (app-only)" if args.app_only else "user (delegated)")
         _cli.info("application", args.client_id)
         # stdout is block-buffered when piped, and _cli.die writes to stderr; flush so the
@@ -247,7 +247,7 @@ async def run(args: argparse.Namespace) -> int:
 
         _cli.section("Delete")
         _cli.warn(
-            f"About to delete {doomed} consent grant(s) in tenant {auth.tenant_id}.\n"
+            f"About to delete {doomed} consent grant(s) in tenant {auth.tenant.id}.\n"
             "Every user who relies on them loses access through this application until "
             "consent is granted again."
         )

@@ -11,7 +11,7 @@ from azure_auth import AuthContext
 from azure_auth._sync import AzureClient, AzureError
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
-from tests.fakes import FakeMsal
+from tests.fakes import FakeLookup, FakeMsal
 from tests.http import Recorder, ok
 
 pytestmark = pytest.mark.unit
@@ -56,9 +56,10 @@ def test_api_version_is_added_to_every_verb(auth: AuthContext, fake_msal: FakeMs
 
 @pytest.mark.parametrize("cloud", [US_GOV, US_GOV_DOD, CHINA], ids=lambda cloud: cloud.name)
 def test_requests_go_to_the_resource_manager_of_the_contexts_cloud(
-    fake_msal: FakeMsal, cloud: Cloud
+    fake_msal: FakeMsal, fake_lookup: FakeLookup, cloud: Cloud
 ) -> None:
-    auth = AuthContext("tenant", username="admin@contoso.com", cloud=cloud)
+    fake_lookup.cloud = cloud
+    auth = AuthContext("tenant", username="admin@contoso.com")
     recorder = Recorder([ok({"name": "rg"})])
 
     AzureClient(auth, transport=recorder.transport).get(GROUP, api_version="2021-04-01")

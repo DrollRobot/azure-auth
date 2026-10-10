@@ -102,13 +102,13 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
 
     claims = token_claims(token.token)
     print(f"GDAP Exchange: roles in the customer tenant's token (wids): {claims.get('wids')}")
-    assert claims["tid"] == sibling.tenant_id
-    assert claims["aud"] == user_auth.cloud.exchange
+    assert claims["tid"] == sibling.tenant.id
+    assert claims["aud"] == user_auth.tenant.cloud.exchange
     assert (token_user(token.token) or "").lower() == USERNAME.lower()
 
     request = guard.requests[0]
-    assert sibling.tenant_id in request.url.path
-    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{sibling.tenant_id}"
+    assert sibling.tenant.id in request.url.path
+    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{sibling.tenant.id}"
 
     assert len(config) == 1
     assert user_auth.for_tenant(config[0]["Name"]) is sibling

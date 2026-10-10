@@ -15,7 +15,7 @@ from azure_auth.clients import GraphClient, GraphError
 from azure_auth.clients.base import claims_from_challenge, retry_delay
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
-from tests.fakes import FakeMsal, token_result
+from tests.fakes import FakeLookup, FakeMsal, token_result
 from tests.http import Recorder, ok
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
@@ -118,9 +118,10 @@ async def test_login_uses_the_clients_id_and_scopes(auth: AuthContext, fake_msal
 
 @pytest.mark.parametrize("cloud", [US_GOV, US_GOV_DOD, CHINA], ids=lambda cloud: cloud.name)
 async def test_requests_and_scopes_follow_the_contexts_cloud(
-    fake_msal: FakeMsal, cloud: Cloud
+    fake_msal: FakeMsal, fake_lookup: FakeLookup, cloud: Cloud
 ) -> None:
-    auth = AuthContext("tenant", username=USER, client_id="own-app", cloud=cloud)
+    fake_lookup.cloud = cloud
+    auth = AuthContext("tenant", username=USER, client_id="own-app")
     recorder = Recorder([ok({"id": "1"})])
     graph = GraphClient(auth, scopes=["User.Read"], transport=recorder.transport)
 
@@ -133,21 +134,23 @@ async def test_requests_and_scopes_follow_the_contexts_cloud(
 
 
 async def test_a_token_for_one_clouds_graph_is_never_sent_to_anothers(
-    fake_msal: FakeMsal,
+    fake_msal: FakeMsal, fake_lookup: FakeLookup
 ) -> None:
-    graph = GraphClient(
-        AuthContext("tenant", username=USER, cloud=US_GOV), transport=Recorder([]).transport
-    )
+    fake_lookup.cloud = US_GOV
+    graph = GraphClient(AuthContext("tenant", username=USER), transport=Recorder([]).transport)
     with pytest.raises(ValueError, match="Refusing to send a token"):
         await graph.get("https://graph.microsoft.com/v1.0/me")
 
 
-async def test_china_has_no_default_graph_client_id(fake_msal: FakeMsal) -> None:
+async def test_china_has_no_default_graph_client_id(
+    fake_msal: FakeMsal, fake_lookup: FakeLookup
+) -> None:
+    fake_lookup.cloud = CHINA
     with pytest.raises(ValueError, match="not published in the China cloud"):
-        GraphClient(AuthContext("tenant", username=USER, cloud=CHINA))
-    own = AuthContext("tenant", username=USER, client_id="own-app", cloud=CHINA)
+        GraphClient(AuthContext("tenant", username=USER))
+    own = AuthContext("tenant", username=USER, client_id="own-app")
     assert GraphClient(own).client_id == "own-app"
-    by_client = AuthContext("tenant", username=USER, cloud=CHINA)
+    by_client = AuthContext("tenant", username=USER)
     assert GraphClient(by_client, client_id="own-app").client_id == "own-app"
 
 

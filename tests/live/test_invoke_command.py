@@ -106,7 +106,7 @@ async def test_exchange_runs_a_cmdlet_as_the_signed_in_user(user_auth: AuthConte
         mailbox = await exchange.run("Get-Mailbox", Identity=USERNAME)
 
     claims = token_claims(token.token)
-    assert claims["aud"] == user_auth.cloud.exchange
+    assert claims["aud"] == user_auth.tenant.cloud.exchange
     assert (token_user(token.token) or "").lower() == USERNAME.lower()
     assert "AdminApi.AccessAsUser.All" in token_scopes(token.token)
     print(f"exchange token scopes: {' '.join(sorted(token_scopes(token.token)))}")
@@ -301,7 +301,7 @@ async def test_ipps_runs_a_cmdlet_through_the_regional_host(user_auth: AuthConte
 
     assert isinstance(labels, list)
     host = httpx.URL(ipps.base_url).host
-    assert host != user_auth.cloud.ipps_host
+    assert host != user_auth.tenant.cloud.ipps_host
     domain = httpx.URL(ipps.resource).host
     assert host.endswith(f".{domain}"), f"no regional host was taken: {host}"
     error = unknown.value

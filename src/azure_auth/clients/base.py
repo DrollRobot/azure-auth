@@ -181,7 +181,7 @@ class ResourceClient:
                 "App flows need a client_id on the AuthContext or on the client; "
                 "first-party client ids cannot be used with a secret or certificate"
             )
-        cloud = self._auth.cloud
+        cloud = self._auth.tenant.cloud
         if self.DEFAULT_CLIENT_ID not in cloud.first_party_client_ids:
             raise ValueError(
                 f"{type(self).__name__}'s default client id {self.DEFAULT_CLIENT_ID} is not "

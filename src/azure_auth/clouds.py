@@ -5,8 +5,9 @@ lives in exactly one, and a token from one is worthless in another, so an
 :class:`~azure_auth.AuthContext` and every client built on it address a single cloud.
 
 GCC ("GCC Moderate") is not a cloud of its own: its tenants live in :data:`COMMERCIAL` and
-differ only in :attr:`TenantInfo.region_sub_scope`. GCC High and DoD share a sign-in host but
-not their Graph, Exchange or Security & Compliance hosts, so they are two clouds here.
+differ only in :attr:`azure_auth.Tenant.region_sub_scope`. GCC High and DoD share a sign-in
+host but not their Graph, Exchange or Security & Compliance hosts, so they are two clouds
+here.
 
 Sources: the Exchange hosts are the ExchangeOnlineManagement module's own environment table
 (3.10.1), and the IPPS hosts its ``Connect-IPPSSession`` connection URIs. Every host below
@@ -16,9 +17,7 @@ naming its cloud's sign-in host (``tests/live/test_clouds.py``).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from azure_auth.constants import (
@@ -152,24 +151,3 @@ def get_cloud(cloud: Cloud | str) -> Cloud:
             return known
     names = ", ".join(known.name for known in CLOUDS)
     raise ValueError(f"Unknown cloud {cloud!r}; expected one of {names}")
-
-
-@dataclass(frozen=True)
-class TenantInfo:
-    """What OpenID Connect discovery says about a tenant.
-
-    Attributes:
-        tenant_id: The tenant's GUID, also when it was looked up by domain name.
-        cloud: The cloud the tenant lives in.
-        region_scope: ``tenant_region_scope``: a continent code such as ``NA`` or ``EU`` in
-            the commercial and China clouds, ``USGov`` in both US government clouds.
-        region_sub_scope: ``tenant_region_sub_scope``: ``GCC`` for a GCC tenant, ``DODCON``
-            for GCC High, ``DOD`` for DoD, and ``None`` for most others.
-        document: The whole discovery document.
-    """
-
-    tenant_id: str
-    cloud: Cloud
-    region_scope: str | None = None
-    region_sub_scope: str | None = None
-    document: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)

@@ -4,7 +4,7 @@
 
 ::: azure_auth.clouds
 
-::: azure_auth.auth.discovery
+::: azure_auth.auth.tenant
 
 ::: azure_auth.auth.errors
 

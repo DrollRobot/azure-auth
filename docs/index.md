@@ -36,10 +36,10 @@ The tenant can be in any Microsoft cloud: Commercial, GCC, GCC High, DoD or Chin
 context finds which by itself. To look a tenant up without signing in at all:
 
 ```python
-from azure_auth import discover_tenant
+from azure_auth import Tenant
 
-tenant = discover_tenant("contoso.com")
-print(tenant.tenant_id, tenant.cloud.name)
+tenant = Tenant.lookup("contoso.com")
+print(tenant.id, tenant.cloud.name)
 ```
 
 Continue with the [guide](guide.md), or look things up in the [reference](reference/auth.md).

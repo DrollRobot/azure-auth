@@ -30,8 +30,16 @@ from azure.keyvault.secrets import SecretClient as BlockingSecretClient
 from azure.keyvault.secrets.aio import SecretClient
 from urllib3.response import HTTPResponse
 
-from azure_auth import AuthContext, ExchangeClient, GraphClient, GraphError, InvokeCommandError
+from azure_auth import (
+    AuthContext,
+    ExchangeClient,
+    GraphClient,
+    GraphError,
+    InvokeCommandError,
+    Tenant,
+)
 from azure_auth.clients.keyvault import KeyVaultClient
+from azure_auth.clouds import COMMERCIAL
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from azure_auth.sync.keyvault import KeyVaultClient as BlockingKeyVaultClient
 from tests.certs import make_certificate
@@ -246,7 +254,7 @@ def entra(session: requests.Session) -> FakeEntra:
 
 def app_auth(**credential: Any) -> AuthContext:
     """An app-flow context for the fake tenant; its GUID and cloud need no lookup."""
-    return AuthContext(TENANT, cloud="Commercial", client_id=CLIENT_ID, **credential)
+    return AuthContext(Tenant(TENANT, COMMERCIAL), client_id=CLIENT_ID, **credential)
 
 
 def app_secrets(entra: FakeEntra) -> dict[str, list[str]]:
@@ -363,7 +371,7 @@ async def test_refreshing_a_user_token_logs_no_token(
     seeded_refresh = "refresh-" + uuid.uuid4().hex
     recorder = Recorder([ok({"id": "1"})])
     with all_logs_at_debug() as records:
-        auth = AuthContext(TENANT, cloud="Commercial", username=USER)
+        auth = AuthContext(Tenant(TENANT, COMMERCIAL), username=USER)
         auth._cache.add(
             {
                 "client_id": GRAPH_CLI_CLIENT_ID,

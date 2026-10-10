@@ -25,6 +25,7 @@ from azure_auth import (
     CertificateUnavailable,
     ConsentRequired,
     InteractionRequired,
+    Tenant,
 )
 from azure_auth.auth import cache as cache_module
 from azure_auth.auth import cng
@@ -36,6 +37,7 @@ from azure_auth.auth.credentials import (
     build_client_assertion,
 )
 from azure_auth.auth.errors import error_from_msal_result
+from azure_auth.clouds import COMMERCIAL
 from tests.certs import TestCertificate, decode_jwt, make_certificate, verify_signature
 
 pytestmark = pytest.mark.unit
@@ -334,11 +336,13 @@ def test_package_never_references_plaintext_persistence() -> None:
 
 # ---------------------------------------------------------------------------- error mapping
 
+TENANT = Tenant("11111111-2222-3333-4444-555555555555", COMMERCIAL)
+
 
 def test_missing_result_means_interaction_required() -> None:
-    error = error_from_msal_result(None, tenant_id="t", scopes=["a"])
+    error = error_from_msal_result(None, tenant=TENANT, scopes=["a"])
     assert isinstance(error, InteractionRequired)
-    assert (error.tenant_id, error.scopes) == ("t", ("a",))
+    assert (error.tenant_id, error.scopes) == (TENANT.id, ("a",))
 
 
 @pytest.mark.parametrize(
@@ -352,14 +356,14 @@ def test_missing_result_means_interaction_required() -> None:
     ],
 )
 def test_consent_errors_are_recognised(result: dict[str, Any]) -> None:
-    error = error_from_msal_result(result, tenant_id="customer", scopes=["User.Read.All"])
+    error = error_from_msal_result(result, tenant=TENANT, scopes=["User.Read.All"])
     assert isinstance(error, ConsentRequired)
-    assert error.tenant_id == "customer"
+    assert error.tenant_id == TENANT.id
 
 
 @pytest.mark.parametrize("code", ["interaction_required", "login_required", "invalid_grant"])
 def test_interaction_errors_are_recognised(code: str) -> None:
-    error = error_from_msal_result({"error": code}, tenant_id="t", scopes=[])
+    error = error_from_msal_result({"error": code}, tenant=TENANT, scopes=[])
     assert isinstance(error, InteractionRequired)
 
 
@@ -373,21 +377,21 @@ def broker_error(status: str) -> dict[str, Any]:
 
 @pytest.mark.parametrize("status", ["Status_InteractionRequired", "Status_AccountUnusable"])
 def test_broker_statuses_that_need_a_sign_in_are_interaction_required(status: str) -> None:
-    error = error_from_msal_result(broker_error(status), tenant_id="t", scopes=["a"])
+    error = error_from_msal_result(broker_error(status), tenant=TENANT, scopes=["a"])
     assert isinstance(error, InteractionRequired)
     assert status in str(error)
 
 
 @pytest.mark.parametrize("status", ["Status_UserCanceled", "Status_Unexpected"])
 def test_other_broker_statuses_are_plain_errors(status: str) -> None:
-    error = error_from_msal_result(broker_error(status), tenant_id="t", scopes=["a"])
+    error = error_from_msal_result(broker_error(status), tenant=TENANT, scopes=["a"])
     assert type(error) is AuthError
 
 
 def test_other_errors_keep_their_description_but_not_the_dictionary() -> None:
     error = error_from_msal_result(
         {"error": "invalid_client", "error_description": " AADSTS7000215: bad secret ", "x": 1},
-        tenant_id="t",
+        tenant=TENANT,
         scopes=[],
     )
     assert type(error) is AuthError

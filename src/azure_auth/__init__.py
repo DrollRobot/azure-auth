@@ -5,7 +5,7 @@ requests; the client takes care of tokens. The clients exported here are asynchr
 Blocking versions with the same names live in :mod:`azure_auth.sync`.
 
 A context works in whichever Microsoft cloud its tenant lives in, found by looking the tenant
-up; the clouds are in :mod:`azure_auth.clouds`.
+up (:class:`Tenant`); the clouds are in :mod:`azure_auth.clouds`.
 
 Example:
     >>> from azure_auth import AuthContext, GraphClient
@@ -28,8 +28,8 @@ from azure_auth.auth import (
     CertificateUnavailable,
     ConsentRequired,
     InteractionRequired,
+    Tenant,
     TenantNotFound,
-    discover_tenant,
 )
 from azure_auth.clients import (
     AzureClient,
@@ -41,7 +41,7 @@ from azure_auth.clients import (
     IppsClient,
     ResourceError,
 )
-from azure_auth.clouds import Cloud, TenantInfo
+from azure_auth.clouds import Cloud
 
 __all__ = [
     "AccountSelectionRequired",
@@ -63,7 +63,6 @@ __all__ = [
     "InvokeCommandError",
     "IppsClient",
     "ResourceError",
-    "TenantInfo",
+    "Tenant",
     "TenantNotFound",
-    "discover_tenant",
 ]

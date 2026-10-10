@@ -61,8 +61,8 @@ class AzureClient(ResourceClient):
         """
         super().__init__(
             auth,
-            resource=auth.cloud.arm,
-            base_url=auth.cloud.arm,
+            resource=auth.tenant.cloud.arm,
+            base_url=auth.tenant.cloud.arm,
             client_id=client_id,
             scopes=scopes,
             timeout=timeout,

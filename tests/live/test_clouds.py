@@ -3,7 +3,7 @@
 Most of this needs no account anywhere. OpenID Connect discovery is public, every service
 answers an unauthenticated request with a challenge that names the sign-in host it trusts,
 and the device code endpoint says whether an application exists in a cloud. So the cloud
-table in :mod:`azure_auth.clouds`, discovery, and a context finding its own cloud are all
+table in :mod:`azure_auth.clouds`, the tenant lookup, and a context finding its own cloud are all
 tested against the real Government, DoD and China clouds from a commercial tenant. What does
 need an account is signing in and calling a service; that runs in the configured tenant's
 cloud, whichever it is.
@@ -35,8 +35,8 @@ from azure_auth import (
     GraphError,
     InteractionRequired,
     IppsClient,
+    Tenant,
     TenantNotFound,
-    discover_tenant,
 )
 from azure_auth.clients import AzureClient, ResourceClient
 from azure_auth.clouds import CHINA, CLOUDS, COMMERCIAL, US_GOV, US_GOV_DOD, Cloud
@@ -55,6 +55,7 @@ from tests.live.support import (
     _flag,
     ensure_sign_in,
     live_cloud,
+    live_tenant,
     needs_app,
     needs_graph,
     needs_user,
@@ -90,10 +91,10 @@ IPPS_APP_ID = "00000007-0000-0ff1-ce00-000000000000"
 _CHALLENGE_FIELD = re.compile(r'(\w+)="([^"]*)"')
 
 
-def reference_tenant_id(cloud: Cloud) -> str:
-    """Return the GUID of a public tenant in ``cloud``, by discovery."""
+def reference_tenant(cloud: Cloud) -> Tenant:
+    """Return a public tenant in ``cloud``, looked up."""
     domain = next(domain for domain, where, _ in REFERENCE_TENANTS.values() if where is cloud)
-    return discover_tenant(domain).tenant_id
+    return Tenant.lookup(domain)
 
 
 def challenge(response: httpx.Response) -> dict[str, str]:
@@ -115,14 +116,14 @@ def unsigned_jwt() -> str:
 
 
 def unauthenticated_client(
-    make: Callable[[AuthContext], ResourceClient], cloud: Cloud, tenant: str
+    make: Callable[[AuthContext], ResourceClient], tenant: Tenant
 ) -> ResourceClient:
     """Build a client only to read the URLs it would use; it never requests a token."""
-    auth = AuthContext(tenant, username="nobody@example.invalid", client_id="unused", cloud=cloud)
+    auth = AuthContext(tenant, username="nobody@example.invalid", client_id="unused")
     return make(auth)
 
 
-# ---------------------------------------------------------------------------- discovery
+# ---------------------------------------------------------------------------- lookup
 
 
 @pytest.mark.parametrize(
@@ -131,13 +132,14 @@ def unauthenticated_client(
 def test_a_tenant_is_found_in_its_cloud_by_domain_and_by_id(
     domain: str, cloud: Cloud, sub_scope: str | None
 ) -> None:
-    by_domain = discover_tenant(domain)
-    by_id = discover_tenant(by_domain.tenant_id)
+    by_domain = Tenant.lookup(domain)
+    by_id = Tenant.lookup(by_domain.id)
 
     assert by_domain.cloud is cloud
     assert by_domain.region_sub_scope == sub_scope
     assert by_domain == by_id
-    print(f"{domain}: {by_domain.tenant_id} in {cloud.name} ({by_domain.region_scope})")
+    assert (by_domain.domain, by_id.domain) == (domain, None)
+    print(f"{domain}: {by_domain.id} in {cloud.name} ({by_domain.region_scope})")
 
 
 @pytest.mark.parametrize(
@@ -147,9 +149,9 @@ def test_a_name_that_is_a_tenant_in_two_clouds_is_ambiguous(
     tenant: str, clouds: set[Cloud]
 ) -> None:
     with pytest.raises(AmbiguousTenant) as caught:
-        discover_tenant(tenant)
+        Tenant.lookup(tenant)
 
-    found = {info.cloud: info.tenant_id for info in caught.value.candidates}
+    found = {candidate.cloud: candidate.id for candidate in caught.value.candidates}
     assert set(found) == clouds
     print(f"{tenant}: { ({cloud.name: guid for cloud, guid in found.items()}) }")
 
@@ -159,7 +161,7 @@ def test_a_name_that_is_a_tenant_in_two_clouds_is_ambiguous(
 )
 def test_a_tenant_that_does_not_exist_is_not_found(tenant: str) -> None:
     with pytest.raises(TenantNotFound):
-        discover_tenant(tenant)
+        Tenant.lookup(tenant)
 
 
 # ---------------------------------------------------------------------------- the table
@@ -174,12 +176,12 @@ def test_every_service_in_the_table_trusts_its_clouds_sign_in(cloud: Cloud) -> N
     principal it is. A host from the wrong cloud names the wrong sign-in host; a typo does
     not resolve.
     """
-    tenant = reference_tenant_id(cloud)
-    graph = unauthenticated_client(GraphClient, cloud, tenant)
-    arm = unauthenticated_client(AzureClient, cloud, tenant)
-    exchange = unauthenticated_client(ExchangeClient, cloud, tenant)
-    ipps = unauthenticated_client(IppsClient, cloud, tenant)
-    invoke = f"/adminapi/beta/{tenant}/InvokeCommand"
+    tenant = reference_tenant(cloud)
+    graph = unauthenticated_client(GraphClient, tenant)
+    arm = unauthenticated_client(AzureClient, tenant)
+    exchange = unauthenticated_client(ExchangeClient, tenant)
+    ipps = unauthenticated_client(IppsClient, tenant)
+    invoke = f"/adminapi/beta/{tenant.id}/InvokeCommand"
     body = {"CmdletInput": {"CmdletName": "Get-OrganizationConfig"}}
 
     with httpx.Client(timeout=30) as http:
@@ -244,9 +246,9 @@ def test_a_context_finds_its_tenants_cloud_by_itself(domain: str, cloud: Cloud) 
     """
     auth = AuthContext(domain, username=f"nobody@{domain}")
 
-    assert auth.cloud is cloud
-    assert auth.tenant_name == domain
-    assert auth.authority == f"{cloud.authority_host}/{auth.tenant_id}"
+    assert auth.tenant.cloud is cloud
+    assert auth.tenant.domain == domain
+    assert auth.authority == f"{cloud.authority_host}/{auth.tenant.id}"
     assert GraphClient(auth, client_id="unused").base_url.startswith(cloud.graph)
     assert ExchangeClient(auth).resource == cloud.exchange
 
@@ -277,17 +279,15 @@ def test_the_sign_in_library_sets_up_in_every_cloud(domain: str, cloud: Cloud) -
 @pytest.mark.parametrize(
     ("tenant", "clouds"), AMBIGUOUS_TENANTS.values(), ids=AMBIGUOUS_TENANTS.keys()
 )
-def test_a_context_for_an_ambiguous_name_takes_the_cloud_it_is_given(
+def test_a_context_for_an_ambiguous_name_takes_the_tenant_looked_up_in_its_cloud(
     tenant: str, clouds: set[Cloud]
 ) -> None:
-    # The name is a tenant in each cloud; the cloud given says which one is meant.
+    # The name is a tenant in each cloud; looking it up in one says which is meant.
     with pytest.raises(AmbiguousTenant):
         AuthContext(tenant, username="nobody@example.invalid")
     for cloud in clouds:
-        auth = AuthContext(tenant, username="nobody@example.invalid", cloud=cloud)
-        assert auth.cloud is cloud
-        # A domain name is still looked up, and the tenant taken is the one in that cloud.
-        assert auth.tenant is None or auth.tenant.cloud is cloud
+        auth = AuthContext(Tenant.lookup(tenant, cloud), username="nobody@example.invalid")
+        assert auth.tenant.cloud is cloud
 
 
 def test_a_context_for_a_tenant_that_does_not_exist_fails_when_it_is_created() -> None:
@@ -298,7 +298,7 @@ def test_a_context_for_a_tenant_that_does_not_exist_fails_when_it_is_created() -
 @needs_app
 @pytest.mark.parametrize("cloud", CLOUDS, ids=lambda cloud: cloud.name)
 def test_an_app_given_the_wrong_cloud_fails_at_sign_in(cloud: Cloud) -> None:
-    """A wrong ``cloud=`` is taken as given, and Entra refuses the sign-in.
+    """A tenant built by hand with the wrong cloud is taken as given; Entra refuses it.
 
     What Entra answers, measured 2026-09-29: the certificate assertion is addressed to the
     wrong cloud's token endpoint, and is refused with AADSTS700023 ("Client assertion
@@ -307,7 +307,7 @@ def test_an_app_given_the_wrong_cloud_fails_at_sign_in(cloud: Cloud) -> None:
     if cloud == live_cloud():
         pytest.skip(f"the configured tenant lives in {cloud.name}")
     auth = AuthContext(
-        TENANT, client_id=APP_CLIENT_ID, certificate_thumbprint=THUMBPRINT, cloud=cloud
+        Tenant(live_tenant().id, cloud), client_id=APP_CLIENT_ID, certificate_thumbprint=THUMBPRINT
     )
 
     with pytest.raises(AuthError, match="AADSTS700023"):
@@ -330,10 +330,10 @@ def test_an_app_sign_in_reaches_its_clouds_token_server() -> None:
     auth = AuthContext(TENANT, client_id=str(uuid.uuid4()), certificate_thumbprint=THUMBPRINT)
 
     with pytest.raises(AuthError, match="AADSTS700016"):
-        auth.acquire_token([f"{auth.cloud.graph}/.default"])
+        auth.acquire_token([f"{auth.tenant.cloud.graph}/.default"])
 
     (app,) = auth._apps.values()
-    assert httpx.URL(app.authority.token_endpoint).host in auth.cloud.login_hosts
+    assert httpx.URL(app.authority.token_endpoint).host in auth.tenant.cloud.login_hosts
 
 
 # ---------------------------------------------------------------------------- signed in
@@ -361,9 +361,8 @@ async def test_a_cloud_of_the_callers_own_is_used_as_given(cache_path: Path) -> 
     """
     custom = dataclasses.replace(live_cloud(), name="Custom")
     auth = AuthContext(
-        TENANT,
+        Tenant(live_tenant().id, custom),
         username=USERNAME,
-        cloud=custom,
         cache="disk",
         cache_path=cache_path,
         interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
@@ -372,8 +371,8 @@ async def test_a_cloud_of_the_callers_own_is_used_as_given(cache_path: Path) -> 
         ensure_sign_in(graph)
         organization = await graph.get_all("/organization", params={"$select": "id"})
 
-    assert auth.cloud is custom
-    assert [item["id"] for item in organization] == [discover_tenant(TENANT).tenant_id]
+    assert auth.tenant.cloud is custom
+    assert [item["id"] for item in organization] == [live_tenant().id]
 
 
 @needs_user
@@ -381,7 +380,7 @@ async def test_a_cloud_of_the_callers_own_is_used_as_given(cache_path: Path) -> 
 @pytest.mark.interactive
 @pytest.mark.anyio
 async def test_a_user_given_the_wrong_cloud_is_refused() -> None:
-    """A wrong ``cloud=`` is taken as given: the sign-in succeeds and the first request fails.
+    """A tenant built with the wrong cloud: the sign-in succeeds and the first request fails.
 
     Measured 2026-09-29, a Commercial tenant set to USGov: the tenant's own cloud signs the
     user in and issues a token for the wrong cloud's Graph (``iss`` sts.windows.net, ``aud``
@@ -391,7 +390,9 @@ async def test_a_user_given_the_wrong_cloud_is_refused() -> None:
     wrong = COMMERCIAL if live_cloud() != COMMERCIAL else US_GOV
     walkthrough(sign_in_step("browser"))
     auth = AuthContext(
-        TENANT, username=USERNAME, cloud=wrong, interactive_timeout=SIGN_IN_TIMEOUT_SECONDS
+        Tenant(live_tenant().id, wrong),
+        username=USERNAME,
+        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
     async with GraphClient(auth, scopes=["User.Read"]) as graph:
         await graph.login(force=True)
@@ -409,12 +410,12 @@ async def test_a_user_given_the_wrong_cloud_is_refused() -> None:
 
 @needs_user
 def test_the_configured_tenant_is_the_same_by_id_and_by_the_users_domain() -> None:
-    by_id = discover_tenant(TENANT)
-    by_domain = discover_tenant(USERNAME.rsplit("@", 1)[-1])
+    by_id = Tenant.lookup(TENANT)
+    by_domain = Tenant.lookup(USERNAME.rsplit("@", 1)[-1])
 
     assert by_id == by_domain
     assert by_id.cloud == live_cloud()
-    print(f"configured tenant: {by_id.tenant_id} in {by_id.cloud.name}, {by_id.region_scope}")
+    print(f"configured tenant: {by_id.id} in {by_id.cloud.name}, {by_id.region_scope}")
 
 
 @needs_user
@@ -427,16 +428,14 @@ async def test_a_discovered_context_reaches_graph_in_its_cloud(cache_path: Path)
         token = await auth.aio.acquire_token(graph.scopes, client_id=graph.client_id)
         organization = await graph.get_all("/organization", params={"$select": "id"})
 
-    tenant_guid = discover_tenant(TENANT).tenant_id
-    assert auth.cloud == live_cloud()
-    assert graph.base_url.startswith(auth.cloud.graph)
+    tenant_guid = live_tenant().id
+    assert auth.tenant.cloud == live_cloud()
+    assert graph.base_url.startswith(auth.tenant.cloud.graph)
     assert token_claims(token.token)["tid"] == tenant_guid
     assert [item["id"] for item in organization] == [tenant_guid]
-    # The context holds the tenant the token is really for, by GUID, and remembers the name.
-    assert auth.tenant_id == tenant_guid
-    assert auth.tenant_name == USERNAME.rsplit("@", 1)[-1]
-    assert auth.tenant is not None
-    assert (auth.tenant.tenant_id, auth.tenant.cloud) == (tenant_guid, auth.cloud)
+    # The context holds the tenant the token is really for, and the domain it was given.
+    assert auth.tenant.id == tenant_guid
+    assert auth.tenant.domain == USERNAME.rsplit("@", 1)[-1].lower()
     assert auth.for_tenant(tenant_guid) is auth
 
 
@@ -450,7 +449,7 @@ async def test_a_discovered_context_runs_exchange_cmdlets_in_its_cloud(cache_pat
         token = await auth.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
         config = await exchange.run("Get-OrganizationConfig")
 
-    assert token_claims(token.token)["aud"] == auth.cloud.exchange
+    assert token_claims(token.token)["aud"] == auth.tenant.cloud.exchange
     assert config[0]["Name"]
 
 
@@ -466,4 +465,4 @@ async def test_a_discovered_context_runs_compliance_cmdlets_in_its_cloud(
         labels = await ipps.run("Get-Label")
 
     assert isinstance(labels, list)
-    assert httpx.URL(ipps.base_url).host.endswith(f".{httpx.URL(auth.cloud.ipps).host}")
+    assert httpx.URL(ipps.base_url).host.endswith(f".{httpx.URL(auth.tenant.cloud.ipps).host}")

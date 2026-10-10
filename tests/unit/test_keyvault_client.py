@@ -65,7 +65,7 @@ async def test_sdk_clients_get_the_vault_and_the_async_credential(vault: KeyVaul
     assert vault.vault_url == secrets.target == certificates.target == VAULT
     assert secrets.credential is certificates.credential
     # The async wrapper hands over ``auth.aio``; the generated blocking one hands over ``auth``.
-    assert getattr(secrets.credential, "sync", secrets.credential).tenant_id == tenant_guid(
+    assert getattr(secrets.credential, "sync", secrets.credential).tenant.id == tenant_guid(
         "tenant"
     )
 

@@ -1,9 +1,8 @@
-"""Token acquisition: the context, tenant discovery, credentials, cache and errors."""
+"""Token acquisition: the context, the tenant, credentials, cache and errors."""
 
 from __future__ import annotations
 
 from azure_auth.auth.context import AsyncAuthContext, AuthContext
-from azure_auth.auth.discovery import discover_tenant
 from azure_auth.auth.errors import (
     AccountSelectionRequired,
     AmbiguousTenant,
@@ -15,6 +14,7 @@ from azure_auth.auth.errors import (
     InteractionRequired,
     TenantNotFound,
 )
+from azure_auth.auth.tenant import Tenant
 
 __all__ = [
     "AccountSelectionRequired",
@@ -27,6 +27,6 @@ __all__ = [
     "CertificateUnavailable",
     "ConsentRequired",
     "InteractionRequired",
+    "Tenant",
     "TenantNotFound",
-    "discover_tenant",
 ]

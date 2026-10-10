@@ -1,7 +1,7 @@
 """The authentication context shared by every resource client.
 
-An :class:`AuthContext` holds one tenant, one cloud, one set of credentials, one token cache
-and (for user flows) one account. It creates MSAL applications on demand, one per client id,
+An :class:`AuthContext` holds one tenant (with its cloud), one set of credentials, one token
+cache and (for user flows) one account. It creates MSAL applications on demand, one per client id,
 because the Microsoft first-party client ids differ per resource.
 
 The context implements the Azure SDK ``TokenCredential`` protocol, and its :attr:`aio`
@@ -17,7 +17,6 @@ import logging
 import sys
 import threading
 import time
-import uuid
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from types import TracebackType
@@ -35,17 +34,15 @@ from azure_auth.auth.credentials import (
     PemCertificateCredential,
     SecretCredential,
 )
-from azure_auth.auth.discovery import discover_tenant
 from azure_auth.auth.errors import (
     AccountSelectionRequired,
-    AmbiguousTenant,
     AuthError,
     BrokerUnavailable,
     InteractionRequired,
     broker_status,
     error_from_msal_result,
 )
-from azure_auth.clouds import Cloud, TenantInfo, get_cloud
+from azure_auth.auth.tenant import MULTI_TENANT_AUTHORITIES, Tenant, as_guid
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,57 +57,8 @@ _DEFAULT_INTERACTIVE_TIMEOUT_SECONDS = 120
 
 _TokenKey = tuple[str, frozenset[str]]
 
-# Authorities that name no single tenant, so there is no one cloud to look up.
-_MULTI_TENANT_AUTHORITIES = frozenset({"common", "organizations", "consumers"})
-
 # The broker's status for a person who closed its sign-in window (seen live 2026-09-29).
 _BROKER_CANCELLED_STATUS = "Status_UserCanceled"
-
-
-def _as_guid(tenant: str) -> str | None:
-    """Return a tenant id in its one canonical spelling, or ``None`` for a domain name.
-
-    Args:
-        tenant: Tenant id (GUID) or verified domain name.
-
-    Returns:
-        The GUID, lower-case and hyphenated, or ``None`` when ``tenant`` is not one.
-    """
-    try:
-        return str(uuid.UUID(tenant))
-    except ValueError:
-        return None
-
-
-def _look_up(tenant: str, cloud: Cloud | None) -> TenantInfo:
-    """Look a tenant up, settling a name that is a tenant in several clouds by the one given.
-
-    Each cloud is a separate directory, so one name can be a different tenant in each of two.
-    Naming the cloud says which: the tenant found in it is taken. GCC High and DoD share one
-    directory, so either names the tenant found there.
-
-    Args:
-        tenant: Tenant id (GUID) or verified domain name.
-        cloud: The cloud as given, or ``None`` when it was not.
-
-    Returns:
-        The tenant.
-
-    Raises:
-        AmbiguousTenant: If no cloud was given, or none of the tenants found is in it.
-        TenantNotFound, AuthError: From the lookup.
-    """
-    try:
-        return discover_tenant(tenant)
-    except AmbiguousTenant as error:
-        if cloud is None:
-            raise
-        found = [
-            info for info in error.candidates if info.cloud.authority_host == cloud.authority_host
-        ]
-        if len(found) != 1:
-            raise
-        return found[0]
 
 
 def _broker_installed() -> bool:
@@ -207,17 +155,16 @@ def _build_credential(
 
 
 class AuthContext:
-    """Credentials, cache and account for one tenant in one cloud.
+    """Credentials, cache and account for one tenant.
 
     A context runs either a *user flow* (``username`` given, no credential) or an *app flow*
     (``client_id`` plus a secret or certificate). Authentication is lazy: nothing happens
     until the first token is requested.
 
-    The context finds the tenant itself, from the tenant's public discovery document: its
-    GUID, and the cloud it lives in, so a tenant in any Microsoft cloud works by domain name
-    without saying which. Inside, the tenant is always its GUID (:attr:`tenant_id`); the name
-    it was given is kept beside it (:attr:`tenant_name`), and what the lookup found as
-    :attr:`tenant`. ``cloud=`` with a GUID skips the lookup.
+    Everything known about the tenant is in :attr:`tenant`, a :class:`Tenant`: its GUID, its
+    cloud, a domain name and its OpenID Connect configuration. Given a GUID or domain name,
+    the context looks the tenant up itself, so a tenant in any Microsoft cloud works without
+    saying which. Given a :class:`Tenant`, it uses it as it is.
 
     Example:
         >>> auth = AuthContext("contoso.com", username="admin@contoso.com")  # doctest: +SKIP
@@ -226,7 +173,7 @@ class AuthContext:
 
     def __init__(
         self,
-        tenant_id: str | TenantInfo,
+        tenant: str | Tenant,
         *,
         client_id: str | None = None,
         username: str | None = None,
@@ -241,18 +188,19 @@ class AuthContext:
         cache_path: str | Path | None = None,
         broker: bool = False,
         broker_fallback: bool = True,
-        cloud: Cloud | str | None = None,
         interactive_timeout: float = _DEFAULT_INTERACTIVE_TIMEOUT_SECONDS,
     ) -> None:
-        """Configure the context, looking the tenant up unless its GUID and cloud are given.
+        """Configure the context, looking the tenant up when it is given as a string.
 
-        The lookup is one unauthenticated request to each of three public sign-in hosts. Nothing
-        else touches the network until the first token is requested.
+        The lookup (:meth:`Tenant.lookup`) is one unauthenticated request to each of three
+        public sign-in hosts. Nothing else touches the network until the first token is
+        requested.
 
         Args:
-            tenant_id: Tenant id (GUID) or verified domain name, or what
-                :func:`~azure_auth.discover_tenant` found, to use that answer instead of
-                looking the tenant up again.
+            tenant: Tenant id (GUID) or verified domain name, to look up; or a
+                :class:`Tenant`, used as it is. Build a :class:`Tenant` by hand, with the
+                GUID and the cloud, to skip the lookup; a wrong cloud then fails when used:
+                an app sign-in at once, a user's at the first request.
             client_id: Application (client) id. App flows need one, here or on the resource
                 client. For user flows it overrides the first-party default of every
                 resource client.
@@ -272,34 +220,27 @@ class AuthContext:
                 ``broker`` extra.
             broker_fallback: When the broker cannot be used, fall back to the browser
                 (default) instead of raising :class:`BrokerUnavailable`.
-            cloud: The cloud the tenant lives in, which every client built on the context
-                uses. Leave it out to have it looked up. Give it, as a
-                :class:`~azure_auth.clouds.Cloud` or its name (``Commercial``, ``USGov``,
-                ``USGovDoD``, ``China``), with the tenant's GUID to skip the lookup. A domain
-                name is still looked up, for the GUID; when it is a different tenant in each
-                of two clouds, the one in this cloud is taken. A given cloud is taken as
-                given, and a wrong one fails when used: an app sign-in at once, a user's at
-                the first request.
             interactive_timeout: Seconds a browser sign-in waits for the person before it
                 fails with :class:`AuthError` (default 120). A closed window would otherwise
                 wait for ever.
 
         Raises:
-            ValueError: If the arguments do not describe exactly one flow, name an unknown
-                cloud, give ``cloud`` beside a looked-up tenant that already names its own, or
-                leave out the cloud of a multi-tenant authority such as ``organizations``,
-                which has none to look up.
+            ValueError: If the arguments do not describe exactly one flow, or ``tenant`` is a
+                multi-tenant authority such as ``organizations``, which has nothing to look
+                up: build its :class:`Tenant` by hand.
             CacheEncryptionUnavailable: If ``cache='disk'`` cannot be encrypted here.
             CertificateUnavailable: If a PFX archive cannot be read.
             TenantNotFound: If the lookup finds no such tenant.
-            AmbiguousTenant: If the lookup finds a different tenant in each of two clouds,
-                and ``cloud`` does not say which.
+            AmbiguousTenant: If the lookup finds a different tenant in each of two clouds;
+                look it up with :meth:`Tenant.lookup` and the cloud of the one you mean.
             AuthError: If the lookup gets an answer it cannot use.
         """
-        if not tenant_id:
-            raise ValueError("tenant_id is required")
-        if isinstance(tenant_id, TenantInfo) and cloud is not None:
-            raise ValueError("cloud is not used with a looked-up tenant, which names its own")
+        if not tenant:
+            raise ValueError("tenant is required")
+        if isinstance(tenant, str) and tenant.lower() in MULTI_TENANT_AUTHORITIES:
+            raise ValueError(
+                f"{tenant!r} names no single tenant to look up; pass Tenant({tenant!r}, cloud)"
+            )
         credential = _build_credential(
             client_secret=client_secret,
             certificate_thumbprint=certificate_thumbprint,
@@ -316,8 +257,6 @@ class AuthContext:
                 raise ValueError("username is not used for app flows")
             if broker:
                 raise ValueError("broker is only available for user flows")
-        if cloud is None and str(tenant_id).lower() in _MULTI_TENANT_AUTHORITIES:
-            raise ValueError(f"{tenant_id!r} names no single tenant to look up; pass cloud=")
 
         self._client_id = client_id
         self._username = username
@@ -327,40 +266,8 @@ class AuthContext:
         self._broker_fallback = broker_fallback
         self._interactive_timeout = interactive_timeout
         self._interactive_allowed = True
-        self._set_tenant(tenant_id, get_cloud(cloud) if cloud is not None else None)
+        self._tenant = tenant if isinstance(tenant, Tenant) else Tenant.lookup(tenant)
         self._init_state()
-
-    def _set_tenant(self, tenant: str | TenantInfo, cloud: Cloud | None) -> None:
-        """Settle which tenant this context is for, looking it up when that is needed.
-
-        The tenant is held as its GUID, whatever it was given as, so that the one tenant has
-        one context: Key Vault and the other Azure SDK clients name the tenant of a request
-        by GUID, and a request for this context's own tenant must come back to it, not to a
-        sibling that may never prompt. The lookup is skipped only when nothing it would
-        answer is missing: a GUID with its cloud, or an answer already in hand.
-
-        Args:
-            tenant: Tenant id (GUID) or verified domain name, or a looked-up tenant.
-            cloud: The cloud as given, or ``None`` to take the lookup's.
-
-        Raises:
-            TenantNotFound, AmbiguousTenant, AuthError: From the lookup.
-        """
-        if isinstance(tenant, TenantInfo):
-            self._tenant: TenantInfo | None = tenant
-            self._tenant_id = self._tenant_name = tenant.tenant_id
-            self._cloud = tenant.cloud
-            return
-        guid = _as_guid(tenant)
-        self._tenant_name = tenant
-        if cloud is not None and (guid or tenant.lower() in _MULTI_TENANT_AUTHORITIES):
-            self._tenant = None
-            self._tenant_id = guid or tenant
-            self._cloud = cloud
-            return
-        self._tenant = _look_up(tenant, cloud)
-        self._tenant_id = self._tenant.tenant_id
-        self._cloud = cloud or self._tenant.cloud
 
     def _init_state(self) -> None:
         """Create the per-context mutable state."""
@@ -368,7 +275,7 @@ class AuthContext:
         self._locks: dict[_TokenKey, threading.Lock] = {}
         self._tokens: dict[_TokenKey, AccessTokenInfo] = {}
         self._siblings: dict[str, AuthContext] = {}
-        self._lookups: dict[str, TenantInfo] = {}
+        self._lookups: dict[str, Tenant] = {}
         self._guard = threading.Lock()
         self._aio: AsyncAuthContext | None = None
 
@@ -379,44 +286,14 @@ class AuthContext:
             A short description.
         """
         flow = "app" if self.is_app_flow else "user"
-        name = ""
-        if self._tenant_name != self._tenant_id:
-            name = f", tenant_name={self._tenant_name!r}"
-        return (
-            f"AuthContext(tenant_id={self._tenant_id!r}{name}, cloud={self._cloud.name!r}, "
-            f"flow={flow!r})"
-        )
+        return f"AuthContext(tenant={self._tenant!r}, flow={flow!r})"
 
     # ------------------------------------------------------------------ properties
 
     @property
-    def tenant_id(self) -> str:
-        """The GUID of the tenant this context authenticates against.
-
-        Always the GUID, also when the context was given a domain name: the name was looked
-        up. Only a multi-tenant authority such as ``organizations`` is kept as given.
-        """
-        return self._tenant_id
-
-    @property
-    def tenant_name(self) -> str:
-        """The tenant as it was given, for messages and logs: a domain name, else the GUID."""
-        return self._tenant_name
-
-    @property
-    def tenant(self) -> TenantInfo | None:
-        """What the lookup found: the tenant's GUID, cloud, region and discovery document.
-
-        ``None`` when no lookup was made, which is a context given its tenant's GUID and
-        ``cloud``, or a sibling from :meth:`for_tenant` given a GUID. Never looked up on
-        demand: a context given its cloud makes no request to check it.
-        """
+    def tenant(self) -> Tenant:
+        """The tenant this context signs in to: its GUID, cloud, domain and OIDC configuration."""
         return self._tenant
-
-    @property
-    def cloud(self) -> Cloud:
-        """The cloud this context signs in to, and whose endpoints its clients use."""
-        return self._cloud
 
     @property
     def client_id(self) -> str | None:
@@ -441,7 +318,7 @@ class AuthContext:
     @property
     def authority(self) -> str:
         """The authority URL for this tenant."""
-        return f"{self._cloud.authority_host.rstrip('/')}/{self._tenant_id}"
+        return f"{self._tenant.cloud.authority_host.rstrip('/')}/{self._tenant.id}"
 
     @property
     def token_endpoint(self) -> str:
@@ -457,7 +334,7 @@ class AuthContext:
 
     # ------------------------------------------------------------------ tenants
 
-    def for_tenant(self, tenant_id: str) -> AuthContext:
+    def for_tenant(self, tenant: str) -> AuthContext:
         """Return a sibling context for another tenant.
 
         The sibling shares this context's credentials, cache, username and cloud, so a user
@@ -468,46 +345,42 @@ class AuthContext:
         tenant id.
 
         Args:
-            tenant_id: Tenant id (GUID) or verified domain name of the other tenant.
+            tenant: Tenant id (GUID) or verified domain name of the other tenant.
 
         Returns:
             The sibling context, or this context when the tenant is its own. Repeated calls
             return the same object.
 
         Raises:
-            TenantNotFound, AmbiguousTenant, AuthError: From looking a domain name up.
+            TenantNotFound, AuthError: From looking a domain name up, in this cloud.
         """
-        guid = _as_guid(tenant_id)
-        info = None
+        guid = as_guid(tenant)
+        found = None
         if guid is None:
-            info = self._lookups.get(tenant_id.lower())
-            if info is None:
-                info = self._lookups[tenant_id.lower()] = _look_up(tenant_id, self._cloud)
-            guid = info.tenant_id
-        if guid == self._tenant_id:
+            found = self._lookups.get(tenant.lower())
+            if found is None:
+                found = self._lookups[tenant.lower()] = Tenant.lookup(tenant, self._tenant.cloud)
+            guid = found.id
+        if guid == self._tenant.id:
             return self
         with self._guard:
             sibling = self._siblings.get(guid)
             if sibling is None:
                 sibling = AuthContext.__new__(AuthContext)
-                sibling._tenant_id = guid
-                sibling._tenant_name = tenant_id
-                sibling._tenant = info
+                sibling._tenant = found or Tenant(guid, self._tenant.cloud)
                 sibling._client_id = self._client_id
                 sibling._username = self._username
                 sibling._credential = self._credential
                 sibling._cache = self._cache
                 sibling._broker = self._broker
                 sibling._broker_fallback = self._broker_fallback
-                sibling._cloud = self._cloud
                 sibling._interactive_timeout = self._interactive_timeout
                 sibling._interactive_allowed = False
                 sibling._init_state()
                 self._siblings[guid] = sibling
-            elif info is not None and sibling._tenant is None:
+            elif found is not None and sibling._tenant.oidc is None:
                 # First addressed by GUID, now by name: keep what the name's lookup found.
-                sibling._tenant = info
-                sibling._tenant_name = tenant_id
+                sibling._tenant = found
             return sibling
 
     # ------------------------------------------------------------------ public token API
@@ -533,7 +406,7 @@ class AuthContext:
         Returns:
             The token and its expiry time.
         """
-        context = self.for_tenant(tenant_id or self._tenant_id)
+        context = self.for_tenant(tenant_id or self._tenant.id)
         info = context.acquire_token(scopes, claims=claims)
         return AccessToken(info.token, info.expires_on)
 
@@ -550,7 +423,7 @@ class AuthContext:
             The token with its expiry time and type.
         """
         options = options or {}
-        context = self.for_tenant(options.get("tenant_id") or self._tenant_id)
+        context = self.for_tenant(options.get("tenant_id") or self._tenant.id)
         return context.acquire_token(scopes, claims=options.get("claims"))
 
     def acquire_token(
@@ -742,9 +615,7 @@ class AuthContext:
             app.remove_tokens_for_client()
         result = app.acquire_token_for_client(scopes, claims_challenge=claims)
         if "access_token" not in result:
-            raise error_from_msal_result(
-                result, tenant_id=self._tenant_id, scopes=scopes, tenant_name=self._tenant_name
-            )
+            raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
         return dict(result)
 
     def _broker_usable(self) -> bool:
@@ -809,14 +680,12 @@ class AuthContext:
                 return dict(result)
 
         if not self._interactive_allowed:
-            error = error_from_msal_result(
-                result, tenant_id=self._tenant_id, scopes=scopes, tenant_name=self._tenant_name
-            )
+            error = error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
             if isinstance(error, InteractionRequired):
                 raise InteractionRequired(
                     f"{error} Sibling contexts never prompt; call login() on a client of the "
                     "root context first.",
-                    tenant_id=self._tenant_id,
+                    tenant_id=self._tenant.id,
                     scopes=scopes,
                 )
             raise error
@@ -834,9 +703,7 @@ class AuthContext:
             client_id, scopes, claims, use_broker=use_broker, pick_account=force_interactive
         )
         if "access_token" not in result:
-            raise error_from_msal_result(
-                result, tenant_id=self._tenant_id, scopes=scopes, tenant_name=self._tenant_name
-            )
+            raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
         self._check_signed_in_user(result)
         return result
 
@@ -948,16 +815,16 @@ class AsyncAuthContext:
         """The synchronous context behind this view."""
         return self._sync
 
-    def for_tenant(self, tenant_id: str) -> AsyncAuthContext:
+    def for_tenant(self, tenant: str) -> AsyncAuthContext:
         """Return the asynchronous view of a sibling context.
 
         Args:
-            tenant_id: Tenant id (GUID) or verified domain name of the other tenant.
+            tenant: Tenant id (GUID) or verified domain name of the other tenant.
 
         Returns:
             The sibling's asynchronous view.
         """
-        return self._sync.for_tenant(tenant_id).aio
+        return self._sync.for_tenant(tenant).aio
 
     async def get_token(
         self,
@@ -979,7 +846,7 @@ class AsyncAuthContext:
         Returns:
             The token and its expiry time.
         """
-        view = self.for_tenant(tenant_id or self._sync.tenant_id)
+        view = self.for_tenant(tenant_id or self._sync.tenant.id)
         info = await view.acquire_token(scopes, claims=claims)
         return AccessToken(info.token, info.expires_on)
 
@@ -996,7 +863,7 @@ class AsyncAuthContext:
             The token with its expiry time and type.
         """
         options = options or {}
-        view = self.for_tenant(options.get("tenant_id") or self._sync.tenant_id)
+        view = self.for_tenant(options.get("tenant_id") or self._sync.tenant.id)
         return await view.acquire_token(scopes, claims=options.get("claims"))
 
     async def acquire_token(

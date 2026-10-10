@@ -61,7 +61,7 @@ from azure_auth import (
     ConsentRequired,
     GraphClient,
     InteractionRequired,
-    discover_tenant,
+    Tenant,
 )
 from azure_auth.clients import ResourceClient
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
@@ -167,13 +167,22 @@ needs_arm_or_keyvault = pytest.mark.skipif(
 
 
 @functools.cache
+def live_tenant() -> Tenant:
+    """Return the configured tenant, looked up once per run.
+
+    Returns:
+        The tenant.
+    """
+    return Tenant.lookup(TENANT)
+
+
 def live_cloud() -> Cloud:
-    """Return the cloud the configured tenant lives in, found once per run by discovery.
+    """Return the cloud the configured tenant lives in.
 
     Returns:
         The cloud.
     """
-    return discover_tenant(TENANT).cloud
+    return live_tenant().cloud
 
 
 def graph_scopes(scopes: Iterable[str]) -> list[str]:
@@ -595,7 +604,7 @@ async def _wait_until_refused(auth: AuthContext, scope: str) -> float:
         How many seconds it took.
     """
     started = time.monotonic()
-    full = f"{auth.cloud.graph}/{scope}"
+    full = f"{auth.tenant.cloud.graph}/{scope}"
     while True:
         try:
             await auth.aio.acquire_token([full], client_id=GRAPH_CLI_CLIENT_ID, force_refresh=True)

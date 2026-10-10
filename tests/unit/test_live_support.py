@@ -17,7 +17,8 @@ import json
 import httpx
 import pytest
 
-from azure_auth import AuthContext, ExchangeClient
+from azure_auth import AuthContext, ExchangeClient, Tenant
+from azure_auth.clouds import COMMERCIAL
 from azure_auth.sync import ExchangeClient as BlockingExchangeClient
 from tests.fakes import FakeMsal, token_result
 from tests.http import Recorder, fake_jwt, ok
@@ -160,7 +161,7 @@ def exchange_auth(fake_msal: FakeMsal) -> AuthContext:
     token = fake_jwt(tid=TENANT_GUID)
     fake_msal.accounts = [{"username": "admin@partner.com"}]
     fake_msal.silent = lambda call: token_result(token)
-    return AuthContext(TENANT_GUID, username="admin@partner.com", cloud="Commercial")
+    return AuthContext(Tenant(TENANT_GUID, COMMERCIAL), username="admin@partner.com")
 
 
 @pytest.mark.anyio

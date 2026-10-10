@@ -11,20 +11,20 @@ from msal import BrowserInteractionTimeoutError
 
 from azure_auth import (
     AccountSelectionRequired,
-    AmbiguousTenant,
     AuthContext,
     AuthError,
     BrokerUnavailable,
     ConsentRequired,
     InteractionRequired,
+    Tenant,
     TenantNotFound,
 )
 from azure_auth.auth.credentials import CertStoreCredential
-from azure_auth.clouds import CHINA, COMMERCIAL, US_GOV, US_GOV_DOD, TenantInfo
+from azure_auth.clouds import COMMERCIAL, US_GOV, US_GOV_DOD
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID, GRAPH_CLI_CLIENT_ID
 from tests.fakes import (
     Call,
-    FakeDiscovery,
+    FakeLookup,
     FakeMsal,
     Result,
     error_result,
@@ -673,130 +673,52 @@ async def test_async_view_serves_other_tenants_and_login(fake_msal: FakeMsal) ->
     assert info.token == token.token
 
 
-# ---------------------------------------------------------------------------- clouds
+# ---------------------------------------------------------------------------- the tenant
 
 
-def test_the_cloud_is_looked_up_when_the_context_is_created(
-    fake_discovery: FakeDiscovery, fake_msal: FakeMsal
+def test_a_string_is_looked_up_when_the_context_is_created(
+    fake_lookup: FakeLookup, fake_msal: FakeMsal
 ) -> None:
-    fake_discovery.cloud = US_GOV_DOD
+    fake_lookup.cloud = US_GOV_DOD
+    fake_lookup.region_sub_scope = "DOD"
     auth = user_context()
 
-    assert fake_discovery.tenants == [TENANT]
-    assert auth.cloud is US_GOV_DOD
-    assert "cloud='USGovDoD'" in repr(auth)
+    assert fake_lookup.calls == [(TENANT, None)]
+    assert (auth.tenant.id, auth.tenant.cloud, auth.tenant.domain) == (
+        TENANT_GUID,
+        US_GOV_DOD,
+        TENANT,
+    )
+    assert auth.tenant.region_sub_scope == "DOD"
+    assert repr(auth) == (
+        f"AuthContext(tenant=Tenant(id={TENANT_GUID!r}, cloud='USGovDoD', domain={TENANT!r}), "
+        "flow='user')"
+    )
     auth.acquire_token([ARM_SCOPE])
     assert fake_msal.apps[0].authority == f"https://login.microsoftonline.us/{TENANT_GUID}"
     # Once is enough: token requests do not look again.
-    assert fake_discovery.tenants == [TENANT]
+    assert fake_lookup.names == [TENANT]
 
 
-def test_a_given_cloud_with_the_guid_is_taken_as_given_without_a_lookup(
-    fake_discovery: FakeDiscovery, fake_msal: FakeMsal
+def test_a_tenant_built_by_hand_is_used_as_given(
+    fake_lookup: FakeLookup, fake_msal: FakeMsal
 ) -> None:
-    fake_discovery.cloud = US_GOV_DOD
-    auth = AuthContext(TENANT_GUID.upper(), username=USER, cloud="usgov")
+    tenant = Tenant(TENANT_GUID.upper(), US_GOV)
 
+    auth = AuthContext(tenant, username=USER)
+    app = AuthContext(tenant, client_id="app", client_secret="s3cret")
     auth.acquire_token([ARM_SCOPE])
 
-    assert auth.cloud is US_GOV
-    assert auth.tenant is None
+    assert auth.tenant is tenant
+    assert app.tenant is tenant
     # The GUID is held in its one spelling, so no two spellings make two tenants.
-    assert (auth.tenant_id, auth.tenant_name) == (TENANT_GUID, TENANT_GUID.upper())
-    assert AuthContext(TENANT_GUID, username=USER, cloud=COMMERCIAL).cloud is COMMERCIAL
+    assert tenant.id == TENANT_GUID
+    assert (tenant.domain, tenant.oidc, tenant.region_scope) == (None, None, None)
     assert fake_msal.apps[0].authority == f"https://login.microsoftonline.us/{TENANT_GUID}"
-    assert fake_discovery.tenants == []
+    assert fake_lookup.calls == []
 
 
-def test_a_given_cloud_with_a_domain_name_still_looks_the_guid_up(
-    fake_discovery: FakeDiscovery, fake_msal: FakeMsal
-) -> None:
-    fake_discovery.cloud = US_GOV_DOD
-    auth = user_context(cloud="usgov")
-
-    auth.acquire_token([ARM_SCOPE])
-
-    # The name is looked up for its GUID; the cloud stays as given, not as found.
-    assert fake_discovery.tenants == [TENANT]
-    assert (auth.tenant_id, auth.tenant_name) == (TENANT_GUID, TENANT)
-    assert auth.cloud is US_GOV
-    assert auth.tenant is not None
-    assert auth.tenant.cloud is US_GOV_DOD
-    assert fake_msal.apps[0].authority == f"https://login.microsoftonline.us/{TENANT_GUID}"
-
-
-# A name verified in a commercial and a China tenant, as the lookup reports it.
-COMMERCIAL_TWIN = tenant_guid("twin-commercial")
-CHINA_TWIN = tenant_guid("twin-china")
-TWINS = AmbiguousTenant(
-    "a tenant in each cloud",
-    tenant=TENANT,
-    candidates=[TenantInfo(COMMERCIAL_TWIN, COMMERCIAL), TenantInfo(CHINA_TWIN, CHINA)],
-)
-
-
-def test_a_given_cloud_settles_a_name_that_is_a_tenant_in_two_clouds(
-    fake_discovery: FakeDiscovery,
-) -> None:
-    fake_discovery.error = TWINS
-
-    china = user_context(cloud=CHINA)
-    commercial = user_context(cloud="Commercial")
-
-    assert (china.tenant_id, china.tenant_name, china.cloud) == (CHINA_TWIN, TENANT, CHINA)
-    assert china.tenant is TWINS.candidates[1]
-    assert commercial.tenant_id == COMMERCIAL_TWIN
-    with pytest.raises(AmbiguousTenant):
-        user_context()
-    # Neither tenant is in the US government cloud, so naming it settles nothing.
-    with pytest.raises(AmbiguousTenant):
-        user_context(cloud=US_GOV)
-
-
-def test_a_sibling_named_by_an_ambiguous_name_takes_the_one_in_the_parents_cloud(
-    fake_discovery: FakeDiscovery,
-) -> None:
-    auth = AuthContext(TENANT_GUID, username=USER, cloud=CHINA)
-    fake_discovery.error = TWINS
-
-    sibling = auth.for_tenant(CUSTOMER)
-
-    assert (sibling.tenant_id, sibling.tenant_name, sibling.cloud) == (CHINA_TWIN, CUSTOMER, CHINA)
-
-
-def test_a_domain_name_is_held_as_the_guid_the_lookup_found(
-    fake_discovery: FakeDiscovery,
-) -> None:
-    fake_discovery.region_sub_scope = "GCC"
-    auth = user_context()
-
-    assert (auth.tenant_id, auth.tenant_name) == (TENANT_GUID, TENANT)
-    assert auth.authority == f"https://login.microsoftonline.com/{TENANT_GUID}"
-    assert auth.tenant is not None
-    assert (auth.tenant.tenant_id, auth.tenant.region_sub_scope) == (TENANT_GUID, "GCC")
-    assert auth.cloud is auth.tenant.cloud
-    assert repr(auth) == (
-        f"AuthContext(tenant_id={TENANT_GUID!r}, tenant_name={TENANT!r}, cloud='Commercial', "
-        "flow='user')"
-    )
-
-
-def test_a_looked_up_tenant_is_taken_as_found(fake_discovery: FakeDiscovery) -> None:
-    info = TenantInfo(TENANT_GUID, US_GOV, region_sub_scope="DODCON")
-
-    auth = AuthContext(info, username=USER)
-    app = AuthContext(info, client_id="app", client_secret="s3cret")
-
-    assert auth.tenant is info
-    assert app.tenant is info
-    assert (auth.tenant_id, auth.tenant_name, auth.cloud) == (TENANT_GUID, TENANT_GUID, US_GOV)
-    assert repr(auth) == f"AuthContext(tenant_id={TENANT_GUID!r}, cloud='USGov', flow='user')"
-    assert fake_discovery.tenants == []
-    with pytest.raises(ValueError, match="cloud is not used"):
-        AuthContext(info, username=USER, cloud=US_GOV)
-
-
-def test_the_tenant_name_is_what_messages_say_and_the_guid_what_errors_carry(
+def test_messages_name_the_tenant_by_domain_and_errors_carry_the_guid(
     fake_msal: FakeMsal,
 ) -> None:
     with pytest.raises(InteractionRequired) as caught:
@@ -821,82 +743,72 @@ def test_a_request_for_the_contexts_own_tenant_by_guid_may_prompt(fake_msal: Fak
     assert fake_msal.methods() == ["interactive"]
 
 
-def test_an_unknown_cloud_name_is_refused(fake_discovery: FakeDiscovery) -> None:
-    with pytest.raises(ValueError, match="Unknown cloud"):
-        user_context(cloud="Germany")
-    assert fake_discovery.tenants == []
-
-
-def test_a_failed_lookup_fails_the_constructor(fake_discovery: FakeDiscovery) -> None:
-    fake_discovery.error = TenantNotFound("no such tenant", tenant=TENANT)
+def test_a_failed_lookup_fails_the_constructor(fake_lookup: FakeLookup) -> None:
+    fake_lookup.error = TenantNotFound("no such tenant", name=TENANT)
     with pytest.raises(TenantNotFound):
         user_context()
 
 
-def test_bad_arguments_are_refused_before_any_lookup(fake_discovery: FakeDiscovery) -> None:
+def test_bad_arguments_are_refused_before_any_lookup(fake_lookup: FakeLookup) -> None:
     with pytest.raises(ValueError, match="username is required"):
         AuthContext("tenant")
     with pytest.raises(ValueError, match="username is not used"):
         AuthContext("tenant", client_id="app", client_secret="s3cret", username=USER)
-    assert fake_discovery.tenants == []
+    assert fake_lookup.calls == []
 
 
-@pytest.mark.parametrize("tenant", ["common", "organizations", "Consumers"])
-def test_a_multi_tenant_authority_needs_its_cloud_named(
-    fake_discovery: FakeDiscovery, tenant: str
-) -> None:
-    with pytest.raises(ValueError, match="pass cloud="):
-        AuthContext(tenant, username=USER)
-    assert AuthContext(tenant, username=USER, cloud=COMMERCIAL).cloud is COMMERCIAL
-    assert fake_discovery.tenants == []
+@pytest.mark.parametrize("authority", ["common", "organizations", "Consumers"])
+def test_a_multi_tenant_authority_is_built_by_hand(fake_lookup: FakeLookup, authority: str) -> None:
+    with pytest.raises(ValueError, match="pass Tenant"):
+        AuthContext(authority, username=USER)
+
+    auth = AuthContext(Tenant(authority, COMMERCIAL), username=USER)
+
+    assert auth.tenant.id == authority.lower()
+    assert fake_lookup.calls == []
 
 
-def test_a_sibling_shares_the_cloud_without_a_lookup(
-    fake_discovery: FakeDiscovery, fake_msal: FakeMsal
+def test_a_sibling_by_guid_shares_the_cloud_without_a_lookup(
+    fake_lookup: FakeLookup, fake_msal: FakeMsal
 ) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: token_result(call.app.authority)
-    fake_discovery.cloud = US_GOV
+    fake_lookup.cloud = US_GOV
     auth = user_context()
 
     token = auth.get_token(ARM_SCOPE, tenant_id=CUSTOMER_GUID)
 
     sibling = auth.for_tenant(CUSTOMER_GUID)
-    assert (sibling.cloud, sibling.tenant, sibling.tenant_name) == (US_GOV, None, CUSTOMER_GUID)
+    assert sibling.tenant == Tenant(CUSTOMER_GUID, US_GOV)
+    assert (sibling.tenant.domain, sibling.tenant.oidc) == (None, None)
     assert token.token == f"https://login.microsoftonline.us/{CUSTOMER_GUID}"
-    assert fake_discovery.tenants == [TENANT]
+    assert fake_lookup.names == [TENANT]
 
 
-def test_a_sibling_named_by_domain_is_looked_up_once_and_keeps_the_parents_cloud(
-    fake_discovery: FakeDiscovery,
+def test_a_sibling_named_by_domain_is_looked_up_once_in_the_parents_cloud(
+    fake_lookup: FakeLookup,
 ) -> None:
-    fake_discovery.cloud = US_GOV
+    fake_lookup.cloud = US_GOV
     auth = user_context()
-    fake_discovery.cloud = CHINA
 
     sibling = auth.for_tenant(CUSTOMER)
 
     assert sibling is auth.for_tenant(CUSTOMER.upper()) is auth.for_tenant(CUSTOMER_GUID)
-    assert fake_discovery.tenants == [TENANT, CUSTOMER]
-    assert (sibling.tenant_id, sibling.tenant_name, sibling.cloud) == (
+    # A customer tenant is in its partner's cloud, so it is looked for only there.
+    assert fake_lookup.calls == [(TENANT, None), (CUSTOMER, US_GOV)]
+    assert (sibling.tenant.id, sibling.tenant.cloud, sibling.tenant.domain) == (
         CUSTOMER_GUID,
-        CUSTOMER,
         US_GOV,
+        CUSTOMER,
     )
-    # What the lookup found is kept, though a customer tenant is always in the parent's cloud.
-    assert sibling.tenant is not None
-    assert sibling.tenant.cloud is CHINA
 
 
-def test_a_sibling_first_made_by_guid_learns_its_name_later(
-    fake_discovery: FakeDiscovery,
-) -> None:
+def test_a_sibling_first_made_by_guid_learns_its_domain_later(fake_lookup: FakeLookup) -> None:
     auth = user_context()
 
     by_guid = auth.for_tenant(CUSTOMER_GUID)
-    assert (by_guid.tenant, by_guid.tenant_name) == (None, CUSTOMER_GUID)
+    assert by_guid.tenant.domain is None
 
     assert auth.for_tenant(CUSTOMER) is by_guid
-    assert by_guid.tenant is not None
-    assert by_guid.tenant.tenant_id == CUSTOMER_GUID
-    assert by_guid.tenant_name == CUSTOMER
+    assert by_guid.tenant.domain == CUSTOMER
+    assert by_guid.tenant.oidc is not None

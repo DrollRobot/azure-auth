@@ -1,11 +1,11 @@
-"""Scriptable stand-ins for the ``msal`` module and for tenant discovery.
+"""Scriptable stand-ins for the ``msal`` module and for the tenant lookup.
 
 Unit tests replace ``azure_auth.auth.context.msal`` with a :class:`FakeMsal` so that no
 network call, browser or broker is ever involved. Behaviour is scripted per test through the
 callables on the fake; every MSAL call is recorded in ``calls``.
 
-A context given no cloud looks its tenant up when it is created. Every unit test replaces
-that lookup with a :class:`FakeDiscovery`, which finds every tenant in ``cloud`` and records
+A context given a string looks its tenant up when it is created. Every unit test replaces
+that lookup with a :class:`FakeLookup`, which finds every tenant in ``cloud`` and records
 each lookup.
 """
 
@@ -16,7 +16,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from azure_auth.clouds import COMMERCIAL, Cloud, TenantInfo
+from azure_auth import Tenant
+from azure_auth.auth.tenant import as_guid
+from azure_auth.clouds import COMMERCIAL, Cloud
 
 Result = dict[str, Any]
 
@@ -138,17 +140,24 @@ def tenant_guid(tenant: str) -> str:
 
 
 @dataclass
-class FakeDiscovery:
-    """Replacement for :func:`azure_auth.auth.discovery.discover_tenant`."""
+class FakeLookup:
+    """Replacement for :meth:`azure_auth.Tenant.lookup`."""
 
     cloud: Cloud = COMMERCIAL
     region_sub_scope: str | None = None
     error: Exception | None = None
-    tenants: list[str] = field(default_factory=list)
+    calls: list[tuple[str, Cloud | None]] = field(default_factory=list)
 
-    def __call__(self, tenant: str) -> TenantInfo:
+    def __call__(self, name: str, cloud: Cloud | None = None) -> Tenant:
         """Record the lookup and find the tenant in ``cloud``, or raise ``error``."""
-        self.tenants.append(tenant)
+        self.calls.append((name, cloud))
         if self.error is not None:
             raise self.error
-        return TenantInfo(tenant_guid(tenant), self.cloud, region_sub_scope=self.region_sub_scope)
+        oidc = {"tenant_region_sub_scope": self.region_sub_scope}
+        domain = None if as_guid(name) else name.lower()
+        return Tenant(tenant_guid(name), self.cloud, domain=domain, oidc=oidc)
+
+    @property
+    def names(self) -> list[str]:
+        """The names looked up, in order."""
+        return [name for name, _cloud in self.calls]

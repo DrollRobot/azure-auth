@@ -59,8 +59,8 @@ class GraphClient(ResourceClient):
         """
         super().__init__(
             auth,
-            resource=auth.cloud.graph,
-            base_url=f"{auth.cloud.graph}/{api_version}",
+            resource=auth.tenant.cloud.graph,
+            base_url=f"{auth.tenant.cloud.graph}/{api_version}",
             client_id=client_id,
             scopes=scopes,
             timeout=timeout,

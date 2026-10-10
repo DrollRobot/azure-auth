@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from azure_auth.clouds import TenantInfo
+if TYPE_CHECKING:
+    from azure_auth.auth.tenant import Tenant
 
 # AADSTS codes that mean "an administrator or the user has not consented to this application".
 _CONSENT_ERROR_CODES = frozenset({65001, 65004, 650052, 650056, 650057})
@@ -101,42 +102,42 @@ class TenantNotFound(AuthError):
     """No tenant by that id or domain name exists in the clouds that were asked.
 
     Attributes:
-        tenant: The tenant id or domain name that was looked up.
+        name: The tenant id or domain name that was looked up.
     """
 
-    def __init__(self, message: str, *, tenant: str) -> None:
+    def __init__(self, message: str, *, name: str) -> None:
         """Create the error.
 
         Args:
             message: Human readable description.
-            tenant: The tenant id or domain name that was looked up.
+            name: The tenant id or domain name that was looked up.
         """
         super().__init__(message)
-        self.tenant = tenant
+        self.name = name
 
 
 class AmbiguousTenant(AuthError):
     """A tenant id or domain name belongs to a different tenant in each of several clouds.
 
     Each cloud is a separate directory: a domain can be verified in a commercial tenant and
-    in a China tenant, and a GUID can be both a commercial and a US government tenant. Pass
-    ``cloud=`` to choose.
+    in a China tenant, and a GUID can be both a commercial and a US government tenant. Look
+    the name up with its cloud to choose: ``Tenant.lookup(name, cloud)``.
 
     Attributes:
-        tenant: The tenant id or domain name that was looked up.
+        name: The tenant id or domain name that was looked up.
         candidates: One entry per tenant found.
     """
 
-    def __init__(self, message: str, *, tenant: str, candidates: Sequence[TenantInfo]) -> None:
+    def __init__(self, message: str, *, name: str, candidates: Sequence[Tenant]) -> None:
         """Create the error.
 
         Args:
             message: Human readable description.
-            tenant: The tenant id or domain name that was looked up.
+            name: The tenant id or domain name that was looked up.
             candidates: One entry per tenant found.
         """
         super().__init__(message)
-        self.tenant = tenant
+        self.name = name
         self.candidates = tuple(candidates)
 
 
@@ -159,26 +160,23 @@ def broker_status(result: Mapping[str, Any] | None) -> str | None:
 def error_from_msal_result(
     result: Mapping[str, Any] | None,
     *,
-    tenant_id: str,
+    tenant: Tenant,
     scopes: Sequence[str],
-    tenant_name: str | None = None,
 ) -> AuthError:
     """Translate a failed MSAL result into an exception.
 
     Args:
         result: The dictionary MSAL returned, or ``None`` when MSAL found nothing to return.
-        tenant_id: Tenant the token was requested from, as the exception carries it.
+        tenant: Tenant the token was requested from.
         scopes: Scopes that were requested.
-        tenant_name: The tenant as the message names it, when a domain name reads better
-            than the GUID. Defaults to ``tenant_id``.
 
     Returns:
         The exception to raise. The MSAL dictionary itself is never exposed.
     """
-    tenant_name = tenant_name or tenant_id
+    tenant_id = tenant.id
     if not result:
         return InteractionRequired(
-            f"No cached token for tenant {tenant_name}; the user must sign in.",
+            f"No cached token for tenant {tenant}; the user must sign in.",
             tenant_id=tenant_id,
             scopes=scopes,
         )
@@ -196,7 +194,7 @@ def error_from_msal_result(
     if error in _DECLINED_ERRORS:
         return AuthError(
             f"{message}. No token was issued for {' '.join(scopes) or '(no scopes)'} in tenant "
-            f"{tenant_name}. Either the sign-in was cancelled, or the account is not allowed to "
+            f"{tenant}. Either the sign-in was cancelled, or the account is not allowed to "
             "consent to these scopes and was shown 'Need admin approval' -- in which case an "
             "administrator has to grant them before this account can use them."
         )

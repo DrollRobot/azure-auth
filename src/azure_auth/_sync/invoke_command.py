@@ -148,7 +148,7 @@ class InvokeCommandClient(ResourceClient):
             max_retry_wait: Longest wait before one retry, in seconds.
             transport: Custom ``httpx`` transport, mainly for tests.
         """
-        resource, host = self.service(auth.cloud)
+        resource, host = self.service(auth.tenant.cloud)
         super().__init__(
             auth,
             resource=resource,
@@ -195,7 +195,7 @@ class InvokeCommandClient(ResourceClient):
         """
         if self._tenant_guid is None:
             token = self._tokens.acquire_token(self._scopes, client_id=self._client_id)
-            self._tenant_guid = tenant_id_from_token(token.token) or self._auth.tenant_id
+            self._tenant_guid = tenant_id_from_token(token.token) or self._auth.tenant.id
         return self._tenant_guid
 
     def _anchor(self, tenant: str) -> str:
