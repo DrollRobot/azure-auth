@@ -315,20 +315,34 @@ def test_an_app_given_the_wrong_cloud_fails_at_sign_in(cloud: Cloud) -> None:
         auth.acquire_token([f"{cloud.graph}/.default"])
 
 
+# Where a failed app sign-in may be sent: the configured tenant, and Microsoft's own services
+# tenant in US Government, which is Microsoft's to receive it. Its GUID is a commercial tenant
+# too (AMBIGUOUS_TENANTS), so it is built by hand with its cloud rather than looked up. No
+# Microsoft-owned DoD or China tenant is known.
+FAIR_GAME_TENANTS: dict[str, Callable[[], str | Tenant]] = {
+    "configured": lambda: TENANT,
+    "usgov-services": lambda: Tenant(AMBIGUOUS_TENANTS["guid"][0], US_GOV),
+}
+
+
 @needs_app
-def test_an_app_sign_in_reaches_its_clouds_token_server() -> None:
+@pytest.mark.parametrize("make_tenant", FAIR_GAME_TENANTS.values(), ids=FAIR_GAME_TENANTS.keys())
+def test_an_app_sign_in_reaches_its_clouds_token_server(
+    make_tenant: Callable[[], str | Tenant],
+) -> None:
     """A certificate sign-in is answered by the token server of the tenant's own cloud.
 
     The application id is made up, so Entra answers that no such application exists
     (AADSTS700016). That answer means the request reached the right token server with an
     assertion it could read; a wrong server or a malformed assertion is refused differently.
 
-    Only the configured tenant, for now. The same check needs no account in any cloud, but it
-    sends a failed sign-in to whichever tenant it names, so it should only name a tenant that
-    is fair game: Microsoft's own services tenant, f8cdef31-a31e-4b4a-93e4-5f571e91255a,
-    exists in US Government. No Microsoft-owned DoD or China tenant is known.
+    The check needs no account in any cloud, but it sends a failed sign-in to whichever tenant
+    it names, so it only names the tenants in ``FAIR_GAME_TENANTS``. The US Government one is
+    the only sign-in these tests make outside the configured tenant's cloud.
     """
-    auth = AuthContext(TENANT, client_id=str(uuid.uuid4()), certificate_thumbprint=THUMBPRINT)
+    auth = AuthContext(
+        make_tenant(), client_id=str(uuid.uuid4()), certificate_thumbprint=THUMBPRINT
+    )
 
     with pytest.raises(AuthError, match="AADSTS700016"):
         auth.acquire_token([f"{auth.tenant.cloud.graph}/.default"])
