@@ -47,7 +47,7 @@ SETTLE_SECONDS = float(os.environ.get("AZURE_AUTH_TEST_CONSENT_SETTLE_SECONDS", 
 # be refused, and the test fails with "DID NOT RAISE". That is a loud failure rather than a
 # silent pass, so this cannot fake a green run -- but it wasted several live runs before the
 # cause was understood, which is why it is written down here.
-NONADMIN_SCOPE = "User.ReadWrite.All"
+NONADMIN_SCOPE = "RoleManagement.ReadWrite.Directory"
 
 
 @pytest.fixture

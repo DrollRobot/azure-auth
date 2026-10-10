@@ -1,11 +1,15 @@
-"""The Graph client against the real service: paging, batching, ``.default``, throttling, and
-the blocking mirror.
+"""The Graph client against the real service: paging, batching, ``.default``, throttling, the
+blocking mirror and, behind the destructive gate, writes.
 """
 
 from __future__ import annotations
 
 import asyncio
 import collections
+import secrets
+import time
+import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +48,16 @@ UNGRANTED_SCOPE = "Mail.ReadWrite"
 THROTTLE_BURST = 20
 THROTTLE_MAX_REQUESTS = 100
 THROTTLE_RETRIES = 8
+
+# What the write test needs: creating, changing and deleting a user, and purging it from the
+# recycle bin. Both are in BASELINE_SCOPES, so the sign-in is silent.
+WRITE_SCOPES = ["User.ReadWrite.All", "User.DeleteRestore.All"]
+
+# Graph's directory is replicated, so an object just created, or just deleted, can be "not
+# found" by the next request when that one lands where the change has not reached. The write
+# test retries a 404 for this long, looking this often.
+REPLICATION_TIMEOUT = 120.0
+POLL_SECONDS = 5.0
 
 
 class StatusCounter(httpx.AsyncBaseTransport):
@@ -265,3 +279,101 @@ def test_the_blocking_client_calls_graph(cache_path: Path) -> None:
         ensure_sign_in(graph)
         me = graph.get("/me", params={"$select": "userPrincipalName"})
     assert me["userPrincipalName"].lower() == USERNAME.lower()
+
+
+async def _once_replicated(call: Callable[[], Awaitable[Any]]) -> tuple[Any, float]:
+    """Make a request about an object that may not have replicated yet.
+
+    A 404 is retried every ``POLL_SECONDS`` until ``REPLICATION_TIMEOUT``; any other failure,
+    or a 404 that outlives the timeout, is raised.
+
+    Args:
+        call: Makes the request.
+
+    Returns:
+        The answer, and how long the object took to be found, in seconds.
+    """
+    started = time.monotonic()
+    while True:
+        try:
+            return await call(), time.monotonic() - started
+        except GraphError as error:
+            if error.status != 404 or time.monotonic() - started > REPLICATION_TIMEOUT:
+                raise
+        await asyncio.sleep(POLL_SECONDS)
+
+
+@needs_user
+@pytest.mark.destructive_remote
+async def test_graph_creates_changes_and_removes_an_object(user_auth: AuthContext) -> None:
+    """``post``, ``patch``, ``put`` and ``delete`` change the real directory, not only ``$batch``.
+
+    No live call had ever been made with ``patch``, ``put`` or ``delete``, and ``post`` only
+    through ``$batch``. A user is the one directory object that takes every verb: it is
+    created, its job title is changed, a manager is assigned (the one JSON ``PUT`` Graph has
+    on a plain directory object), the assignment is removed, and the user is deleted. A
+    deleted user sits in the recycle bin for thirty days, so it is purged as well, which is
+    what ``User.DeleteRestore.All`` is in the baseline for; the rest is ``User.ReadWrite.All``.
+
+    The account is disabled from the start, with a random password nobody is told, so it can
+    never sign in. It is named after the test with a random suffix, addressed by its id once
+    it exists, and deleted and purged in a ``finally`` so a failed assertion does not leave it
+    behind. Graph answers each write with ``204 No Content``, which the client returns as
+    ``None``, so every change is read back to prove it happened.
+
+    The first read of the new user and the purge of the deleted one retry a 404
+    (:func:`_once_replicated`); the waits are printed, since only a live run can say how long
+    they take. Measured 2026-10-10: both 0s, so neither has yet been seen to retry.
+    """
+    marker = uuid.uuid4().hex[:8]
+    nickname = f"azure-auth-live-test-{marker}"
+    name = f"azure-auth live test {marker}"
+    title = f"changed {marker}"
+    async with GraphClient(user_auth, scopes=WRITE_SCOPES) as graph:
+        ensure_sign_in(graph)
+        me = await graph.get("/me", params={"$select": "id"})
+        created = await graph.post(
+            "/users",
+            {
+                "accountEnabled": False,
+                "displayName": name,
+                "mailNickname": nickname,
+                # The signed-in user's own domain is verified in the tenant by definition.
+                "userPrincipalName": f"{nickname}@{USERNAME.partition('@')[2]}",
+                "passwordProfile": {
+                    "password": secrets.token_urlsafe(32),
+                    "forceChangePasswordNextSignIn": True,
+                },
+            },
+        )
+        user_id = created["id"]
+        try:
+            assert created["displayName"] == name
+            _, create_wait = await _once_replicated(
+                lambda: graph.get(f"/users/{user_id}", params={"$select": "id"})
+            )
+
+            assert await graph.patch(f"/users/{user_id}", {"jobTitle": title}) is None
+            changed = await graph.get(f"/users/{user_id}", params={"$select": "jobTitle"})
+            assert changed["jobTitle"] == title
+
+            manager_ref = {"@odata.id": f"{graph.base_url}/users/{me['id']}"}
+            assert await graph.put(f"/users/{user_id}/manager/$ref", manager_ref) is None
+            manager = await graph.get(f"/users/{user_id}/manager", params={"$select": "id"})
+            assert manager["id"] == me["id"]
+
+            assert await graph.delete(f"/users/{user_id}/manager/$ref") is None
+            with pytest.raises(GraphError) as unassigned:
+                await graph.get(f"/users/{user_id}/manager", params={"$select": "id"})
+            assert unassigned.value.status == 404, str(unassigned.value)
+        finally:
+            await graph.delete(f"/users/{user_id}")
+            _, purge_wait = await _once_replicated(
+                lambda: graph.delete(f"/directory/deletedItems/{user_id}")
+            )
+
+        with pytest.raises(GraphError) as gone:
+            await graph.get(f"/users/{user_id}", params={"$select": "id"})
+        assert gone.value.status == 404, str(gone.value)
+
+    print(f"graph write: read back after {create_wait:.0f}s, purged after {purge_wait:.0f}s")

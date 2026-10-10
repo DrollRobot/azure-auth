@@ -104,6 +104,10 @@ BASELINE_SCOPES = [
     "AuditLog.Read.All",
     # The consent test's fixture deletes grants, which needs this.
     "DelegatedPermissionGrant.ReadWrite.All",
+    # The Graph write test creates, changes and deletes a user, and purges it from the
+    # recycle bin, which takes the second.
+    "User.ReadWrite.All",
+    "User.DeleteRestore.All",
     *(GDAP_SCOPES if os.environ.get("AZURE_AUTH_TEST_GDAP") == "1" else []),
 ]
 
