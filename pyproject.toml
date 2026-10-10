@@ -39,7 +39,6 @@ dev = [
     "pre-commit>=4.6,<5",
     "ruff>=0.15,<1",
     "types-requests>=2.32,<3",
-    #"other-project", # FIXME add any local/github dependencies here
 ]
 
 [tool.uv]
@@ -47,15 +46,8 @@ constraint-dependencies = [
     "cryptography>=50.0.0",  # GHSA-g6cj-pr64-35w5; prune when upstream requires it
 ]
 
-[tool.uv.sources]
-# FIXME add any local/github dependencies here.
-# other-project = { git = "https://github.com/USERNAME/other-project.git", tag = "v1.2.3" }
-# other-project = { path = "/PATH/TO/PROJECT", editable = true }
-
 [project.optional-dependencies]
 keyvault = [
-    # The HTTP transport of the Azure SDK's async clients; no azure-keyvault-* package
-    # depends on it, and without it the async KeyVaultClient cannot make a request.
     "aiohttp>=3.14.4",
     "azure-keyvault-certificates>=4.11.2",
     "azure-keyvault-keys>=4.11.2",
@@ -80,22 +72,18 @@ addopts = [
 xfail_strict = true
 filterwarnings = ["error"]
 markers = [
-    # Scope
     "unit: single function/class in isolation; all dependencies mocked or stubbed",
     "integration: multiple real components wired together across a boundary",
     "e2e: whole application end to end, driven like a real user",
-    # Purpose
     "smoke: fast 'is it fundamentally broken' check",
     "regression: guards against reintroduction of a previously fixed bug",
     "acceptance: verifies behavior against a requirement or user-facing spec",
     "functional: tests behavior/output of a feature without regard to internal structure",
-    # Dependency
     "live: requires a real external resource (network, live tenant, secrets, third-party API)",
     "interactive: requires a human at this desktop to complete a sign-in prompt",
     "cached_credential: tests signing in from the cache; runs after the other live tests",
     "destructive_local: mutates the host/device; guarded to prevent accidental execution",
     "destructive_remote: mutates a remote/external system; guarded to prevent accidental execution",
-    # Performance
     "slow: long-running",
 ]
 
@@ -124,8 +112,8 @@ files = ["src", "tests"]
 mypy_path = ["scripts"]
 
 # AGENTS: ONLY ADD OVERRIDES IF, AFTER RESEARCHING, THERE IS NO TYPES STUB AVAILABLE.
+[[tool.mypy.overrides]]
 # msal and msal-extensions ship no py.typed marker and have no stub package on PyPI
 # (types-msal, msal-stubs, types-msal-extensions, msal-extensions-stubs: all 404).
-[[tool.mypy.overrides]]
 module = ["msal", "msal.*", "msal_extensions", "msal_extensions.*"]
 ignore_missing_imports = true
