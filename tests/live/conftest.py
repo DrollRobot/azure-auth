@@ -13,6 +13,9 @@ accepted, and every ``destructive_remote`` one. It runs whether the test passed 
 no test depends on another having run, none has to arrange its own consent, and no order of
 tests can leave the tenant unusable for the next run.
 
+The test application is part of the baseline too: it holds no certificate a test uploaded.
+The same restore takes off every one it finds.
+
 Restoring the baseline is not marked ``interactive``, although it can prompt. It has to run
 for every live run, and marking it would make it optional. It is silent when the tenant is
 already at the baseline, which is the normal case, and prompts once when a baseline scope is
@@ -40,7 +43,14 @@ import pytest
 
 from azure_auth import AuthContext
 from azure_auth.auth.cache import default_cache_path
-from tests.live.support import GRAPH, TENANT, USERNAME, live_user_auth, restore_baseline
+from tests.live.support import (
+    KEEPS_CERTIFICATES,
+    KEEPS_CONSENT,
+    TENANT,
+    USERNAME,
+    live_user_auth,
+    restore_baseline,
+)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -71,13 +81,13 @@ def _live_cache_path() -> Path:
 
 @pytest.fixture(scope="session", autouse=True)
 def consent_baseline(_live_cache_path: Path, request: pytest.FixtureRequest) -> None:
-    """Restore the exact consent baseline once, before the first live test runs.
+    """Restore the exact baseline once, before the first live test runs.
 
     Not marked ``interactive``, although it can prompt; the module docstring says why. Does
-    nothing when no tenant is configured, so the live tests that need no account still run,
-    or when the tenant's users may not use the Graph application.
+    nothing when there is no baseline to keep: no tenant, or neither an administrator who may
+    use the Graph application nor a test application.
     """
-    if TENANT and USERNAME and GRAPH:
+    if KEEPS_CONSENT or KEEPS_CERTIFICATES:
         restore_baseline(
             _live_cache_path,
             may_remove=lambda: bool(request.getfixturevalue("_remote_disposable_confirmed")),
@@ -88,17 +98,17 @@ def consent_baseline(_live_cache_path: Path, request: pytest.FixtureRequest) -> 
 def _baseline_after_state_changes(
     request: pytest.FixtureRequest, _live_cache_path: Path
 ) -> Iterator[None]:
-    """Restore the exact consent baseline after a test that can change consent, pass or fail.
+    """Restore the exact baseline after a test that can change it, pass or fail.
 
     Those are the ``interactive`` tests, since a consent screen can be accepted, and the
-    ``destructive_remote`` ones. Whether the tenant may have scopes taken out is settled
+    ``destructive_remote`` ones. Whether the tenant may have things taken out is settled
     before the test, while fixtures can still be asked for.
     """
     node = request.node
     changes_state = node.get_closest_marker("interactive") or node.get_closest_marker(
         "destructive_remote"
     )
-    if not (changes_state and TENANT and USERNAME and GRAPH):
+    if not (changes_state and (KEEPS_CONSENT or KEEPS_CERTIFICATES)):
         yield
         return
     disposable = bool(request.getfixturevalue("_remote_disposable_confirmed"))

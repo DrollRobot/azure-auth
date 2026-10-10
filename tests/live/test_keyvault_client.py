@@ -19,21 +19,18 @@ from azure_auth.sync.keyvault import KeyVaultClient as BlockingKeyVaultClient
 from tests.live.support import (
     KEYVAULT_SECRET_NAME,
     KEYVAULT_URL,
+    live_app_auth,
     live_user_auth,
+    needs_app,
     needs_keyvault,
     needs_user,
     sign_in_to_vault,
 )
 
-pytestmark = [
-    pytest.mark.e2e,
-    pytest.mark.live,
-    pytest.mark.anyio,
-    needs_user,
-    needs_keyvault,
-]
+pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio, needs_keyvault]
 
 
+@needs_user
 async def test_a_secret_is_read_by_name_and_by_version(user_auth: AuthContext) -> None:
     """The client reads a secret's latest value, and the same value by its version.
 
@@ -57,6 +54,7 @@ async def test_a_secret_is_read_by_name_and_by_version(user_auth: AuthContext) -
     assert pinned_matches, "the value read by version differs from the one the SDK read"
 
 
+@needs_user
 async def test_a_missing_secret_is_not_found(user_auth: AuthContext) -> None:
     """A name the vault does not hold raises the SDK's not-found error, as documented."""
     sign_in_to_vault(user_auth)
@@ -65,6 +63,7 @@ async def test_a_missing_secret_is_not_found(user_auth: AuthContext) -> None:
             await vault.get_secret(f"azure-auth-missing-{uuid.uuid4().hex}")
 
 
+@needs_user
 def test_the_blocking_client_reads_a_secret(cache_path: Path) -> None:
     """The generated blocking client reads the secret the asynchronous one does.
 
@@ -75,5 +74,14 @@ def test_the_blocking_client_reads_a_secret(cache_path: Path) -> None:
     sign_in_to_vault(auth)
     with BlockingKeyVaultClient(auth, KEYVAULT_URL) as vault:
         value = vault.get_secret(KEYVAULT_SECRET_NAME)
+    has_value = bool(value)
+    assert has_value, f"the secret {KEYVAULT_SECRET_NAME!r} came back empty"
+
+
+@needs_app
+async def test_an_app_reads_a_secret() -> None:
+    """An app-only context reads the secret, answering the vault's challenge as a user's does."""
+    async with KeyVaultClient(live_app_auth(), KEYVAULT_URL) as vault:
+        value = await vault.get_secret(KEYVAULT_SECRET_NAME)
     has_value = bool(value)
     assert has_value, f"the secret {KEYVAULT_SECRET_NAME!r} came back empty"

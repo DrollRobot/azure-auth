@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from azure_auth import AuthContext, AzureClient
-from tests.live.support import _flag, ensure_sign_in, needs_user
+from tests.live.support import _flag, ensure_sign_in, live_app_auth, needs_app, needs_user
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
 
@@ -19,4 +19,14 @@ async def test_arm_lists_subscriptions(user_auth: AuthContext) -> None:
     # An empty list would also come back from a tenant the user cannot reach at all, so it
     # must not count as a pass; the flag says this user really has a subscription.
     assert subscriptions, "the user can see no subscriptions; AZURE_AUTH_TEST_ARM is wrong"
+    assert all(s.get("subscriptionId") for s in subscriptions)
+
+
+@needs_app
+@_flag("AZURE_AUTH_TEST_ARM")
+async def test_arm_lists_subscriptions_as_an_app() -> None:
+    """An app-only token lists the subscriptions the application holds a role on."""
+    async with AzureClient(live_app_auth()) as arm:
+        subscriptions = await arm.get_all("/subscriptions", api_version="2022-12-01")
+    assert subscriptions, "the test application can see no subscriptions; give it Reader on one"
     assert all(s.get("subscriptionId") for s in subscriptions)

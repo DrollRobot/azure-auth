@@ -28,9 +28,10 @@ from azure_auth.sync import ExchangeClient as BlockingExchangeClient
 from azure_auth.sync import IppsClient as BlockingIppsClient
 from tests.live.support import (
     USERNAME,
-    _flag,
     ensure_sign_in,
     live_user_auth,
+    needs_exchange,
+    needs_ipps,
     needs_user,
     token_claims,
     token_scopes,
@@ -38,9 +39,6 @@ from tests.live.support import (
 )
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
-
-needs_exchange = _flag("AZURE_AUTH_TEST_EXCHANGE")
-needs_ipps = _flag("AZURE_AUTH_TEST_IPPS")
 
 # Two results a page, so that any tenant with three recipients pages, and a cap on how
 # many pages are walked at that size, so a large tenant does not turn this into a crawl.

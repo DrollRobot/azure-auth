@@ -9,10 +9,18 @@ Environment variables:
   Exchange and ARM tests run on their own. A tenant can block the application, and the China
   cloud does not have it.
 * ``AZURE_AUTH_TEST_APP_CLIENT_ID`` and ``AZURE_AUTH_TEST_CERT_THUMBPRINT``: app-flow tests
-  with a certificate in ``CurrentUser\\My`` (needs ``Organization.Read.All`` on Graph).
+  with a certificate in ``CurrentUser\\My`` (needs ``Organization.Read.All`` on Graph). With
+  ``AZURE_AUTH_TEST_EXCHANGE`` or ``_IPPS`` set, the application runs cmdlets too, and needs
+  ``Exchange.ManageAsApp`` and the Exchange or Compliance Administrator role. The tests
+  upload throwaway certificates to the application and take them off again, so it should be
+  one made for them.
+* ``AZURE_AUTH_TEST_MACHINE_CERT_THUMBPRINT``: a second certificate uploaded to the same
+  application, in ``LocalMachine\\My``. The account running the tests must be able to read
+  its private key.
 * ``AZURE_AUTH_TEST_NONADMIN_USERNAME``: a second user in the same tenant who may *not*
   consent. Naming one runs the consent test; leaving it blank skips it.
-* ``AZURE_AUTH_TEST_ARM=1``: the user can see at least one Azure subscription. A tenant with
+* ``AZURE_AUTH_TEST_ARM=1``: the user, and the test application when one is configured, can
+  see at least one Azure subscription (the application needs Reader on one). A tenant with
   no Azure access still answers ``/subscriptions`` with an empty list, which is why this is a
   flag and not something the test can work out for itself.
 * ``AZURE_AUTH_TEST_GDAP=1``: the user's home tenant manages other tenants through GDAP.
@@ -22,8 +30,10 @@ Environment variables:
 * ``AZURE_AUTH_TEST_EXCHANGE=1`` / ``AZURE_AUTH_TEST_IPPS=1``: the user may run Exchange /
   Security & Compliance cmdlets.
 * ``AZURE_AUTH_TEST_KEYVAULT_URL`` and ``AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME``: a vault in the
-  tenant and the name of a secret in it the user may read. Naming both runs the Key Vault
-  tests. They read the value but never print it, so it should be a throwaway made for them.
+  tenant and the name of a secret in it the user, and the test application when one is
+  configured, may read (Key Vault Secrets User, or an access policy allowing Get). Naming
+  both runs the Key Vault tests. They read the value but never print it, so it should be a
+  throwaway made for them.
 * ``AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS``: how long :func:`restore_baseline` waits for
   Entra to catch up with a grant change: a new grant to show up, or a removed scope to stop
   being issued (default 300).
@@ -43,6 +53,7 @@ import base64
 import concurrent.futures
 import contextlib
 import functools
+import hashlib
 import json
 import os
 import threading
@@ -57,16 +68,20 @@ import pytest
 
 from azure_auth import (
     AuthContext,
+    AuthError,
     Cloud,
     ConsentRequired,
     GraphClient,
     InteractionRequired,
     Tenant,
 )
+from azure_auth.auth import cng
 from azure_auth.clients import ResourceClient
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
+from azure_auth.sync import GraphClient as BlockingGraphClient
 from azure_auth.sync import ResourceClient as BlockingResourceClient
 from tests import alert_user, consent_reset
+from tests.certs import TestCertificate, make_certificate
 
 # The GDAP test's scopes, on the home tenant and on each customer tenant.
 GDAP_SCOPES = ["DelegatedAdminRelationship.Read.All", "Organization.Read.All"]
@@ -119,6 +134,7 @@ GRAPH = os.environ.get("AZURE_AUTH_TEST_GRAPH") == "1"
 NONADMIN = os.environ.get("AZURE_AUTH_TEST_NONADMIN_USERNAME", "")
 APP_CLIENT_ID = os.environ.get("AZURE_AUTH_TEST_APP_CLIENT_ID", "")
 THUMBPRINT = os.environ.get("AZURE_AUTH_TEST_CERT_THUMBPRINT", "")
+MACHINE_THUMBPRINT = os.environ.get("AZURE_AUTH_TEST_MACHINE_CERT_THUMBPRINT", "")
 KEYVAULT_URL = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_URL", "")
 KEYVAULT_SECRET_NAME = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME", "")
 GDAP_TENANT = os.environ.get("AZURE_AUTH_TEST_GDAP_TENANT_ID", "")
@@ -135,6 +151,10 @@ needs_app = pytest.mark.skipif(
     not (TENANT and APP_CLIENT_ID and THUMBPRINT),
     reason="set AZURE_AUTH_TEST_TENANT_ID, _APP_CLIENT_ID and _CERT_THUMBPRINT",
 )
+needs_machine_certificate = pytest.mark.skipif(
+    not (TENANT and APP_CLIENT_ID and MACHINE_THUMBPRINT),
+    reason="set AZURE_AUTH_TEST_TENANT_ID, _APP_CLIENT_ID and _MACHINE_CERT_THUMBPRINT",
+)
 needs_keyvault = pytest.mark.skipif(
     not (KEYVAULT_URL and KEYVAULT_SECRET_NAME),
     reason="set AZURE_AUTH_TEST_KEYVAULT_URL and AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME",
@@ -147,6 +167,8 @@ def _flag(name: str) -> pytest.MarkDecorator:
 
 
 needs_graph = _flag("AZURE_AUTH_TEST_GRAPH")
+needs_exchange = _flag("AZURE_AUTH_TEST_EXCHANGE")
+needs_ipps = _flag("AZURE_AUTH_TEST_IPPS")
 
 # The Exchange Online PowerShell client id serves the Exchange, the IPPS and the GDAP Exchange
 # tests, so a sign-in to it needs only one of them.
@@ -164,6 +186,18 @@ needs_arm_or_keyvault = pytest.mark.skipif(
     not (os.environ.get("AZURE_AUTH_TEST_ARM") == "1" or KEYVAULT_URL),
     reason="set AZURE_AUTH_TEST_ARM=1 or AZURE_AUTH_TEST_KEYVAULT_URL",
 )
+
+# What restore_baseline keeps. The consent baseline needs the administrator and the Graph
+# command-line application; the application's certificates need the application.
+KEEPS_CONSENT = bool(TENANT and USERNAME and GRAPH)
+KEEPS_CERTIFICATES = bool(TENANT and APP_CLIENT_ID and THUMBPRINT)
+
+# The common name of every certificate a test uploads to the application. restore_baseline
+# takes each one back off; the certificates the application is configured with stay.
+TEMPORARY_CERTIFICATE_NAME = "azure-auth live test temporary"
+
+# The audience addKey and removeKey require of their proof, fixed by Graph.
+_KEY_PROOF_AUDIENCE = "00000002-0000-0000-c000-000000000000"
 
 
 @functools.cache
@@ -224,6 +258,18 @@ def live_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
         cache_path=cache_path,
         interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
+
+
+def live_app_auth(**kwargs: Any) -> AuthContext:
+    """Return a context that signs in as the test application with the store certificate.
+
+    Args:
+        **kwargs: Further ``AuthContext`` arguments, such as the cache.
+
+    Returns:
+        The context.
+    """
+    return AuthContext(TENANT, client_id=APP_CLIENT_ID, certificate_thumbprint=THUMBPRINT, **kwargs)
 
 
 def cached_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
@@ -655,7 +701,184 @@ def _wait_for_baseline_grant(cache_path: Path) -> list[dict[str, Any]] | None:
         time.sleep(PROPAGATION_POLL_SECONDS)
 
 
+def _b64url(data: bytes) -> str:
+    """Encode bytes as unpadded base64url, as JWTs require."""
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _key_proof(object_id: str) -> str:
+    """Build the proof ``addKey`` and ``removeKey`` require, signed with the store certificate.
+
+    The application proves it holds one of its keys before it may change them, and needs no
+    Graph permission for it: a JWT signed by a certificate it already holds, issued by the
+    application's object id. ``x5t`` names the certificate by its SHA-1 thumbprint, which is
+    the thumbprint itself.
+
+    Args:
+        object_id: The application's object id, not its client id.
+
+    Returns:
+        The signed JWT.
+    """
+    now = int(time.time())
+    header = {"alg": "RS256", "typ": "JWT", "x5t": _b64url(bytes.fromhex(THUMBPRINT))}
+    claims = {"aud": _KEY_PROOF_AUDIENCE, "iss": object_id, "nbf": now, "exp": now + 600}
+    signing_input = ".".join(_b64url(json.dumps(part).encode()) for part in (header, claims))
+    digest = hashlib.sha256(signing_input.encode("ascii")).digest()
+    return f"{signing_input}.{_b64url(cng.sign_digest(THUMBPRINT, digest, padding='pkcs1'))}"
+
+
+def _application(graph: BlockingGraphClient) -> dict[str, Any]:
+    """Read the test application's object id and certificates, as the application itself.
+
+    An application may read its own registration with no Graph permission for it (measured
+    2026-10-10, holding only ``Organization.Read.All``).
+    """
+    return dict(
+        graph.get(
+            f"/applications(appId='{APP_CLIENT_ID}')", params={"$select": "id,keyCredentials"}
+        )
+    )
+
+
+def upload_temporary_certificate() -> TestCertificate:
+    """Make a certificate and upload it to the test application, as the application itself.
+
+    It is named :data:`TEMPORARY_CERTIFICATE_NAME`, so :func:`restore_baseline` takes it off
+    again. Entra does not accept it at once; sign in with :func:`sign_in_once_accepted`.
+
+    Returns:
+        The certificate, with its private key.
+    """
+    certificate = make_certificate(TEMPORARY_CERTIFICATE_NAME)
+    with BlockingGraphClient(live_app_auth()) as graph:
+        object_id = _application(graph)["id"]
+        graph.post(
+            f"/applications/{object_id}/addKey",
+            json={
+                "keyCredential": {
+                    "type": "AsymmetricX509Cert",
+                    "usage": "Verify",
+                    "key": base64.b64encode(certificate.der).decode("ascii"),
+                },
+                "passwordCredential": None,
+                "proof": _key_proof(object_id),
+            },
+        )
+    return certificate
+
+
+def sign_in_once_accepted(auth: AuthContext, scopes: Sequence[str]) -> None:
+    """Sign in with a certificate just uploaded, waiting until Entra accepts it.
+
+    Measured 2026-10-10: a certificate added with ``addKey`` was refused ``AADSTS700027``
+    three seconds later and accepted ten seconds after that.
+
+    Args:
+        auth: An app-flow context holding the new certificate.
+        scopes: The scopes to sign in for.
+    """
+    started = time.monotonic()
+    while True:
+        try:
+            auth.acquire_token(scopes)
+            return
+        except AuthError as error:
+            waited = time.monotonic() - started
+            if "AADSTS700027" not in str(error) or waited > PROPAGATION_TIMEOUT_SECONDS:
+                raise
+        time.sleep(PROPAGATION_POLL_SECONDS)
+
+
+def _temporary_certificates(graph: BlockingGraphClient) -> tuple[str, list[str]]:
+    """Read the test application's object id and the key ids of the certificates tests uploaded.
+
+    Args:
+        graph: A Graph client signed in as the application.
+
+    Returns:
+        The object id, and the key ids of the certificates named
+        :data:`TEMPORARY_CERTIFICATE_NAME`.
+    """
+    application = _application(graph)
+    return application["id"], [
+        key["keyId"]
+        for key in application["keyCredentials"]
+        if key.get("displayName") == f"CN={TEMPORARY_CERTIFICATE_NAME}"
+    ]
+
+
+def _remove_temporary_certificates(may_remove: Callable[[], bool]) -> None:
+    """Take every certificate a test uploaded back off the test application.
+
+    They are the ones named :data:`TEMPORARY_CERTIFICATE_NAME`; the certificates the
+    application is configured with stay. Removed with ``removeKey``, as the application.
+
+    The application's certificate list lags behind a removal: measured 2026-10-10, removed
+    certificates were still listed by the next restore, a minute or more later, which removed
+    them again. So this re-reads the list until the removed ones are gone (10 s in the run
+    after).
+
+    Args:
+        may_remove: Whether the tenant is marked disposable. Only called when there is
+            something to take off.
+    """
+    with BlockingGraphClient(live_app_auth()) as graph:
+        object_id, temporary = _temporary_certificates(graph)
+        if not temporary:
+            return
+        if not may_remove():
+            pytest.fail(
+                f"the test application holds {len(temporary)} certificate(s) a test uploaded,"
+                " and the tenant is not marked disposable (tests/verify_remote_disposable.py),"
+                " so they were left alone"
+            )
+        for key_id in temporary:
+            graph.post(
+                f"/applications/{object_id}/removeKey",
+                json={"keyId": key_id, "proof": _key_proof(object_id)},
+            )
+        started = time.monotonic()
+        while still_listed := set(temporary) & set(_temporary_certificates(graph)[1]):
+            waited = time.monotonic() - started
+            if waited > PROPAGATION_TIMEOUT_SECONDS:
+                pytest.fail(
+                    f"{len(still_listed)} certificate(s) taken off the test application are"
+                    f" still listed {waited:.0f}s later; raise"
+                    " AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS if it is just slow"
+                )
+            time.sleep(PROPAGATION_POLL_SECONDS)
+    print(
+        f"  took {len(temporary)} test certificate(s) off the test application;"
+        f" gone from its list after {time.monotonic() - started:.0f}s"
+    )
+
+
 def restore_baseline(cache_path: Path, *, may_remove: Callable[[], bool]) -> None:
+    """Bring the tenant to exactly the baseline, whatever state it is in.
+
+    Two parts, each when the run is configured for it:
+
+    * Consent (:data:`KEEPS_CONSENT`): the Graph command-line application is granted exactly
+      ``BASELINE_SCOPES`` (:func:`_restore_consent`).
+    * Certificates (:data:`KEEPS_CERTIFICATES`): the test application holds no certificate a
+      test uploaded (:func:`_remove_temporary_certificates`).
+
+    Both read what the tenant holds, never assume it, and change it only when ``may_remove``
+    says the tenant is marked disposable. Blocking, so fixtures of any scope can call it.
+
+    Args:
+        cache_path: The shared disk cache, holding the administrator's sign-in.
+        may_remove: Whether this tenant may have things taken out. Only called when there is
+            something to take out.
+    """
+    if KEEPS_CONSENT:
+        _restore_consent(cache_path, may_remove=may_remove)
+    if KEEPS_CERTIFICATES:
+        _remove_temporary_certificates(may_remove)
+
+
+def _restore_consent(cache_path: Path, *, may_remove: Callable[[], bool]) -> None:
     """Bring the tenant to exactly the consent baseline, whatever state it is in.
 
     What the tenant holds is read, never assumed, and fixed in both directions:
