@@ -40,6 +40,10 @@ _SETTLE_BACKOFF_SECONDS = 3.0
 # which is the name the package constant and the design notes still use.
 GRAPH_CLI_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 
+# Microsoft Graph itself, the API the baseline scopes belong to. Every tenant has a service
+# principal for it, whose object id differs per tenant, so it is looked up.
+GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
+
 
 @dataclass
 class ResetResult:
@@ -272,14 +276,17 @@ class StripResult:
     """What taking an application's grants down to the allowed scopes did.
 
     Attributes:
-        changed: Ids of the grants that were rewritten, or deleted because nothing was left.
-        removed: The scopes that were taken out, across every grant.
+        changed: Ids of the API's grants that were rewritten, or deleted because nothing was
+            left.
+        dropped: Ids of grants for other APIs, deleted whole: nothing in them is allowed.
+        removed: The scopes that were taken out of the API's grants, across every grant.
         failed: Ids that could not be brought down, with the reason.
         rounds: How many times the grants had to be re-read before two reads in a row found
             nothing beyond the allowed scopes.
     """
 
     changed: list[str] = field(default_factory=list)
+    dropped: list[str] = field(default_factory=list)
     removed: set[str] = field(default_factory=set)
     failed: dict[str, str] = field(default_factory=dict)
     rounds: int = 0
@@ -302,8 +309,29 @@ def grant_scopes(grant: dict[str, Any]) -> set[str]:
     return set(str(grant.get("scope", "")).split())
 
 
-def _beyond(grant: dict[str, Any], allowed: Collection[str]) -> set[str]:
-    """Return the scopes a grant carries beyond ``allowed`` and the OpenID Connect ones."""
+def is_for(grant: dict[str, Any], resource_id: str) -> bool:
+    """Whether a grant is for the API whose service principal has this object id."""
+    return str(grant.get("resourceId", "")) == resource_id
+
+
+def beyond(grant: dict[str, Any], allowed: Collection[str], resource_id: str) -> set[str]:
+    """Return the scopes a grant carries that ``allowed`` does not cover.
+
+    ``allowed`` names scopes of one API, the one whose service principal is ``resource_id``.
+    A grant for that API is beyond by what it carries past ``allowed`` and the OpenID Connect
+    scopes. A grant for any other API is beyond by everything it carries: a scope name means
+    nothing across APIs, so ``User.Read`` on another API is not the ``User.Read`` allowed.
+
+    Args:
+        grant: An ``oauth2PermissionGrant``.
+        allowed: The scopes that may stay, on the API ``resource_id`` names.
+        resource_id: Object id of that API's service principal in the tenant.
+
+    Returns:
+        The scopes to take out.
+    """
+    if not is_for(grant, resource_id):
+        return grant_scopes(grant)
     return grant_scopes(grant) - set(allowed) - OIDC_SCOPES
 
 
@@ -371,24 +399,27 @@ async def _rewrite_grant(graph: GraphClient, grant_id: str, scopes: set[str]) ->
 
 
 async def strip_grants(
-    graph: GraphClient, allowed: Collection[str], *, client_id: str = GRAPH_CLI_CLIENT_ID
+    graph: GraphClient,
+    allowed: Collection[str],
+    *,
+    client_id: str = GRAPH_CLI_CLIENT_ID,
+    resource_app_id: str = GRAPH_APP_ID,
 ) -> StripResult:
     """Take every scope beyond ``allowed`` out of every grant of an application.
 
-    Each grant keeps the allowed scopes it has, so nothing that is allowed is lost and nobody
-    is asked to consent again; a grant left with nothing is deleted. Grants are re-read until
-    two reads in a row find nothing to take out, for the same reason as in
+    ``allowed`` names scopes of one API, ``resource_app_id``, Microsoft Graph by default. Each
+    of the application's grants for that API keeps the allowed scopes it has, so nothing that
+    is allowed is lost and nobody is asked to consent again; a grant left with nothing is
+    deleted. A grant for any other API is deleted whole, since nothing in it is allowed: the
+    application ends up holding exactly ``allowed``, whichever API a grant is for. Grants are
+    re-read until two reads in a row find nothing to take out, for the same reason as in
     :func:`revoke_grants`: one clean read is what a lagging replica returns.
-
-    Known gap, deliberately not handled for now: every grant of the application is treated
-    as a grant for Microsoft Graph, whichever API it is for. A grant letting the same
-    application call some other API would have all its scopes taken out, since ``allowed``
-    only names Graph scopes. Filtering on the grant's ``resourceId`` would close the gap.
 
     Args:
         graph: A Graph client whose identity holds ``DelegatedPermissionGrant.ReadWrite.All``.
         allowed: The scopes that may stay. The OpenID Connect scopes always may.
         client_id: The application.
+        resource_app_id: Application id of the API ``allowed`` belongs to.
 
     Returns:
         What was changed, which scopes were taken out, and what failed.
@@ -402,11 +433,14 @@ async def strip_grants(
             return result
         raise
     principal_id = str(principal["id"])
+    resource_id = str((await service_principal(graph, resource_app_id))["id"])
 
     clean_reads = 0
     for attempt in range(_SETTLE_ROUNDS):
         excessive = [
-            grant for grant in await find_grants(graph, principal_id) if _beyond(grant, allowed)
+            grant
+            for grant in await find_grants(graph, principal_id)
+            if beyond(grant, allowed, resource_id)
         ]
         if not excessive:
             clean_reads += 1
@@ -419,21 +453,24 @@ async def strip_grants(
 
         for grant in excessive:
             grant_id = str(grant["id"])
-            extra = _beyond(grant, allowed)
+            extra = beyond(grant, allowed, resource_id)
             failure = await _rewrite_grant(graph, grant_id, grant_scopes(grant) - extra)
-            if failure is None:
+            if failure is not None:
+                result.failed[grant_id] = failure
+                continue
+            result.failed.pop(grant_id, None)
+            if is_for(grant, resource_id):
                 result.changed.append(grant_id)
                 result.removed |= extra
-                result.failed.pop(grant_id, None)
             else:
-                result.failed[grant_id] = failure
+                result.dropped.append(grant_id)
 
         if attempt < _SETTLE_ROUNDS - 1:
             await asyncio.sleep(_SETTLE_BACKOFF_SECONDS)
 
     result.rounds = _SETTLE_ROUNDS
     for grant in await find_grants(graph, principal_id):
-        if _beyond(grant, allowed):
+        if beyond(grant, allowed, resource_id):
             result.failed.setdefault(
                 str(grant["id"]), f"still beyond after {_SETTLE_ROUNDS} rounds: {describe(grant)}"
             )

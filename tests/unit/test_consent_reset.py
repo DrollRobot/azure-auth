@@ -22,6 +22,8 @@ from tests import consent_reset
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
 SP_ID = "sp-graph-cli"
+GRAPH_ID = "sp-graph"
+EXCHANGE_ID = "sp-exchange"
 ADMIN = "admin-object-id"
 OTHER = "other-object-id"
 
@@ -31,6 +33,7 @@ def grant(
     *,
     principal: str | None = None,
     scope: str = "User.Read.All",
+    resource: str = GRAPH_ID,
 ) -> dict[str, Any]:
     """Build an ``oauth2PermissionGrant``.
 
@@ -38,6 +41,7 @@ def grant(
         grant_id: Its id.
         principal: Object id of the one user it covers, or ``None`` for a tenant-wide grant.
         scope: Space-separated scopes it carries.
+        resource: Service principal id of the API it is for.
 
     Returns:
         The grant as Graph returns it.
@@ -45,7 +49,7 @@ def grant(
     body: dict[str, Any] = {
         "id": grant_id,
         "clientId": SP_ID,
-        "resourceId": "resource-graph",
+        "resourceId": resource,
         "scope": scope,
     }
     if principal is None:
@@ -93,6 +97,8 @@ class FakeGraph:
     async def get(self, path: str, *, params: Any = None, headers: Any = None) -> Any:
         """Read a service principal or a single grant."""
         if path.startswith("/servicePrincipals"):
+            if consent_reset.GRAPH_APP_ID in path:
+                return {"id": GRAPH_ID, "displayName": "Microsoft Graph"}
             if self.principal_missing:
                 raise ResourceError("not found", status=404, code="Request_ResourceNotFound")
             return {"id": SP_ID, "displayName": "Microsoft Graph Command Line Tools"}
@@ -357,6 +363,35 @@ async def test_a_grant_with_nothing_allowed_left_is_deleted() -> None:
     assert "stray" not in graph.store
     assert scopes_of(graph, "wide") == {"User.Read"}
     assert result.removed == {"Mail.ReadWrite"}
+
+
+async def test_a_grant_for_another_api_is_deleted_whole() -> None:
+    # The baseline is everything the application holds, whichever API a grant is for, and a
+    # scope name means nothing across APIs: User.Read on Exchange is not the User.Read that
+    # is allowed. So a grant for another API goes, even one carrying only baseline names.
+    graph = FakeGraph(
+        grant("wide", scope="User.Read Application.Read.All"),
+        grant("exchange", resource=EXCHANGE_ID, scope="User.Read"),
+    )
+
+    result = await strip(graph)
+
+    assert result.ok
+    assert "exchange" not in graph.store
+    assert scopes_of(graph, "wide") == {"User.Read", "Application.Read.All"}
+    assert result.dropped == ["exchange"]
+    assert result.changed == []
+    assert result.removed == set()
+
+
+async def test_a_grant_for_another_api_that_will_not_die_is_reported() -> None:
+    graph = FakeGraph(grant("exchange", resource=EXCHANGE_ID, scope="User.Read"))
+    graph.delete_failures["exchange"] = 99
+
+    result = await strip(graph)
+
+    assert not result.ok
+    assert "exchange" in result.failed
 
 
 async def test_a_tenant_at_the_baseline_is_left_alone() -> None:

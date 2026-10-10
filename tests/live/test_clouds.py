@@ -45,6 +45,7 @@ from azure_auth.constants import (
     EXCHANGE_POWERSHELL_CLIENT_ID,
     GRAPH_CLI_CLIENT_ID,
 )
+from tests.consent_reset import GRAPH_APP_ID
 from tests.live.support import (
     APP_CLIENT_ID,
     BASELINE_SCOPES,
@@ -83,8 +84,8 @@ AMBIGUOUS_TENANTS = {
     "guid": ("f8cdef31-a31e-4b4a-93e4-5f571e91255a", {COMMERCIAL, US_GOV}),
 }
 
-# The service principals that answer each service's challenge, in every cloud.
-GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
+# The service principals that answer each service's challenge, in every cloud; Graph's is
+# GRAPH_APP_ID in consent_reset, which needs it too.
 EXCHANGE_APP_ID = "00000002-0000-0ff1-ce00-000000000000"
 IPPS_APP_ID = "00000007-0000-0ff1-ce00-000000000000"
 

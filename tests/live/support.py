@@ -87,7 +87,8 @@ from tests.certs import TestCertificate, make_certificate
 GDAP_SCOPES = ["DelegatedAdminRelationship.Read.All", "Organization.Read.All"]
 
 # The consent baseline: exactly the Graph scopes the Graph command-line application is
-# granted in the tenant while the live tests run, no more and no fewer. restore_baseline()
+# granted in the tenant while the live tests run, no more and no fewer, and no grant for any
+# other API (a scope name means nothing across APIs). restore_baseline()
 # puts the tenant there at the start of every live run and after every test that can change
 # consent, so every test starts from it and none has to arrange anything.
 #
@@ -621,10 +622,17 @@ def _run(coroutine: Coroutine[Any, Any, _T]) -> _T:
         return pool.submit(asyncio.run, coroutine).result()
 
 
-async def _grants_now(cache_path: Path) -> list[dict[str, Any]]:
-    """Read the Graph application's consent grants as the administrator."""
+async def _grants_now(cache_path: Path) -> tuple[list[dict[str, Any]], str]:
+    """Read the Graph application's consent grants as the administrator.
+
+    Returns:
+        The grants, and the object id of Microsoft Graph's service principal in the tenant,
+        which tells a grant for Graph from one for another API.
+    """
     async with GraphClient(cached_user_auth(cache_path), scopes=GRANT_ADMIN_SCOPES) as graph:
-        return await consent_reset.application_grants(graph)
+        grants = await consent_reset.application_grants(graph)
+        graph_principal = await consent_reset.service_principal(graph, consent_reset.GRAPH_APP_ID)
+        return grants, str(graph_principal["id"])
 
 
 async def _strip(cache_path: Path) -> consent_reset.StripResult:
@@ -665,16 +673,17 @@ async def _wait_until_refused(auth: AuthContext, scope: str) -> float:
         await asyncio.sleep(PROPAGATION_POLL_SECONDS)
 
 
-def _holds_baseline(grants: list[dict[str, Any]]) -> bool:
-    """Whether a tenant-wide grant carries every baseline scope."""
+def _holds_baseline(grants: list[dict[str, Any]], graph_id: str) -> bool:
+    """Whether a tenant-wide grant for Graph carries every baseline scope."""
     return any(
         grant.get("consentType") == "AllPrincipals"
+        and consent_reset.is_for(grant, graph_id)
         and set(BASELINE_SCOPES) <= consent_reset.grant_scopes(grant)
         for grant in grants
     )
 
 
-def _wait_for_baseline_grant(cache_path: Path) -> list[dict[str, Any]] | None:
+def _wait_for_baseline_grant(cache_path: Path) -> tuple[list[dict[str, Any]], str] | None:
     """Read the grants until a tenant-wide one carries the baseline, or time runs out.
 
     The grant list lags behind consent: measured 2026-09-29, a consent screen accepted for the
@@ -686,16 +695,17 @@ def _wait_for_baseline_grant(cache_path: Path) -> list[dict[str, Any]] | None:
         cache_path: The shared disk cache, holding the administrator's sign-in.
 
     Returns:
-        The grants once the baseline is among them, or ``None`` if it never showed up.
+        The grants and Graph's service principal id once the baseline is among them, or
+        ``None`` if it never showed up.
     """
     started = time.monotonic()
     while True:
-        grants = _run(_grants_now(cache_path))
+        grants, graph_id = _run(_grants_now(cache_path))
         waited = time.monotonic() - started
-        if _holds_baseline(grants):
+        if _holds_baseline(grants, graph_id):
             if waited >= PROPAGATION_POLL_SECONDS:
                 print(f"  the baseline grant showed up in the grant list after {waited:.0f}s")
-            return grants
+            return grants, graph_id
         if waited > PROPAGATION_TIMEOUT_SECONDS:
             return None
         time.sleep(PROPAGATION_POLL_SECONDS)
@@ -889,10 +899,11 @@ def _restore_consent(cache_path: Path, *, may_remove: Callable[[], bool]) -> Non
        deleted grant keeps issuing tokens for a while, so the tenant-wide grant is read as
        well, re-read until it catches up (the list lags behind a consent just given), and the
        consent screen is forced when it still lacks any of them.
-    2. Beyond: every other scope is taken out of every grant of the application, each grant
-       keeping its baseline scopes, so nobody is asked to consent again. Then this waits
-       until Entra refuses to issue each scope it took out, so the next test cannot be handed
-       one the grant no longer carries.
+    2. Beyond: every other scope is taken out of every Graph grant of the application, each
+       grant keeping its baseline scopes, so nobody is asked to consent again, and a grant
+       for any other API is deleted whole. Then this waits until Entra refuses to issue each
+       Graph scope it took out, so the next test cannot be handed one the grant no longer
+       carries.
 
     Taking grants away changes the tenant, so step 2 runs only when ``may_remove`` says the
     tenant is marked disposable. Otherwise the run fails, naming what is beyond the baseline.
@@ -915,15 +926,13 @@ def _restore_consent(cache_path: Path, *, may_remove: Callable[[], bool]) -> Non
                 f" {PROPAGATION_TIMEOUT_SECONDS:.0f}s after a sign-in for them that Entra"
                 " accepted; raise AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS if it is just slow"
             )
-    grants = found
+    grants, graph_id = found
 
     beyond = sorted(
         {
             scope
             for grant in grants
-            for scope in consent_reset.grant_scopes(grant)
-            - set(BASELINE_SCOPES)
-            - consent_reset.OIDC_SCOPES
+            for scope in consent_reset.beyond(grant, BASELINE_SCOPES, graph_id)
         }
     )
     if beyond:
@@ -935,6 +944,8 @@ def _restore_consent(cache_path: Path, *, may_remove: Callable[[], bool]) -> Non
         stripped = _run(_strip(cache_path))
         if not stripped.ok:
             pytest.fail(f"could not take the tenant down to the baseline: {stripped.failed}")
+        for grant_id in stripped.dropped:
+            print(f"  deleted grant {grant_id}, which was for an API other than Graph")
         auth = cached_user_auth(cache_path)
         for scope in sorted(stripped.removed):
             waited = _run(_wait_until_refused(auth, scope))

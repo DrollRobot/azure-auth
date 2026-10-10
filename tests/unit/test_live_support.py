@@ -84,15 +84,16 @@ def test_token_user_takes_the_v2_claim_first_and_the_v1_claims_after() -> None:
     assert token_user(fake_jwt(sub="nobody")) is None
 
 
-def test_the_baseline_has_to_be_in_a_tenant_wide_grant() -> None:
+def test_the_baseline_has_to_be_in_a_tenant_wide_grant_for_graph() -> None:
     scopes = " ".join(BASELINE_SCOPES)
-    assert _holds_baseline([{"consentType": "AllPrincipals", "scope": f"{scopes} Extra"}])
+    wide = {"consentType": "AllPrincipals", "resourceId": "graph", "scope": f"{scopes} Extra"}
+    assert _holds_baseline([wide], "graph")
     # A per-user grant covers only its user, not the non-administrator or anyone else.
-    assert not _holds_baseline([{"consentType": "Principal", "scope": scopes}])
-    assert not _holds_baseline(
-        [{"consentType": "AllPrincipals", "scope": " ".join(BASELINE_SCOPES[1:])}]
-    )
-    assert not _holds_baseline([])
+    assert not _holds_baseline([{**wide, "consentType": "Principal"}], "graph")
+    assert not _holds_baseline([{**wide, "scope": " ".join(BASELINE_SCOPES[1:])}], "graph")
+    # The same scope names on another API are not the baseline scopes.
+    assert not _holds_baseline([{**wide, "resourceId": "exchange"}], "graph")
+    assert not _holds_baseline([], "graph")
 
 
 TENANT_GUID = "11111111-2222-3333-4444-555555555555"
