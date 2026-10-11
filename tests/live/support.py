@@ -74,11 +74,12 @@ from azure_auth import (
     Tenant,
 )
 from azure_auth.auth import cng
+from azure_auth.auth.cache import build_cache
 from azure_auth.clients import ResourceClient
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from azure_auth.sync import GraphClient as BlockingGraphClient
 from azure_auth.sync import ResourceClient as BlockingResourceClient
-from tests import alert_user, consent_reset
+from tests import alert_user, cache_aging, consent_reset
 from tests.certs import TestCertificate, make_certificate
 
 # The GDAP test's scopes, on the home tenant and on each customer tenant.
@@ -199,6 +200,10 @@ KEEPS_CERTIFICATES = bool(TENANT and APP_CLIENT_ID and THUMBPRINT)
 # takes each one back off; the certificates the application is configured with stay.
 TEMPORARY_CERTIFICATE_NAME = "azure-auth live test temporary"
 
+# The broker tests' own disk cache, beside the shared one (test_broker.py says why they keep
+# one). Named here so a test that revokes the account's sessions can expire what it holds.
+BROKER_CACHE_NAME = "live_tests_broker_token_cache.bin"
+
 # The audience addKey and removeKey require of their proof, fixed by Graph.
 _KEY_PROOF_AUDIENCE = "00000002-0000-0000-c000-000000000000"
 
@@ -275,7 +280,9 @@ def live_app_auth(**kwargs: Any) -> AuthContext:
     return AuthContext(TENANT, client_id=APP_CLIENT_ID, certificate_thumbprint=THUMBPRINT, **kwargs)
 
 
-def cached_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
+def cached_user_auth(
+    cache_path: Path, *, tenant: str = TENANT, client_id: str | None = None
+) -> AuthContext:
     """Return a user-flow context that can never open a sign-in prompt.
 
     Only for what must not prompt: a test of signing in from the cache, where a prompt would
@@ -286,13 +293,41 @@ def cached_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
     Args:
         cache_path: The shared disk cache.
         tenant: As for :func:`live_user_auth`.
+        client_id: A client id for the context itself, as a caller gives one to replace
+            every client's first-party default; the context's own token requests then go to
+            that application instead of Azure PowerShell.
 
     Returns:
         The context.
     """
-    auth = AuthContext(tenant, username=USERNAME, cache="disk", cache_path=cache_path)
+    auth = AuthContext(
+        tenant, username=USERNAME, client_id=client_id, cache="disk", cache_path=cache_path
+    )
     auth._interactive_allowed = False
     return auth
+
+
+def expire_cached_access_tokens(cache_path: Path) -> int:
+    """Expire every access token in the shared cache and in the broker tests' cache.
+
+    For a test that has revoked the account's sessions. From then on every token in both
+    caches is refused by the services, but the caches do not know: a cached access token is
+    served without asking Entra, so the next test would send a revoked one, and the refusal
+    would arrive from its first request rather than from the sign-in :func:`ensure_token`
+    watches over. Expired, each cache sends the next context to its refresh token, which Entra
+    refuses, and the sign-in opens where the person is called for it.
+
+    Args:
+        cache_path: The shared disk cache.
+
+    Returns:
+        How many access tokens were expired, in both caches together.
+    """
+    expired = 0
+    for path in (cache_path, cache_path.with_name(BROKER_CACHE_NAME)):
+        if path.exists():
+            expired += cache_aging.expire_access_tokens(build_cache("disk", path))
+    return expired
 
 
 def ensure_token(auth: AuthContext, scopes: Sequence[str], client_id: str | None = None) -> None:

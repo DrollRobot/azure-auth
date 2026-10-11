@@ -31,7 +31,9 @@ disk cache, which outlives the run, and signs in when there is none
     uv run --env-file .env pytest tests/live -s --run-destructive-remote --no-cov
 
 The ``interactive`` tests are collected first, so every prompt comes in one stretch at the
-start, and the ``cached_credential`` tests last, when the cache is full.
+start, and the ``cached_credential`` tests last, when the cache is full. The interactive
+test that revokes the account's sessions comes first of all, so the forced sign-ins after it
+refill the caches it empties.
 """
 
 from __future__ import annotations
@@ -52,18 +54,23 @@ from tests.live.support import (
     restore_baseline,
 )
 
+# The interactive test that revokes the account's sessions, which kills every sign-in the
+# caches hold. It runs before the other interactive tests, whose forced sign-ins refill them.
+REVOKES_SESSIONS = "test_token_revocation.py"
+
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Put the ``interactive`` tests first, and the ``cached_credential`` tests last.
 
     The prompts come in one stretch, and the tests of signing in from the cache find it full.
-    A stable sort: within each group the collection order stands.
+    The session revocation (``REVOKES_SESSIONS``) leads the ``interactive`` tests. A stable
+    sort: within each group the collection order stands.
     """
 
     def group(item: pytest.Item) -> int:
         if "interactive" in item.keywords:
-            return 0
-        return 2 if "cached_credential" in item.keywords else 1
+            return 0 if item.path.name == REVOKES_SESSIONS else 1
+        return 3 if "cached_credential" in item.keywords else 2
 
     items.sort(key=group)
 

@@ -26,6 +26,7 @@ from azure_auth import AuthContext, AuthError, AzureClient, BrokerUnavailable, E
 from azure_auth.auth.cache import build_cache
 from azure_auth.clients import ResourceClient
 from tests.live.support import (
+    BROKER_CACHE_NAME,
     TENANT,
     USERNAME,
     _flag,
@@ -63,7 +64,7 @@ def broker_cache_path(cache_path: Path) -> Path:
 
     Only broker sign-ins write to it, so it never holds a refresh token (module docstring).
     """
-    return cache_path.with_name("live_tests_broker_token_cache.bin")
+    return cache_path.with_name(BROKER_CACHE_NAME)
 
 
 def broker_auth(cache_path: Path) -> AuthContext:
