@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GDAP customers can be listed with their display names, and everything else Graph says
   about them, not only their tenant IDs.
 
+### Changed
+
+- Continuous access evaluation is on. Graph and Exchange can now cut off a user within
+  minutes of the account being disabled, the password changed or a sign-out forced, instead
+  of when the token expires; the clients recover on their own when the user is still allowed.
+  Their tokens live longer between renewals.
+
 ## [0.3.0] - 2026-10-08 - Key Vault client, tenant held by ID
 
 ### Added

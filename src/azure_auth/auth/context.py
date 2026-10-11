@@ -50,6 +50,14 @@ _LOGGER = logging.getLogger(__name__)
 # A cached token is reused until it is this close to expiry.
 _REFRESH_MARGIN_SECONDS = 300
 
+# What every MSAL application tells Entra it can do. ``CP1`` means "I handle claims
+# challenges": the clients answer a 401 that carries one by signing in again with its claims
+# (clients/base.py). Without it no resource ever sends a challenge, and a token simply runs
+# until it expires. With it, Graph and Exchange issue long-lived tokens and revoke them within
+# minutes of an account being disabled, a password change or a forced sign-out: continuous
+# access evaluation.
+_CLIENT_CAPABILITIES = ["CP1"]
+
 # How long a browser sign-in waits for the person before it is abandoned, unless the context
 # is given ``interactive_timeout``. Without a limit, a closed browser window leaves MSAL
 # waiting for a redirect that never arrives.
@@ -400,7 +408,8 @@ class AuthContext:
             claims: Claims challenge returned by a resource, as a JSON string.
             tenant_id: Tenant to request the token from. A tenant other than this context's
                 is served by :meth:`for_tenant`.
-            enable_cae: Accepted for protocol compatibility and ignored.
+            enable_cae: Accepted for protocol compatibility. Every application declares
+                continuous access evaluation, so the token is CAE-capable either way.
             **kwargs: Ignored.
 
         Returns:
@@ -417,7 +426,8 @@ class AuthContext:
 
         Args:
             *scopes: Scopes to request, normally one ``<resource>/.default`` value.
-            options: ``claims`` and ``tenant_id`` are honoured; ``enable_cae`` is ignored.
+            options: ``claims`` and ``tenant_id`` are honoured. ``enable_cae`` changes
+                nothing: every token is CAE-capable.
 
         Returns:
             The token with its expiry time and type.
@@ -567,7 +577,8 @@ class AuthContext:
             use_broker: Whether the application should use the Windows broker.
 
         Returns:
-            An ``msal.PublicClientApplication`` or ``msal.ConfidentialClientApplication``.
+            An ``msal.PublicClientApplication`` or ``msal.ConfidentialClientApplication``,
+            declaring ``_CLIENT_CAPABILITIES``.
         """
         key = (client_id, use_broker)
         app = self._apps.get(key)
@@ -580,17 +591,22 @@ class AuthContext:
                     ),
                     authority=self.authority,
                     token_cache=self._cache,
+                    client_capabilities=_CLIENT_CAPABILITIES,
                 )
             elif use_broker:
                 app = msal.PublicClientApplication(
                     client_id,
                     authority=self.authority,
                     token_cache=self._cache,
+                    client_capabilities=_CLIENT_CAPABILITIES,
                     enable_broker_on_windows=True,
                 )
             else:
                 app = msal.PublicClientApplication(
-                    client_id, authority=self.authority, token_cache=self._cache
+                    client_id,
+                    authority=self.authority,
+                    token_cache=self._cache,
+                    client_capabilities=_CLIENT_CAPABILITIES,
                 )
             with self._guard:
                 app = self._apps.setdefault(key, app)
@@ -840,7 +856,8 @@ class AsyncAuthContext:
             *scopes: Scopes to request, normally one ``<resource>/.default`` value.
             claims: Claims challenge returned by a resource, as a JSON string.
             tenant_id: Tenant to request the token from.
-            enable_cae: Accepted for protocol compatibility and ignored.
+            enable_cae: Accepted for protocol compatibility. Every application declares
+                continuous access evaluation, so the token is CAE-capable either way.
             **kwargs: Ignored.
 
         Returns:
@@ -857,7 +874,8 @@ class AsyncAuthContext:
 
         Args:
             *scopes: Scopes to request, normally one ``<resource>/.default`` value.
-            options: ``claims`` and ``tenant_id`` are honoured; ``enable_cae`` is ignored.
+            options: ``claims`` and ``tenant_id`` are honoured. ``enable_cae`` changes
+                nothing: every token is CAE-capable.
 
         Returns:
             The token with its expiry time and type.

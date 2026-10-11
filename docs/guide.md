@@ -263,7 +263,9 @@ Every client:
 - retries 429 and 503, waiting for `Retry-After` when the service sends it (`max_retries=`,
   `max_retry_wait=`);
 - answers a 401 that carries a claims challenge (continuous access evaluation) by getting a
-  new token with those claims, and any other 401 by refreshing the token once;
+  new token with those claims, and any other 401 by refreshing the token once. Every sign-in
+  declares that it can, so Graph and Exchange cut off a disabled or signed-out user within
+  minutes instead of when the token expires, and hand out longer-lived tokens in return;
 - refuses to send its token to another host. A next link or operation URL that points
   elsewhere raises `ValueError`.
 
@@ -403,4 +405,5 @@ with GraphClient(auth, scopes=["User.Read.All"]) as graph:
 ```
 
 `AuthContext` itself is synchronous and is an Azure SDK `TokenCredential`. `auth.aio` is the
-async view and an `AsyncTokenCredential`.
+async view and an `AsyncTokenCredential`. Every token they hand out supports continuous
+access evaluation, whether or not the SDK asks for it with `enable_cae`.

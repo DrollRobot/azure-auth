@@ -312,6 +312,18 @@ def test_one_msal_application_per_client_id(fake_msal: FakeMsal) -> None:
     assert [app.client_id for app in fake_msal.apps] == ["one", "two"]
 
 
+def test_every_application_declares_continuous_access_evaluation(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    user_context().acquire_token([ARM_SCOPE])
+    user_context(broker=True).acquire_token([ARM_SCOPE])
+    AuthContext("tenant", client_id="app", client_secret="s3cret").acquire_token([ARM_SCOPE])
+
+    kinds = [(app.kind, app.broker) for app in fake_msal.apps]
+    assert kinds == [("public", False), ("public", True), ("confidential", False)]
+    assert [app.capabilities for app in fake_msal.apps] == [["CP1"]] * 3
+
+
 # ---------------------------------------------------------------------------- memo
 
 

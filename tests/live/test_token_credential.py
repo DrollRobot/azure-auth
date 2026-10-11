@@ -32,6 +32,11 @@ async def test_get_token_and_get_token_info_hand_the_sdk_one_usable_token(
     those arguments. A user context with no client id of its own signs in to Azure PowerShell,
     which is pre-authorised for Graph, so the token is tried against Graph itself. The cache
     answers the three calls after the first, so all four must hand back the same token.
+
+    The token must also record that the sign-in declared continuous access evaluation
+    (``xms_cc`` holding ``CP1``), which is what lets Graph send the claims challenges the
+    clients answer. Its lifetime is printed: Entra issues such tokens for far longer than the
+    hour or so of a plain one.
     """
     graph = live_cloud().graph
     scope = f"{graph}/.default"
@@ -41,6 +46,8 @@ async def test_get_token_and_get_token_info_hand_the_sdk_one_usable_token(
     assert token.expires_on > time.time()
     claims = token_claims(token.token)
     assert AZURE_POWERSHELL_CLIENT_ID in (claims.get("appid"), claims.get("azp"))
+    assert "CP1" in claims.get("xms_cc", []), claims.get("xms_cc")
+    print(f"token credential: issued for {(claims['exp'] - claims['iat']) / 60:.0f} minutes")
 
     async with httpx.AsyncClient() as http:
         me = await http.get(

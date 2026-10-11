@@ -37,8 +37,6 @@ Environment variables:
 * ``AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS``: how long :func:`restore_baseline` waits for
   Entra to catch up with a grant change: a new grant to show up, or a removed scope to stop
   being issued (default 300).
-* ``AZURE_AUTH_TEST_LONG_REFRESH=1``: run the test that waits out a real access token
-  lifetime, about an hour.
 * ``AZURE_AUTH_TEST_PROMPT_ALARM_SECONDS``: how long a sign-in may take before the alarm
   sounds (default 5). A browser that is still signed in answers faster than this.
 
