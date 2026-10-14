@@ -234,7 +234,7 @@ for customer in await home.list_customers():
 - `list_customers()` reads `GET /tenantRelationships/delegatedAdminCustomers` and needs
   `DelegatedAdminRelationship.Read.All` consented in the home tenant. Each customer is the
   object Graph returns, whole (`tenantId`, `displayName`, and whatever Graph adds), listed
-  once however many relationships reach it. `list_customer_tenant_ids()` is the ids alone.
+  once however many relationships reach it.
 - The application must be consented to in each customer tenant for the scopes you request.
 - In app flows each sibling builds its own client assertion, because the assertion audience
   is the tenant's token endpoint.

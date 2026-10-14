@@ -50,12 +50,11 @@ async def test_gdap_loop_reaches_customer_tenants_without_prompting(
     async with GraphClient(user_auth, scopes=GDAP_SCOPES) as home:
         ensure_sign_in(home)
         customers = await home.list_customers()
-        tenant_ids = await home.list_customer_tenant_ids()
     assert customers, "the home tenant has no GDAP customers"
-    # Every customer comes with its id and name, each tenant once, and the ids are the names'.
+    # Every customer comes with its id and name, each tenant once.
     assert all(customer["tenantId"] and customer["displayName"] for customer in customers)
-    assert len({customer["tenantId"] for customer in customers}) == len(customers)
-    assert tenant_ids == [customer["tenantId"] for customer in customers]
+    tenant_ids = [customer["tenantId"] for customer in customers]
+    assert len(set(tenant_ids)) == len(customers)
     print(f"{len(customers)} customers: " + ", ".join(c["displayName"] for c in customers[:5]))
 
     reached = 0

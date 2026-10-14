@@ -263,13 +263,3 @@ class GraphClient(ResourceClient):
         for customer in self.get_all("/tenantRelationships/delegatedAdminCustomers"):
             customers.setdefault(str(customer["tenantId"]), customer)
         return list(customers.values())
-
-    def list_customer_tenant_ids(self) -> list[str]:
-        """List the tenants of this home tenant's GDAP customers.
-
-        The ids of :meth:`list_customers`, for a loop that needs nothing else.
-
-        Returns:
-            The customer tenant ids, each once.
-        """
-        return [str(customer["tenantId"]) for customer in self.list_customers()]

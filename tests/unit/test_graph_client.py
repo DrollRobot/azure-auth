@@ -369,15 +369,6 @@ async def test_customers_are_what_graph_returns(auth: AuthContext) -> None:
     assert recorder.urls() == [f"{GRAPH}/tenantRelationships/delegatedAdminCustomers"]
 
 
-async def test_customer_tenant_ids_are_the_customers_ids_each_once(auth: AuthContext) -> None:
-    recorder = Recorder(
-        [ok({"value": [{"tenantId": "t1"}, {"tenantId": "t2"}, {"tenantId": "t1"}]})]
-    )
-    graph = GraphClient(auth, transport=recorder.transport)
-
-    assert await graph.list_customer_tenant_ids() == ["t1", "t2"]
-
-
 async def test_a_customer_under_several_relationships_is_listed_once(auth: AuthContext) -> None:
     # The first appearance wins, and the order of first appearances is kept, across pages.
     pages = [
