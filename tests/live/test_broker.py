@@ -6,23 +6,32 @@ refresh token in it can only have come from the broker, which is how these tests
 broker sign-in from a browser one. They keep a disk cache of their own for that reason; in the
 shared one, a browser sign-in's refresh token could answer instead.
 
-A broker sign-in on a computer that is not joined to the tenant ends by offering to keep the
-account signed in to every application. Accepting registers the computer with the
-organization, so the walkthrough says to decline; the tests need only this application.
+A broker sign-in also leaves the account with Windows. MSAL asks Windows for it by name only
+when MSAL's own cache holds it; with that cache empty, MSAL asks without naming an account, and
+Windows answers with one of its own choosing.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import msal
 import pytest
 
-from azure_auth import AuthContext, AuthError, AzureClient, BrokerUnavailable, ExchangeClient
+from azure_auth import (
+    AuthContext,
+    AuthError,
+    AzureClient,
+    BrokerUnavailable,
+    ExchangeClient,
+    GraphClient,
+    IppsClient,
+)
 from azure_auth.auth.cache import build_cache
 from azure_auth.clients import ResourceClient
 from tests.live.support import (
@@ -32,6 +41,8 @@ from tests.live.support import (
     _flag,
     ensure_token,
     needs_exchange_sign_in,
+    needs_graph,
+    needs_ipps,
     needs_user,
     sign_in_step,
     token_claims,
@@ -49,11 +60,14 @@ pytestmark = [
     ),
 ]
 
-# The first-party applications with the broker's redirect URI registered, one per resource.
+# Each client with its first-party application. IPPS signs in to the same application as
+# Exchange, for a different resource.
 BROKER_CLIENTS = [
+    pytest.param(GraphClient, "Microsoft Graph Command Line Tools", marks=needs_graph, id="graph"),
     pytest.param(
         ExchangeClient, "Exchange Online PowerShell", marks=needs_exchange_sign_in, id="exchange"
     ),
+    pytest.param(IppsClient, "Exchange Online PowerShell", marks=needs_ipps, id="ipps"),
     pytest.param(AzureClient, "Azure PowerShell", marks=_flag("AZURE_AUTH_TEST_ARM"), id="arm"),
 ]
 
@@ -172,6 +186,59 @@ async def test_the_broker_renews_a_token_without_prompting(
     assert_the_broker_holds_the_sign_in(broker_cache_path)
 
 
+def no_window(*args: Any, **kwargs: Any) -> NoReturn:
+    """Stand in for the broker's window, so a sign-in that reaches for it fails at once.
+
+    Args:
+        *args: Whatever MSAL passes.
+        **kwargs: Whatever MSAL passes.
+
+    Raises:
+        AssertionError: Always.
+    """
+    raise AssertionError("MSAL asked the broker to show its window")
+
+
+@needs_user
+@pytest.mark.xfail(
+    strict=True,
+    raises=BrokerUnavailable,
+    reason="MSAL asks Windows for a token without naming the account",
+)
+@pytest.mark.parametrize(("make_client", "application"), BROKER_CLIENTS)
+async def test_the_broker_signs_in_with_nobody_at_the_desk(
+    make_client: Callable[[AuthContext], ResourceClient],
+    application: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A context with nothing cached signs in through the broker without a window.
+
+    Windows holds the account from an earlier broker sign-in, such as the forced one above.
+    MSAL's broker sign-in, not forced, asks Windows silently first and shows the window only
+    when that fails. The window is taken away here, so a sign-in that would need a person
+    fails at once instead of waiting for one, and the test never needs anybody. The cache
+    starts empty, so the token cannot have come from an earlier sign-in of this application.
+    MSAL's own log, shown on a failure, says what the silent attempt returned.
+
+    Expected to fail: with its cache empty, MSAL asks Windows without naming the account, and
+    Windows answers with an account of its own choosing, which the tenant refuses (AADSTS50020,
+    AADSTS90072; measured 2026-10-14). Strict, so the run reports the day it passes.
+    """
+    caplog.set_level(logging.DEBUG, logger="msal")
+    monkeypatch.setattr("msal.broker._signin_interactively", no_window)
+    cache_path = tmp_path / "cache.bin"
+    auth = broker_auth(cache_path)
+    async with make_client(auth) as client:
+        await client.login()
+        token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
+
+    assert (token_user(token.token) or "").lower() == USERNAME.lower()
+    assert token_claims(token.token)["aud"] == client.resource
+    assert_the_broker_holds_the_sign_in(cache_path)
+
+
 # How long the cancel test lets a browser wait, should one open after all. Nobody answers it.
 FALLBACK_TIMEOUT_SECONDS = 5
 
@@ -189,10 +256,19 @@ async def test_a_cancelled_broker_sign_in_opens_no_browser() -> None:
         TENANT, username=USERNAME, broker=True, interactive_timeout=FALLBACK_TIMEOUT_SECONDS
     )
     async with AzureClient(auth) as client:
-        with pytest.raises(AuthError) as caught:
+        try:
             await client.login(force=True)
+        except AuthError as exc:
+            error = exc
+        else:
+            token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
+            browser = (client.client_id, False) in auth._apps
+            pytest.fail(
+                f"no error; signed in as {token_user(token.token)}, "
+                f"{'by the browser' if browser else 'by the broker'}"
+            )
 
-    print(f"a cancelled broker sign-in: {caught.value}")
-    assert not isinstance(caught.value, BrokerUnavailable)
-    assert "Status_UserCanceled" in str(caught.value)
+    print(f"a cancelled broker sign-in: {error}")
+    assert not isinstance(error, BrokerUnavailable)
+    assert "Status_UserCanceled" in str(error)
     assert (client.client_id, False) not in auth._apps, "the browser was set up after a cancel"

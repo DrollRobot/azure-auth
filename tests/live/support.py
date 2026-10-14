@@ -564,7 +564,9 @@ def token_user(token: str) -> str | None:
     """Read the signed-in user's name out of an access token.
 
     A v2 token names the user in ``preferred_username``; a v1 token, which the Exchange and
-    ARM resources issue, in ``upn`` (or ``unique_name`` for an account without one).
+    ARM resources issue, in ``upn`` (or ``unique_name`` for an account without one). A guest
+    from another identity provider, such as a personal Microsoft account, has no ``upn``, and
+    its ``unique_name`` starts with the provider: ``live.com#someone@outlook.com``.
 
     Args:
         token: An access token from a user flow.
@@ -573,10 +575,12 @@ def token_user(token: str) -> str | None:
         The user principal name, or ``None`` when the token names nobody.
     """
     claims = token_claims(token)
-    for name in ("preferred_username", "upn", "unique_name"):
+    for name in ("preferred_username", "upn"):
         if claims.get(name):
             return str(claims[name])
-    return None
+    name = str(claims.get("unique_name") or "")
+    provider = f"{claims.get('idp')}#"
+    return name.removeprefix(provider) if name.startswith(provider) else name or None
 
 
 def missing_scopes(token: str, required: Iterable[str]) -> set[str]:
