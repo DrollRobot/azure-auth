@@ -7,20 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-15 - Exchange REST reads, tenant object
+
 ### Added
 
-- Exchange Online mailboxes, recipients, and a mailbox's permissions, statistics and mobile
-  devices can be read directly, the way the Exchange module's `Get-EXO*` cmdlets do, with
-  only the properties asked for. Much faster than `Get-Mailbox` on a large tenant.
+- Support for the Exchange Online REST endpoints behind the `Get-EXO*` cmdlets.
 
 ### Changed
 
-- GDAP customers are listed with their display names, and everything else Graph says about
-  them, in place of their tenant IDs alone.
+- **Breaking:** the tenant's ID, cloud and domain name are kept together in one tenant
+  object. To choose a cloud, pass a tenant built for that cloud instead of a separate cloud
+  setting.
+- **Breaking:** GDAP customers are listed with their display names, and everything else Graph
+  says about them, in place of their tenant IDs alone.
 - Continuous access evaluation is on. Graph and Exchange can now cut off a user within
   minutes of the account being disabled, the password changed or a sign-out forced, instead
   of when the token expires; the clients recover on their own when the user is still allowed.
   Their tokens live longer between renewals.
+
+### Fixed
+
+- When Exchange refuses a cmdlet, the error now says the account may lack the role for it,
+  not only that the name may be wrong.
 
 ## [0.3.0] - 2026-10-08 - Key Vault client, tenant held by ID
 
@@ -83,7 +91,8 @@ Also included, but not yet verified: application sign-in with a secret or certif
 Windows broker, clients for Azure Resource Manager, Exchange Online, Security & Compliance
 and Key Vault, blocking versions of every client, and GDAP access to managed tenants.
 
-[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/DrollRobot/azure-auth/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/DrollRobot/azure-auth/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/DrollRobot/azure-auth/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DrollRobot/azure-auth/releases/tag/v0.1.0
