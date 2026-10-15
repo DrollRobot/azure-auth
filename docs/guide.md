@@ -335,8 +335,8 @@ A cmdlet that fails raises `InvokeCommandError`. The message opens with the cmdl
 reason Exchange gave, for example `Get-Mailbox failed: The operation couldn't be performed
 because object 'x' couldn't be found on '...'`; the HTTP `status`, the service `code`
 (`NotFound`, `BadRequest`, `Forbidden`) and the whole response `body` are on the exception.
-A cmdlet Exchange does not know is refused with a 403 and no body at all, and the message
-says so.
+A cmdlet Exchange does not know, or one the account's Exchange roles do not allow, is refused
+with a 403 and no body at all, and the message names both causes.
 
 ### Reading Exchange objects without a cmdlet
 
