@@ -222,6 +222,8 @@ def test_a_blank_403_body_is_explained(auth: AuthContext) -> None:
         exchange.run("Get-NoSuchCmdlet")
 
     assert caught.value.status == 403
+    # Exchange refuses a cmdlet outside the account's roles the same way (2026-10-15).
+    assert "account's Exchange roles" in str(caught.value)
 
 
 def test_an_undecodable_success_is_still_an_error(auth: AuthContext) -> None:

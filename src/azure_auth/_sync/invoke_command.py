@@ -267,9 +267,10 @@ class InvokeCommandClient(ResourceClient):
 
         The base message is the HTTP summary and the service's generic ``error.message``;
         the text a person needs is in ``error.details`` (see :func:`cmdlet_error_details`).
-        An unknown cmdlet is a special case: Exchange answers 403 with a body of NUL bytes
-        declared as gzip (measured 2026-09-25), so there is nothing to quote and the message
-        says what that answer means instead.
+        A refused cmdlet is a special case: Exchange answers 403 with a body of NUL bytes
+        declared as gzip, both for a cmdlet it does not know (measured 2026-09-25) and for one
+        outside the account's Exchange roles (measured 2026-10-15). There is nothing to quote,
+        so the message says what that answer means instead.
 
         Args:
             response: The error response.
@@ -286,7 +287,8 @@ class InvokeCommandClient(ResourceClient):
         elif error.status == httpx.codes.FORBIDDEN and _is_blank(error.body):
             reason = (
                 "Exchange sent no error body, which is how it refuses a cmdlet it does not "
-                "know; check the cmdlet name."
+                "know or the account's Exchange roles do not allow; check the cmdlet name "
+                "and the account's roles."
             )
         else:
             reason = "the service rejected it."
