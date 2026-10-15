@@ -26,9 +26,11 @@ from tests.live.support import (
     KEYVAULT_URL,
     TENANT,
     THUMBPRINT,
+    app_secret,
     ensure_sign_in,
     live_user_auth,
     needs_app,
+    needs_app_secret,
     needs_graph,
     needs_keyvault,
     needs_user,
@@ -125,3 +127,14 @@ async def test_a_store_certificate_sign_in_logs_no_assertion(
             await graph.get_all("/organization")
     assert assertions, "no assertion was built, so the sign-in did not use the certificate"
     assert_no_secrets(records, {"client assertion": assertions, **held_tokens(auth)})
+
+
+@needs_app_secret
+async def test_a_client_secret_sign_in_logs_no_secret() -> None:
+    """The client secret read from the keyring is not logged, nor the token."""
+    secret = app_secret()
+    with all_logs_at_debug() as records:
+        auth = AuthContext(TENANT, client_id=APP_CLIENT_ID, client_secret=secret)
+        async with GraphClient(auth) as graph:
+            await graph.get_all("/organization")
+    assert_no_secrets(records, {"client secret": [secret], **held_tokens(auth)})

@@ -17,6 +17,10 @@ Environment variables:
 * ``AZURE_AUTH_TEST_MACHINE_CERT_THUMBPRINT``: a second certificate uploaded to the same
   application, in ``LocalMachine\\My``. The account running the tests must be able to read
   its private key.
+* ``AZURE_AUTH_TEST_APP_SECRET_SERVICE`` and ``AZURE_AUTH_TEST_APP_SECRET_USERNAME``: the
+  keyring service and username a client secret of the same application is stored under.
+  Naming both runs the client-secret tests. On Windows the entry must be a generic
+  credential: Windows never hands a domain password back to a program.
 * ``AZURE_AUTH_TEST_NONADMIN_USERNAME``: a second user in the same tenant who may *not*
   consent. Naming one runs the consent test; leaving it blank skips it.
 * ``AZURE_AUTH_TEST_ARM=1``: the user, and the test application when one is configured, can
@@ -40,8 +44,8 @@ Environment variables:
 * ``AZURE_AUTH_TEST_PROMPT_ALARM_SECONDS``: how long a sign-in may take before the alarm
   sounds (default 5). A browser that is still signed in answers faster than this.
 
-No secret is read from the environment; app flows use the certificate store, and the Key
-Vault tests are given their secret's name, not its value.
+No secret is read from the environment; app flows use the certificate store or the keyring,
+and the Key Vault tests are given their secret's name, not its value.
 """
 
 from __future__ import annotations
@@ -62,6 +66,7 @@ from typing import Any, Literal, TypeVar
 from urllib.parse import urlsplit
 
 import httpx
+import keyring
 import pytest
 
 from azure_auth import (
@@ -139,6 +144,8 @@ NONADMIN = os.environ.get("AZURE_AUTH_TEST_NONADMIN_USERNAME", "")
 APP_CLIENT_ID = os.environ.get("AZURE_AUTH_TEST_APP_CLIENT_ID", "")
 THUMBPRINT = os.environ.get("AZURE_AUTH_TEST_CERT_THUMBPRINT", "")
 MACHINE_THUMBPRINT = os.environ.get("AZURE_AUTH_TEST_MACHINE_CERT_THUMBPRINT", "")
+SECRET_SERVICE = os.environ.get("AZURE_AUTH_TEST_APP_SECRET_SERVICE", "")
+SECRET_USERNAME = os.environ.get("AZURE_AUTH_TEST_APP_SECRET_USERNAME", "")
 KEYVAULT_URL = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_URL", "")
 KEYVAULT_SECRET_NAME = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME", "")
 GDAP_TENANT = os.environ.get("AZURE_AUTH_TEST_GDAP_TENANT_ID", "")
@@ -158,6 +165,11 @@ needs_app = pytest.mark.skipif(
 needs_machine_certificate = pytest.mark.skipif(
     not (TENANT and APP_CLIENT_ID and MACHINE_THUMBPRINT),
     reason="set AZURE_AUTH_TEST_TENANT_ID, _APP_CLIENT_ID and _MACHINE_CERT_THUMBPRINT",
+)
+needs_app_secret = pytest.mark.skipif(
+    not (TENANT and APP_CLIENT_ID and SECRET_SERVICE and SECRET_USERNAME),
+    reason="set AZURE_AUTH_TEST_TENANT_ID, _APP_CLIENT_ID, _APP_SECRET_SERVICE and "
+    "_APP_SECRET_USERNAME",
 )
 needs_keyvault = pytest.mark.skipif(
     not (KEYVAULT_URL and KEYVAULT_SECRET_NAME),
@@ -278,6 +290,36 @@ def live_app_auth(**kwargs: Any) -> AuthContext:
         The context.
     """
     return AuthContext(TENANT, client_id=APP_CLIENT_ID, certificate_thumbprint=THUMBPRINT, **kwargs)
+
+
+def app_secret() -> str:
+    """Read the test application's client secret from the keyring.
+
+    It is read on every call and only ever held in memory. A missing entry fails the test:
+    the environment says there is one.
+
+    Returns:
+        The secret.
+    """
+    secret = keyring.get_password(SECRET_SERVICE, SECRET_USERNAME)
+    if not secret:
+        pytest.fail(
+            f"the keyring holds no password for service {SECRET_SERVICE!r} and username "
+            f"{SECRET_USERNAME!r}; on Windows it must be a generic credential"
+        )
+    return secret
+
+
+def live_secret_auth(**kwargs: Any) -> AuthContext:
+    """Return a context that signs in as the test application with its client secret.
+
+    Args:
+        **kwargs: Further ``AuthContext`` arguments, such as the cache.
+
+    Returns:
+        The context.
+    """
+    return AuthContext(TENANT, client_id=APP_CLIENT_ID, client_secret=app_secret(), **kwargs)
 
 
 def cached_user_auth(

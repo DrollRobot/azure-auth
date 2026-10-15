@@ -1,4 +1,4 @@
-"""App-only sign-in with a certificate, against the real token endpoint."""
+"""App-only sign-in with a certificate or a client secret, against the real token endpoint."""
 
 from __future__ import annotations
 
@@ -16,7 +16,9 @@ from tests.live.support import (
     MACHINE_THUMBPRINT,
     TENANT,
     live_app_auth,
+    live_secret_auth,
     needs_app,
+    needs_app_secret,
     needs_exchange,
     needs_ipps,
     needs_machine_certificate,
@@ -83,6 +85,38 @@ async def test_app_flow_with_a_certificate_file(form: str) -> None:
     async with GraphClient(auth) as graph:
         organization = await graph.get_all("/organization")
     assert organization
+
+
+@needs_app_secret
+async def test_app_flow_with_a_keyring_secret() -> None:
+    """A client secret read from the keyring signs in as the application.
+
+    The token is the witness that no user is involved: it carries the application's
+    ``roles``, not a user's ``upn`` or ``scp``.
+    """
+    auth = live_secret_auth()
+    async with GraphClient(auth) as graph:
+        token = await auth.aio.acquire_token(graph.scopes)
+        organization = await graph.get_all("/organization")
+
+    claims = token_claims(token.token)
+    assert "Organization.Read.All" in claims.get("roles", [])
+    assert "upn" not in claims
+    assert "scp" not in claims
+    assert organization
+
+
+@needs_app
+def test_a_secret_the_app_does_not_hold_is_refused() -> None:
+    """A client secret the application does not hold is refused by Entra (AADSTS7000215).
+
+    The secret is made at run time and exists nowhere else. Entra naming the wrong secret
+    shows the secret reaches the token endpoint as the application's credential.
+    """
+    auth = AuthContext(TENANT, client_id=APP_CLIENT_ID, client_secret=secrets.token_urlsafe())
+
+    with pytest.raises(AuthError, match="AADSTS7000215"):
+        auth.acquire_token([f"{auth.tenant.cloud.graph}/.default"])
 
 
 @needs_app
