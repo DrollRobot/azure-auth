@@ -1,0 +1,45 @@
+---
+base: develop
+title: feat(exchange): read Exchange objects through the Get-EXO* REST endpoints
+---
+## Summary
+
+`ExchangeClient` can now make the same reads as the Exchange module's `Get-EXO*` cmdlets,
+without going through `InvokeCommand`. The point is speed: `Get-Mailbox` returns every
+property of every mailbox (338 for one mailbox), while these reads return only the property
+set asked for (12 for the audit property set).
+
+There is one method per cmdlet: `mailboxes`, `cas_mailboxes`, `recipients`,
+`mailbox_permissions`, `mailbox_folder_permissions`, `mailbox_statistics`,
+`mailbox_folder_statistics`, `mobile_device_statistics` and `recipient_permissions`. `get()`
+and `iter_get_pages()` read any other path. The request shapes were read from
+ExchangeOnlineManagement 3.10.1, since Microsoft documents none of this.
+
+The reads share the plumbing `InvokeCommand` already had: same token, same routing header,
+same regional redirect. What differs is that the next page is a GET rather than a re-POST,
+and a failed read raises `InvokeCommandError` with the OData error message.
+
+The GDAP tests' read-only guard now also lets through a GET of the whole `Mailbox`
+collection, so a live test can read a customer's mailboxes through GDAP. Separately, the
+GDAP customer tenant tests now run only when `AZURE_AUTH_TEST_GDAP=1`; before, setting the
+customer tenant id alone ran them.
+
+## Type of change
+
+New feature, no breaking changes.
+
+## How it was tested
+
+- Unit tests cover the URL and query each method sends, identity encoding, paging, headers,
+  error messages and the regional redirect, for the async and the blocking clients.
+- New live tests in `tests/live/test_exchange_rest.py` ran against a sandbox tenant: all
+  passed. They read every collection whole and by identity, page at two results a page,
+  probe the error shapes, and read as both a signed-in user and an app.
+- `ruff`, `mypy` on every platform, and the offline suite pass.
+
+Not yet run live:
+
+- `test_gdap_reads_a_customers_mailboxes_without_prompting` needs a partner tenant sign-in
+  with `AZURE_AUTH_TEST_GDAP=1` and a customer tenant id. It settles which routing header a
+  customer tenant's GET endpoint accepts under GDAP.
+- The mobile device lookup by device identity: the sandbox user has no devices.
