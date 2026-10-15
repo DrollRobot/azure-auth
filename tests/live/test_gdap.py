@@ -25,7 +25,6 @@ from azure_auth.sync import ExchangeClient as BlockingExchangeClient
 from tests.live.support import (
     GDAP_SCOPES,
     GDAP_TENANT,
-    USERNAME,
     ReadOnlyCmdlets,
     _flag,
     ensure_sign_in,
@@ -35,7 +34,6 @@ from tests.live.support import (
     needs_graph,
     needs_user,
     token_claims,
-    token_user,
 )
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
@@ -82,9 +80,10 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     """The home-tenant Exchange sign-in reads a customer's Exchange through GDAP.
 
     Nobody signs in to the customer tenant. The partner user's home-tenant refresh token is
-    spent there, and what comes back is a token from the customer tenant (``tid``) for the
-    same user. Exchange then decides, from the user's GDAP roles, whether to answer. The
-    token's ``wids`` claim is printed, to compare with the roles in the GDAP relationship.
+    spent there, and what comes back is a token from the customer tenant (``tid``) for a user
+    the home tenant signed in (``idp``). Exchange then decides, from the user's GDAP roles,
+    whether to answer. The token's ``wids`` claim is printed, to compare with the roles in the
+    GDAP relationship.
 
     The partner user has no mailbox in the customer tenant, so the client routes the request
     through the tenant's system mailbox; the routing header shows it did.
@@ -94,6 +93,7 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     """
     async with ExchangeClient(user_auth) as home:
         ensure_sign_in(home)
+        home_token = await user_auth.aio.acquire_token(home.scopes, client_id=home.client_id)
     sibling = user_auth.for_tenant(GDAP_TENANT)
     assert sibling is not user_auth, "AZURE_AUTH_TEST_GDAP_TENANT_ID names the home tenant"
 
@@ -109,7 +109,12 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     print(f"GDAP Exchange: roles in the customer tenant's token (wids): {claims.get('wids')}")
     assert claims["tid"] == sibling.tenant.id
     assert claims["aud"] == user_auth.tenant.cloud.exchange
-    assert (token_user(token.token) or "").lower() == USERNAME.lower()
+    # A customer-tenant token carries no upn and no oid, and its unique_name is the display
+    # name. Measured 2026-10-15: its idp, the issuer that signed the user in, is the home
+    # tenant, and its email is user_<home object id, without hyphens>@<home domain>.
+    assert claims["idp"].rstrip("/").rsplit("/", 1)[-1] == user_auth.tenant.id
+    home_id = token_claims(home_token.token)["oid"].replace("-", "")
+    assert claims["email"].lower().startswith(f"user_{home_id}@")
 
     request = guard.requests[0]
     assert sibling.tenant.id in request.url.path
