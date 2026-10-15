@@ -5,9 +5,11 @@ endpoint, ``/adminapi/beta/<tenant id>/InvokeCommand``. The request shape used h
 read from the ExchangeOnlineManagement module (3.10.1). Because the endpoint is
 undocumented, everything that knows about it lives in this module.
 
-``beta`` is the only version that answers ``InvokeCommand``. The module also has an
-``/adminapi/v1.0`` base URI, but only for its own REST-backed ``Get-EXO*`` cmdlets;
-``InvokeCommand`` under ``v1.0`` is answered 405 (measured 2026-09-25).
+``beta`` is the only version that answers ``InvokeCommand``; under ``v1.0`` it is answered
+405 (measured 2026-09-25). The module's ``/adminapi/v1.0`` base URI serves only its own
+setup calls at connect time: the banner, and the download of the generated cmdlet module.
+Its REST-backed ``Get-EXO*`` cmdlets are plain OData GETs under ``beta`` too, beside
+``InvokeCommand``; :mod:`azure_auth.clients.exchange` has them.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import base64
 import binascii
 import json as json_module
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, ClassVar
 
 import httpx
@@ -100,7 +102,7 @@ class InvokeCommandClient(ResourceClient):
     Subclasses implement :meth:`service` to name their resource and host in a cloud.
 
     Attributes:
-        last_warnings: Warnings the service returned for the most recent cmdlet.
+        last_warnings: Warnings the service returned for the most recent cmdlet or read.
     """
 
     DEFAULT_CLIENT_ID: ClassVar[str] = EXCHANGE_POWERSHELL_CLIENT_ID
@@ -214,8 +216,17 @@ class InvokeCommandClient(ResourceClient):
             return f"APP:{SYSTEM_MAILBOX}@{tenant}"
         return f"UPN:{self._auth.username}"
 
-    async def _post(self, url: str, payload: dict[str, Any], cmdlet: str) -> httpx.Response:
-        """Send one ``InvokeCommand`` request, following a regional redirect by hand.
+    async def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        cmdlet: str | None = None,
+        paged: bool = True,
+    ) -> httpx.Response:
+        """Send one request to the admin API, following a regional redirect by hand.
 
         ``httpx`` drops the ``Authorization`` header when a redirect changes the host, and
         Security & Compliance answers the first call with a redirect to a regional host. So
@@ -223,9 +234,13 @@ class InvokeCommandClient(ResourceClient):
         request is sent again with its token.
 
         Args:
+            method: HTTP method: ``POST`` for ``InvokeCommand``, ``GET`` for a REST read.
             url: Request URL or path.
-            payload: The request body.
-            cmdlet: Name of the cmdlet, for the diagnostic header.
+            json: The request body, for ``InvokeCommand``.
+            headers: Extra request headers, on top of the standard set.
+            cmdlet: Name of the cmdlet, for the diagnostic header; none for a REST read.
+            paged: Whether to ask for pages of ``page_size`` results. The PowerShell module
+                asks on ``InvokeCommand`` and its bulk reads, not on a read of one object.
 
         Returns:
             The successful response.
@@ -234,17 +249,20 @@ class InvokeCommandClient(ResourceClient):
         # X-CmdletName and X-ResponseFormat are not in the PowerShell module. Measured
         # 2026-09-25: the service answers the same with either or both absent, so they are
         # kept only as diagnostics -- _error reads the cmdlet name back out of the request.
-        headers = {
+        sent = {
             "Accept": "application/json",
             "Content-Type": "application/json;odata.metadata=minimal",
-            "Prefer": f"odata.maxpagesize={self._page_size}",
             "X-AnchorMailbox": await self._anchor(tenant),
-            "X-CmdletName": cmdlet,
             "X-ResponseFormat": "json",
             "connection-id": self._connection_id,
             "client-request-id": str(uuid.uuid4()),
+            **(headers or {}),
         }
-        response = await self.request("POST", url, json=payload, headers=headers)
+        if paged:
+            sent["Prefer"] = f"odata.maxpagesize={self._page_size}"
+        if cmdlet:
+            sent["X-CmdletName"] = cmdlet
+        response = await self.request(method, url, json=json, headers=sent)
         location = response.headers.get("Location")
         if response.status_code == httpx.codes.FOUND and location:
             region = httpx.URL(location).host.split(".", 1)[0]
@@ -252,7 +270,7 @@ class InvokeCommandClient(ResourceClient):
                 self._base_url = httpx.URL(f"https://{region}.{self._domain}/")
                 target = httpx.URL(url) if "://" in url else None
                 retry_url = str(target.copy_with(host=self._base_url.host)) if target else url
-                response = await self.request("POST", retry_url, json=payload, headers=headers)
+                response = await self.request(method, retry_url, json=json, headers=sent)
         if response.is_redirect:
             # A redirect that could not be followed must not look like an empty result.
             raise self._error(response)
@@ -261,14 +279,21 @@ class InvokeCommandClient(ResourceClient):
     def _error(
         self, response: httpx.Response, *, undecodable: Exception | None = None
     ) -> ResourceError:
-        """Build the exception for a failed cmdlet, with the cmdlet's own reason up front.
+        """Build the exception for a failed request, with the service's own reason up front.
 
-        The base message is the HTTP summary and the service's generic ``error.message``;
-        the text a person needs is in ``error.details`` (see :func:`cmdlet_error_details`).
-        A refused cmdlet is a special case: Exchange answers 403 with a body of NUL bytes
-        declared as gzip, both for a cmdlet it does not know (measured 2026-09-25) and for one
-        outside the account's Exchange roles (measured 2026-10-15). There is nothing to quote,
-        so the message says what that answer means instead.
+        For a cmdlet, the base message is the HTTP summary and the service's generic
+        ``error.message``; the text a person needs is in ``error.details`` (see
+        :func:`cmdlet_error_details`). A refused cmdlet is a special case: Exchange answers 403
+        with a body of NUL bytes declared as gzip, both for a cmdlet it does not know (measured
+        2026-09-25) and for one outside the account's Exchange roles (measured 2026-10-15).
+        There is nothing to quote, so the message says what that answer means instead.
+
+        A REST read, which sends no ``X-CmdletName``, fails with a plain OData error whose
+        ``error.message`` the base message already quotes after the method, URL and status.
+        That message stands, unless the body carries ``details`` too. Measured 2026-10-15: a
+        bad property, a bad property set and an unknown path are 400 ``BadRequest`` with
+        ``error.message`` alone, and a missing object is a 404 ``NotFound`` with the cmdlet
+        shape, generic message and the reason in ``details``.
 
         Args:
             response: The error response.
@@ -278,8 +303,11 @@ class InvokeCommandClient(ResourceClient):
             An :class:`InvokeCommandError`.
         """
         error = super()._error(response, undecodable=undecodable)
-        cmdlet = response.request.headers.get("X-CmdletName", "The cmdlet")
+        cmdlet = response.request.headers.get("X-CmdletName")
         reasons = cmdlet_error_details(error.body)
+        if cmdlet is None and not reasons:
+            return error
+        subject = cmdlet or f"{response.request.method} {response.request.url.path}"
         if reasons:
             reason = " ".join(reasons)
         elif error.status == httpx.codes.FORBIDDEN and _is_blank(error.body):
@@ -291,12 +319,30 @@ class InvokeCommandClient(ResourceClient):
         else:
             reason = "the service rejected it."
         return self.ERROR_CLASS(
-            f"{cmdlet} failed: {reason} ({error})",
+            f"{subject} failed: {reason} ({error})",
             status=error.status,
             code=error.code,
             request_id=error.request_id,
             body=error.body,
         )
+
+    def _note_warnings(self, response: httpx.Response, page: dict[str, Any]) -> None:
+        """Collect the warnings a response carries into :attr:`last_warnings`.
+
+        The PowerShell module reads warnings from the ``X-Warnings`` header. Every live
+        ``InvokeCommand`` response also carries them in the body, as ``@adminapi.warnings``
+        (measured 2026-09-25, empty), so both are collected.
+
+        Args:
+            response: The response.
+            page: Its decoded body.
+        """
+        header = response.headers.get("X-Warnings")
+        if header:
+            self.last_warnings.append(header)
+        in_body = page.get("@adminapi.warnings")
+        if isinstance(in_body, list):
+            self.last_warnings.extend(str(warning) for warning in in_body if warning)
 
     async def iter_pages(self, cmdlet: str, **parameters: Any) -> AsyncIterator[dict[str, Any]]:
         """Run a cmdlet and yield each page of its output.
@@ -313,17 +359,9 @@ class InvokeCommandClient(ResourceClient):
         url: str | None = f"/adminapi/beta/{tenant}/InvokeCommand"
         self.last_warnings = []
         while url:
-            response = await self._post(url, payload, cmdlet)
+            response = await self._send("POST", url, json=payload, cmdlet=cmdlet)
             page = self._json(response) or {}
-            # The PowerShell module reads warnings from the X-Warnings header. Every live
-            # response also carries them in the body, as "@adminapi.warnings" (measured
-            # 2026-09-25, empty), so both are collected.
-            header = response.headers.get("X-Warnings")
-            if header:
-                self.last_warnings.append(header)
-            in_body = page.get("@adminapi.warnings")
-            if isinstance(in_body, list):
-                self.last_warnings.extend(str(warning) for warning in in_body if warning)
+            self._note_warnings(response, page)
             yield page
             url = page.get("@odata.nextLink")
 

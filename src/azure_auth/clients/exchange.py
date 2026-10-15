@@ -1,29 +1,127 @@
-"""Client for Exchange Online cmdlets."""
+"""Client for Exchange Online: cmdlets through ``InvokeCommand``, and the REST reads.
+
+The admin API that answers ``InvokeCommand`` also answers plain OData GETs for what the
+``Get-EXO*`` cmdlets of the ExchangeOnlineManagement module read: mailboxes, CAS mailboxes,
+recipients, and one mailbox's permissions, folder permissions, statistics, folder statistics
+and mobile devices. The paths and query options were read from the module (3.10.1); nothing
+documents them. A read returns only the property set asked for, which is why the module's
+``Get-EXO*`` cmdlets are so much faster than ``Get-Mailbox`` and the like on a large tenant.
+
+Every read goes to ``/adminapi/beta/<tenant GUID>/<path>``, with the same token and routing
+header as ``InvokeCommand``. One object is addressed by a key path, ``Mailbox('<key>')``,
+whose key is the identity in UTF-8 base64, with ``isEncoded=true`` as a query option; the
+named methods build those. Pages come back by a GET on ``@odata.nextLink``, where
+``InvokeCommand`` POSTs its body again.
+"""
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+import base64
+from collections.abc import AsyncIterator, Mapping, Sequence
+from typing import Any
+from urllib.parse import quote, urlencode, urlsplit
 
 from azure_auth.clients.invoke_command import InvokeCommandClient
 from azure_auth.clouds import Cloud
 
+# Characters the PowerShell module leaves as they are in a query string: OData's ``$``, the
+# commas of a list, the quotes and brackets of a function call, and the slashes and colons
+# an organizational unit or a filter can hold.
+_QUERY_SAFE = "$,'()/:"
+
+
+def encode_identity(identity: str) -> str:
+    """Encode an identity for a key path, as the PowerShell module does.
+
+    The service takes an identity -- a UPN, an SMTP address, a GUID, an external directory
+    object id, a name -- only as UTF-8 base64 inside the key, ``Mailbox('<encoded>')``, with
+    ``isEncoded=true`` as a query option. An empty identity stays empty.
+
+    Args:
+        identity: The identity, as a person would type it.
+
+    Returns:
+        The base64 text.
+    """
+    return base64.b64encode(identity.encode("utf-8")).decode("ascii")
+
+
+def _key(entity: str, identity: str) -> str:
+    """Build the key path of one object, ``Mailbox('<encoded identity>')``.
+
+    Args:
+        entity: The entity set, such as ``Mailbox``.
+        identity: The object's identity.
+
+    Returns:
+        The path segment.
+    """
+    return f"{entity}('{encode_identity(identity)}')"
+
+
+def _query(options: Mapping[str, Any]) -> str:
+    """Build the query string the way the module sends it.
+
+    Args:
+        options: Query options by their wire names. ``None`` is left out, a list or tuple is
+            joined with commas, and anything else is sent as text: ``True`` as ``True``,
+            which is what the module sends for a switch.
+
+    Returns:
+        The query string, without ``?``; empty when there is nothing to send.
+    """
+    sent: dict[str, str] = {}
+    for name, value in options.items():
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            value = ",".join(str(item) for item in value)
+        sent[name] = str(value)
+    return urlencode(sent, safe=_QUERY_SAFE, quote_via=quote)
+
+
+def _objects(page: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return the objects in a page: its ``value``, or the page itself when it is one object.
+
+    A collection answers with ``value``; a key path answers with the object itself, not a
+    one-element ``value`` (measured 2026-10-15 for ``Mailbox``, ``CasMailbox`` and
+    ``Recipient``).
+
+    Args:
+        page: A decoded response.
+
+    Returns:
+        The objects; none for a page that carries only OData annotations.
+    """
+    values = page.get("value")
+    if isinstance(values, list):
+        return values
+    return [dict(page)] if any(not name.startswith("@odata.") for name in page) else []
+
 
 class ExchangeClient(InvokeCommandClient):
-    """Run Exchange Online cmdlets without PowerShell.
+    """Run Exchange Online cmdlets, and read Exchange objects directly, without PowerShell.
 
     User flows default to the Exchange Online PowerShell client id, which is pre-authorised
     for Exchange. App flows need the ``Exchange.ManageAsApp`` application permission and an
     Exchange administrator role assigned to the service principal.
 
+    :meth:`run` runs any cmdlet through ``InvokeCommand``. The read methods, from
+    :meth:`mailboxes` to :meth:`recipient_permissions`, are the REST reads behind the
+    module's ``Get-EXO*`` cmdlets, one method per cmdlet; :meth:`get` is the read they are
+    all built on.
+
     Example:
         >>> exchange = ExchangeClient(auth)  # doctest: +SKIP
         >>> mailboxes = await exchange.run("Get-Mailbox")  # doctest: +SKIP
+        >>> audited = await exchange.mailboxes(PropertySet="Audit")  # doctest: +SKIP
 
     Note:
         ``ResultSize`` is not a cmdlet parameter on this endpoint. The PowerShell module
         applies it client side while consuming pages, so ``InvokeCommand`` ignores it and
         ``run`` returns every result. Use :meth:`~InvokeCommandClient.iter_pages` and stop
-        when you have enough.
+        when you have enough. The reads are the same: :meth:`get` returns everything, and
+        :meth:`iter_get_pages` stops when you do.
     """
 
     @classmethod
@@ -37,3 +135,314 @@ class ExchangeClient(InvokeCommandClient):
             The resource, and its host, which is where requests go.
         """
         return cloud.exchange, urlsplit(cloud.exchange).hostname or ""
+
+    # ------------------------------------------------------------------ REST reads
+
+    async def iter_get_pages(
+        self,
+        path: str,
+        *,
+        select: str | Sequence[str] | None = None,
+        filter: str | None = None,
+        expand: str | Sequence[str] | None = None,
+        paged: bool = True,
+        headers: Mapping[str, str] | None = None,
+        **options: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Read a path of the admin API and yield each page of the answer.
+
+        Args:
+            path: The path under the service root: a collection such as ``Mailbox``, a key
+                path such as ``Mailbox('<encoded>')``, or anything the named methods build.
+            select: The properties to return (``$select``): a list, or comma-separated text.
+            filter: An OData filter (``$filter``), such as ``IsOwner eq true``.
+            expand: Navigation properties to include (``$expand``).
+            paged: Whether to ask for pages of ``page_size`` objects and walk them. The
+                module asks on its bulk reads only; a read under one mailbox answers whole.
+            headers: Extra request headers.
+            **options: Further query options, by the names the cmdlets send:
+                ``PropertySet``, ``RecipientTypeDetails``, ``OrganizationalUnit``, ``Anr``,
+                ``MailboxPlan`` and so on. A list is sent comma-separated; ``True`` is a
+                switch.
+
+        Yields:
+            Each response page. A collection's objects are under ``value``; a key path
+            answers with the one object itself.
+        """
+        query = _query({"$select": select, "$filter": filter, "$expand": expand, **options})
+        tenant = await self._tenant()
+        url: str | None = f"/adminapi/beta/{tenant}/{path.lstrip('/')}"
+        if query:
+            url = f"{url}?{query}"
+        self.last_warnings = []
+        while url:
+            response = await self._send("GET", url, headers=headers, paged=paged)
+            page = self._json(response) or {}
+            self._note_warnings(response, page)
+            yield page
+            url = page.get("@odata.nextLink")
+
+    async def get(
+        self,
+        path: str,
+        *,
+        select: str | Sequence[str] | None = None,
+        filter: str | None = None,
+        expand: str | Sequence[str] | None = None,
+        paged: bool = True,
+        headers: Mapping[str, str] | None = None,
+        **options: Any,
+    ) -> list[dict[str, Any]]:
+        """Read a path of the admin API and return every object it answers with.
+
+        Args:
+            path: The path under the service root; see :meth:`iter_get_pages`.
+            select: The properties to return (``$select``).
+            filter: An OData filter (``$filter``).
+            expand: Navigation properties to include (``$expand``).
+            paged: Whether to ask for pages and walk them.
+            headers: Extra request headers.
+            **options: Further query options, by the names the cmdlets send.
+
+        Returns:
+            The objects, as dictionaries: the ``value`` of every page, or the one object a
+            key path answers with. There is no server-side limit; to stop early, use
+            :meth:`iter_get_pages`.
+
+        Raises:
+            InvokeCommandError: If the service rejects the read.
+        """
+        results: list[dict[str, Any]] = []
+        async for page in self.iter_get_pages(
+            path,
+            select=select,
+            filter=filter,
+            expand=expand,
+            paged=paged,
+            headers=headers,
+            **options,
+        ):
+            results.extend(_objects(page))
+        return results
+
+    async def _entity(
+        self, entity: str, identity: str | None, options: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Read a collection, or one of its objects by identity.
+
+        Args:
+            entity: The collection: ``Mailbox``, ``CasMailbox`` or ``Recipient``.
+            identity: The one object, or ``None`` for the whole collection.
+            options: Query options, as for :meth:`get`.
+
+        Returns:
+            The objects.
+        """
+        if identity is None:
+            return await self.get(entity, **options)
+        return await self.get(_key(entity, identity), isEncoded="true", **options)
+
+    async def mailboxes(self, identity: str | None = None, **options: Any) -> list[dict[str, Any]]:
+        """Read mailboxes, as ``Get-EXOMailbox`` does.
+
+        Args:
+            identity: One mailbox, by UPN, SMTP address, GUID, external directory object id
+                or name; every mailbox when omitted.
+            **options: Query options, as for :meth:`get`: ``PropertySet`` (``Minimum``,
+                ``Audit``, ``Quota``, ``All``, ...), ``select``, ``filter``,
+                ``RecipientTypeDetails``, ``OrganizationalUnit``, ``Anr``, ``MailboxPlan``,
+                and the switches ``SoftDeletedMailbox``, ``Archive``, ``InactiveMailboxOnly``
+                and ``IncludeInactiveMailbox``. A property set carries its own properties
+                and the identity ones (``Identity``, ``UserPrincipalName``,
+                ``PrimarySmtpAddress``, ``ExternalDirectoryObjectId``); anything else, such
+                as ``RecipientTypeDetails``, needs ``select`` (measured 2026-10-15).
+
+        Returns:
+            The mailboxes.
+        """
+        return await self._entity("Mailbox", identity, options)
+
+    async def cas_mailboxes(
+        self, identity: str | None = None, **options: Any
+    ) -> list[dict[str, Any]]:
+        """Read client access settings of mailboxes, as ``Get-EXOCasMailbox`` does.
+
+        Args:
+            identity: One mailbox, by any identity; every mailbox when omitted.
+            **options: Query options, as for :meth:`get`: ``PropertySet``, ``select``,
+                ``filter``, ``OrganizationalUnit`` and ``Anr``.
+
+        Returns:
+            The CAS mailboxes.
+        """
+        return await self._entity("CasMailbox", identity, options)
+
+    async def recipients(self, identity: str | None = None, **options: Any) -> list[dict[str, Any]]:
+        """Read recipients of every kind, as ``Get-EXORecipient`` does.
+
+        Args:
+            identity: One recipient, by any identity; every recipient when omitted.
+            **options: Query options, as for :meth:`get`: ``PropertySet``, ``select``,
+                ``filter``, ``RecipientType``, ``RecipientTypeDetails``,
+                ``OrganizationalUnit``, ``Anr`` and the switch
+                ``IncludeSoftDeletedRecipients``.
+
+        Returns:
+            The recipients.
+        """
+        return await self._entity("Recipient", identity, options)
+
+    async def mailbox_permissions(
+        self, mailbox: str, *, user: str | None = None, owner: bool = False, **options: Any
+    ) -> list[dict[str, Any]]:
+        r"""Read who has what access to a mailbox, as ``Get-EXOMailboxPermission`` does.
+
+        Args:
+            mailbox: The mailbox, by any identity.
+            user: One trustee's permissions only. A user with no entry on the mailbox is a
+                404 ``No permissions were found for the user``, not an empty list (measured
+                2026-10-15); the owner usually holds the mailbox as ``NT AUTHORITY\SELF``.
+            owner: Only the owner's entry (the cmdlet's ``-Owner``).
+            **options: Query options, as for :meth:`get`; ``SoftDeletedMailbox=True`` for a
+                soft-deleted mailbox.
+
+        Returns:
+            One entry per trustee: ``User``, ``IsOwner`` and a ``PermissionList`` whose
+            items carry ``AccessRights``, ``IsInherited``, ``Deny`` and ``InheritanceType``.
+            The cmdlet flattens that list into one row per permission; this does not.
+
+        Raises:
+            InvokeCommandError: If the service rejects the read, including a ``user`` with
+                no entry.
+        """
+        path = f"{_key('Mailbox', mailbox)}/MailboxPermission"
+        if user is not None:
+            path += f"('{encode_identity(user)}')"
+        if owner:
+            options["filter"] = "IsOwner eq true"
+        return await self.get(path, isEncoded="true", **options)
+
+    async def mailbox_folder_permissions(
+        self, mailbox: str, folder: str, *, user: str | None = None, **options: Any
+    ) -> list[dict[str, Any]]:
+        r"""Read who has what access to one folder, as ``Get-EXOMailboxFolderPermission`` does.
+
+        Args:
+            mailbox: The mailbox, by any identity.
+            folder: The folder, by the path PowerShell writes after the mailbox and the
+                colon, such as ``\Calendar``, or by folder id.
+            user: One trustee's permissions only.
+            **options: Query options, as for :meth:`get`; ``GroupMailbox=True`` for a
+                Microsoft 365 group's mailbox.
+
+        Returns:
+            The permission entries.
+        """
+        path = f"{_key('Mailbox', mailbox)}/{_key('MailboxFolder', folder)}/MailboxFolderPermission"
+        if user is not None:
+            path += f"('{encode_identity(user)}')"
+        return await self.get(
+            path, IsUsingMailboxFolderId=True, isEncoded="true", paged=False, **options
+        )
+
+    async def mailbox_statistics(self, mailbox: str, **options: Any) -> list[dict[str, Any]]:
+        """Read the size and item counts of a mailbox, as ``Get-EXOMailboxStatistics`` does.
+
+        Args:
+            mailbox: The mailbox, by any identity.
+            **options: Query options, as for :meth:`get`: ``PropertySet``, ``select``, and
+                the switches ``Archive`` and ``IncludeSoftDeletedRecipients``.
+
+        Returns:
+            The statistics, as one object.
+        """
+        path = f"{_key('Mailbox', mailbox)}/Exchange.GetMailboxStatistics()"
+        return await self.get(path, isEncoded="true", **options)
+
+    async def mailbox_folder_statistics(
+        self, mailbox: str, *, folder_scope: str = "All", **options: Any
+    ) -> list[dict[str, Any]]:
+        """Read the folders of a mailbox, as ``Get-EXOMailboxFolderStatistics`` does.
+
+        Args:
+            mailbox: The mailbox, by any identity.
+            folder_scope: Which folders: ``All``, or one of ``Inbox``, ``Calendar``,
+                ``Contacts``, ``SentItems``, ``DeletedItems``, ``JunkEmail``, ``Drafts``,
+                ``Outbox``, ``Tasks``, ``Notes``, ``Journal``, ``RssSubscriptions``,
+                ``SyncIssues``, ``ConversationHistory`` and ``ManagedCustomFolder``.
+            **options: Query options, as for :meth:`get`: the switches ``Archive``,
+                ``IncludeSoftDeletedRecipients`` and ``IncludeOldestAndNewestItems``.
+
+        Returns:
+            One object per folder.
+        """
+        path = (
+            f"{_key('Mailbox', mailbox)}/MailboxFolder/Exchange.GetMailboxFolderStatistics"
+            f"(folderscope=Exchange.ElcFolderType'{folder_scope}')"
+        )
+        return await self.get(path, isEncoded="true", paged=False, **options)
+
+    async def mobile_device_statistics(
+        self, mailbox: str | None = None, *, device: str | None = None, **options: Any
+    ) -> list[dict[str, Any]]:
+        """Read the mobile devices of a mailbox, as ``Get-EXOMobileDeviceStatistics`` does.
+
+        Args:
+            mailbox: The mailbox whose devices to read.
+            device: One device, by its identity, instead of a mailbox.
+            **options: Query options, as for :meth:`get`: the switches ``ActiveSync``,
+                ``OWAforDevices``, ``RestApi`` and ``UniversalOutlook``.
+
+        Returns:
+            One object per device.
+
+        Raises:
+            ValueError: Unless exactly one of ``mailbox`` and ``device`` is given.
+        """
+        if (mailbox is None) == (device is None):
+            raise ValueError("Give a mailbox or a device, not both and not neither")
+        if mailbox is not None:
+            path = f"{_key('Mailbox', mailbox)}/MobileDevice/Exchange.GetMobileDeviceStatistics()"
+            return await self.get(path, isEncoded="true", paged=False, **options)
+        # The device's identity travels in a header, which the path names (the module's
+        # GetExoMobileDeviceStatistics); the path itself has no key.
+        path = "GetMobileDeviceStatisticsByIdentity(Identity='XParameter-Identity')"
+        headers = {"XParameter-Identity": encode_identity(device or "")}
+        return await self.get(path, headers=headers, paged=False, **options)
+
+    async def recipient_permissions(
+        self,
+        identity: str | None = None,
+        *,
+        trustee: str | None = None,
+        access_rights: str | None = None,
+        **options: Any,
+    ) -> list[dict[str, Any]]:
+        """Read Send As permissions on recipients, as ``Get-EXORecipientPermission`` does.
+
+        Args:
+            identity: One recipient, by any identity; every recipient when omitted.
+            trustee: Only the permissions this user holds. Needs ``identity``.
+            access_rights: Only this right. ``SendAs`` is the one the service knows.
+            **options: Query options, as for :meth:`get`.
+
+        Returns:
+            Recipients, each with its ``RecipientPermission`` entries and its
+            ``ExternalDirectoryObjectId``, which is all the cmdlet asks for.
+
+        Raises:
+            ValueError: For a trustee without an identity, which the service refuses.
+        """
+        if trustee is not None and identity is None:
+            raise ValueError("A trustee needs an identity")
+        options.setdefault("expand", "RecipientPermission")
+        options.setdefault("select", ["RecipientPermission", "ExternalDirectoryObjectId"])
+        if trustee is None and access_rights is None:
+            return await self._entity("Recipient", identity, options)
+        rights = f'["{access_rights}"]' if access_rights else "[]"
+        path = (
+            "Recipient/Exchange.GetRecipientPermissionByFilters("
+            f"identity='{encode_identity(identity or '')}',"
+            f"trustee='{encode_identity(trustee or '')}',accessRights={rights})"
+        )
+        return await self.get(path, isEncoded="true", **options)

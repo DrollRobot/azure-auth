@@ -338,13 +338,40 @@ because object 'x' couldn't be found on '...'`; the HTTP `status`, the service `
 A cmdlet Exchange does not know is refused with a 403 and no body at all, and the message
 says so.
 
+### Reading Exchange objects without a cmdlet
+
+```python
+async with ExchangeClient(auth) as exchange:
+    audited = await exchange.mailboxes(
+        PropertySet="Audit",
+        RecipientTypeDetails=["UserMailbox", "SharedMailbox"],
+        select=["UserPrincipalName", "DefaultAuditSet"],
+    )
+    one = await exchange.mailboxes("someone@contoso.com")
+    permissions = await exchange.mailbox_permissions("someone@contoso.com")
+```
+
+These are the REST reads behind the module's `Get-EXO*` cmdlets, and the reason those
+cmdlets are fast: a read returns only the property set asked for (`PropertySet`, with
+`select` for single properties), where `Get-Mailbox` returns everything about every mailbox.
+One method per cmdlet: `mailboxes`, `cas_mailboxes`, `recipients`, `mailbox_permissions`,
+`mailbox_folder_permissions`, `mailbox_statistics`, `mailbox_folder_statistics`,
+`mobile_device_statistics` and `recipient_permissions`. Query options are keyword arguments
+by the names the cmdlets send; a list is sent comma-separated and `True` is a switch;
+`select`, `filter` and `expand` are OData's `$select`, `$filter` and `$expand`. An identity is
+any the cmdlets take: UPN, SMTP address, GUID, external directory object id or name; the
+client encodes it for the key path. `get(path, ...)` reads any path under the service root,
+and `iter_get_pages()` stops early. A failed read raises `InvokeCommandError` too, with the
+OData `error.message` after the method, URL and status.
+
 Both clients use the `InvokeCommand` REST endpoint behind the ExchangeOnlineManagement
 PowerShell module. **Microsoft does not document this endpoint.** The request shape was read
 from module version 3.10.1:
 
 - URL: `https://<host>/adminapi/beta/<tenant GUID>/InvokeCommand`, on the context's cloud's
   host. The GUID is read from the token. `beta` is the only version that answers
-  `InvokeCommand`; the module's `v1.0` base URI serves its own REST cmdlets.
+  `InvokeCommand`, and the reads above use it too; the module's `v1.0` base URI serves only
+  its own setup calls at connect time.
 - Routing header `X-AnchorMailbox`: `UPN:<username>` for a user in their own tenant, and the
   tenant's system mailbox for app flows and for sibling (GDAP) contexts. Override it with
   `anchor_mailbox=`.

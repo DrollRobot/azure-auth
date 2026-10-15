@@ -126,6 +126,46 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
 
 @needs_user
 @needs_gdap_tenant
+async def test_gdap_reads_a_customers_mailboxes_without_prompting(user_auth: AuthContext) -> None:
+    """The REST read behind ``Get-EXOMailbox`` reaches a customer through GDAP too.
+
+    It reads the audit property set of every mailbox, and nothing else. Whether the customer
+    tenant's GET endpoint accepts the system-mailbox routing header that ``InvokeCommand`` needs
+    under GDAP, or wants the partner user's UPN as the PowerShell module sends, is what a
+    run of this test settles; the header sent is printed with the result.
+    """
+    async with ExchangeClient(user_auth) as home:
+        ensure_sign_in(home)
+    sibling = user_auth.for_tenant(GDAP_TENANT)
+
+    guard = ReadOnlyCmdlets()
+    async with ExchangeClient(sibling, transport=guard) as exchange:
+        mailboxes = await exchange.mailboxes(
+            PropertySet="Audit",
+            RecipientTypeDetails=[
+                "UserMailbox",
+                "SharedMailbox",
+                "RoomMailbox",
+                "EquipmentMailbox",
+            ],
+            select=["DefaultAuditSet", "UserPrincipalName", "RecipientTypeDetails"],
+        )
+
+    request = guard.requests[0]
+    assert request.method == "GET"
+    assert request.url.path.endswith(f"/{sibling.tenant.id}/Mailbox")
+    print(
+        f"GDAP Exchange read: {len(mailboxes)} mailboxes with"
+        f" X-AnchorMailbox {request.headers['X-AnchorMailbox']}"
+    )
+    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{sibling.tenant.id}"
+    assert mailboxes, "the customer tenant has no mailboxes"
+    assert all(isinstance(mailbox["DefaultAuditSet"], list) for mailbox in mailboxes)
+    assert all(mailbox["UserPrincipalName"] for mailbox in mailboxes)
+
+
+@needs_user
+@needs_gdap_tenant
 def test_the_blocking_exchange_client_reads_a_customers_exchange(cache_path: Path) -> None:
     """The generated blocking Exchange client reaches a customer through GDAP too."""
     home = live_user_auth(cache_path)

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Exchange Online mailboxes, recipients, and a mailbox's permissions, statistics and mobile
+  devices can be read directly, the way the Exchange module's `Get-EXO*` cmdlets do, with
+  only the properties asked for. Much faster than `Get-Mailbox` on a large tenant.
+
 ### Changed
 
 - GDAP customers are listed with their display names, and everything else Graph says about

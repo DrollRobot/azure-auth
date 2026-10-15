@@ -122,6 +122,21 @@ def test_the_read_only_guard_sends_a_listed_cmdlet() -> None:
 
 
 @pytest.mark.parametrize(
+    "path",
+    ["Mailbox", "Mailbox?PropertySet=Audit&$select=UserPrincipalName", "Mailbox?$skiptoken=2"],
+    ids=["bare", "with-options", "next-page"],
+)
+def test_the_read_only_guard_sends_a_listed_read(path: str) -> None:
+    recorder = Recorder([ok({"value": []})])
+    guard = ReadOnlyCmdlets(recorder.transport)
+    response = guard.handle_request(
+        httpx.Request("GET", INVOKE_COMMAND.replace("InvokeCommand", path))
+    )
+    assert response.status_code == 200
+    assert len(recorder.requests) == len(guard.requests) == 1
+
+
+@pytest.mark.parametrize(
     "request_",
     [
         invoke_command("Set-OrganizationConfig"),
@@ -135,8 +150,26 @@ def test_the_read_only_guard_sends_a_listed_cmdlet() -> None:
             INVOKE_COMMAND.replace("InvokeCommand", "Other"),
             json={"CmdletInput": {"CmdletName": "Get-OrganizationConfig"}},
         ),
+        httpx.Request("GET", INVOKE_COMMAND.replace("InvokeCommand", "CasMailbox")),
+        httpx.Request("GET", INVOKE_COMMAND.replace("InvokeCommand", "Mailbox('dXNlcg==')")),
+        httpx.Request(
+            "GET", INVOKE_COMMAND.replace("InvokeCommand", "Mailbox('dXNlcg==')/MailboxPermission")
+        ),
+        httpx.Request("POST", INVOKE_COMMAND.replace("InvokeCommand", "Mailbox")),
     ],
-    ids=["write", "remove", "unlisted-read", "no-json", "odd-name", "get", "other-endpoint"],
+    ids=[
+        "write",
+        "remove",
+        "unlisted-read",
+        "no-json",
+        "odd-name",
+        "get",
+        "other-endpoint",
+        "unlisted-collection",
+        "key-path",
+        "under-a-mailbox",
+        "post-to-a-collection",
+    ],
 )
 def test_the_read_only_guard_refuses_anything_else_unsent(request_: httpx.Request) -> None:
     recorder = Recorder([ok()])
