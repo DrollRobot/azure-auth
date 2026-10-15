@@ -43,6 +43,7 @@ from tests.live.support import (
     USERNAME,
     _flag,
     ensure_token,
+    needs_broker,
     needs_exchange_sign_in,
     needs_graph,
     needs_ipps,
@@ -59,6 +60,7 @@ pytestmark = [
     pytest.mark.e2e,
     pytest.mark.live,
     pytest.mark.anyio,
+    needs_broker,
     pytest.mark.skipif(sys.platform != "win32", reason="the broker is Windows only"),
     pytest.mark.skipif(
         importlib.util.find_spec("pymsalruntime") is None, reason="install the broker extra"

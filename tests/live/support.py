@@ -33,6 +33,8 @@ Environment variables:
   (:class:`ReadOnlyCmdlets`).
 * ``AZURE_AUTH_TEST_EXCHANGE=1`` / ``AZURE_AUTH_TEST_IPPS=1``: the user may run Exchange /
   Security & Compliance cmdlets.
+* ``AZURE_AUTH_TEST_BROKER=1``: the user is signed in to the Windows broker on this device.
+  Setting it runs the broker tests.
 * ``AZURE_AUTH_TEST_KEYVAULT_URL`` and ``AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME``: a vault in the
   tenant and the name of a secret in it the user, and the test application when one is
   configured, may read (Key Vault Secrets User, or an access policy allowing Get). Naming
@@ -185,6 +187,7 @@ def _flag(name: str) -> pytest.MarkDecorator:
 needs_graph = _flag("AZURE_AUTH_TEST_GRAPH")
 needs_exchange = _flag("AZURE_AUTH_TEST_EXCHANGE")
 needs_ipps = _flag("AZURE_AUTH_TEST_IPPS")
+needs_broker = _flag("AZURE_AUTH_TEST_BROKER")
 
 # The Exchange Online PowerShell client id serves the Exchange, the IPPS and the GDAP Exchange
 # tests, so a sign-in to it needs only one of them.
