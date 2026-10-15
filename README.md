@@ -15,6 +15,7 @@ The high-level goals of this package.
 - For delegated user, support interactive browser auth.
 - For applications, supports secret and certificate auth. (including TMP-bound certs)
 - Provides clients for Graph, Exchange, IPPS, Azure (ARM) and Keyvault.
+- Support for the Exchange REST endpoints.
 - Azure auth object from this library can be passed to Azure SDKs.
 - Defaults to first-party Microsoft client ids, but can connect to any client id.
 - Supports saving the MSAL cache in memory, or on disk.
@@ -29,19 +30,7 @@ The high-level goals of this package.
 
 ### Todo
 
-  Sign-in through the broker is live-tested. Still unverified: whether a broker sign-in can
-  reach a customer tenant silently through `for_tenant()`.
-- Exchange(done) and IPPS clients.
-  Delegated user access is live-tested end to end: the sign-in, cmdlets with every kind of
-  parameter, paging, failures reported with the cmdlet's own reason, the Security & Compliance
-  regional redirect, and the blocking mirrors. Still open: the `InvokeCommand` endpoint is
-  undocumented, `ResultSize` is not a cmdlet parameter there so results cannot be capped, and
-  the app-only and GDAP paths have not been run.
-- Supports accessing multiple tenants through GDAP permissions.
-  Built, but untested: live testing is on hold until an account with sign-in rights to a
-  GDAP partner tenant is available.
 - Platform support: Linux
-
 
 ## Documentation
 
