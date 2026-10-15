@@ -1,7 +1,7 @@
 """A token revoked underneath a running client: continuous access evaluation, live.
 
-Every sign-in declares that it handles claims challenges (``CP1``), so Graph, Exchange and
-IPPS issue tokens that live about a day and takes them back early by challenge: a 401 whose
+Every sign-in declares that it handles claims challenges (``CP1``), so Graph and Exchange
+issue tokens that live about a day and take them back early by challenge: a 401 whose
 ``WWW-Authenticate`` header carries the claims a new token must satisfy. The client answers
 it by acquiring a token with those claims and sending the request again
 (``clients/base.py``); an Azure SDK client answers it by calling the credential's
@@ -29,7 +29,7 @@ from typing import Any
 import httpx
 import pytest
 
-from azure_auth import AuthContext, ExchangeClient, GraphClient, InteractionRequired, IppsClient
+from azure_auth import AuthContext, ExchangeClient, GraphClient, InteractionRequired
 from azure_auth.clients.base import claims_from_challenge
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from tests.live.support import (
@@ -39,7 +39,6 @@ from tests.live.support import (
     live_cloud,
     needs_exchange,
     needs_graph,
-    needs_ipps,
     needs_user,
     sign_in_step,
     walkthrough,
@@ -67,14 +66,8 @@ class ChallengeWatcher(httpx.AsyncBaseTransport):
     revoked that is a browser sign-in only the person at the desktop can complete.
     """
 
-    def __init__(self, *, announce: bool = True) -> None:
-        """Wrap the default ``httpx`` network transport.
-
-        Args:
-            announce: Call the person at the first 401. Off for a client whose challenge must
-                be met without a sign-in.
-        """
-        self._announce = announce
+    def __init__(self) -> None:
+        """Wrap the default ``httpx`` network transport."""
         self._inner = httpx.AsyncHTTPTransport()
         self.statuses: collections.Counter[int] = collections.Counter()
         self.challenges: list[str | None] = []
@@ -95,8 +88,7 @@ class ChallengeWatcher(httpx.AsyncBaseTransport):
             self.challenges.append(response.headers.get("WWW-Authenticate"))
             if self.challenged_at is None:
                 self.challenged_at = time.monotonic()
-                if self._announce:
-                    walkthrough(sign_in_step("browser"))
+                walkthrough(sign_in_step("browser"))
         return response
 
     async def aclose(self) -> None:
@@ -243,35 +235,34 @@ async def test_a_revoked_sessions_challenge_is_answered_by_a_new_sign_in(
 
 @needs_user
 @needs_exchange
-@needs_ipps
 @pytest.mark.interactive
 @pytest.mark.slow
-async def test_exchange_and_ipps_answer_a_revoked_sessions_challenge(
+async def test_exchange_answers_a_revoked_sessions_challenge(
     user_auth: AuthContext, cache_path: Path
 ) -> None:
-    """Exchange and IPPS challenge tokens whose sessions were revoked; their clients answer.
+    """Exchange challenges a token whose sessions were revoked; the client answers.
 
     As the Graph test, through ``InvokeCommand``. The signed-in user revokes their own
     sessions through Graph, then Exchange is called with its old token until it refuses it
     with a claims challenge, which the client answers with a browser sign-in to Exchange
-    Online PowerShell. IPPS signs in to the same application, so its client, on a context
-    that may not prompt, must then meet its own challenge from the refresh token that sign-in
-    renewed.
+    Online PowerShell.
+
+    IPPS is left out. It is issued the same day-long tokens as Exchange, marked as handling
+    challenges, but still accepted one 15 minutes after its sessions were revoked, on all 61
+    calls (measured 2026-10-14). Its client answers a challenge with the same code as
+    Exchange's.
 
     Interactive for the same reason as the Graph test. It revokes the sessions again, so a run
     of both waits for a challenge twice.
     """
     exchange_watcher = ChallengeWatcher()
-    ipps_watcher = ChallengeWatcher(announce=False)
     async with (
         GraphClient(user_auth, scopes=SCOPES) as graph,
         ExchangeClient(user_auth, transport=exchange_watcher) as exchange,
-        IppsClient(cached_user_auth(cache_path), transport=ipps_watcher) as ipps,
     ):
         ensure_sign_in(graph)
         ensure_sign_in(exchange)
         config = await exchange.run("Get-OrganizationConfig")
-        await ipps.run("Get-Label")
         revoked = await user_auth.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
         await graph.post("/me/revokeSignInSessions")
         revoked_at = time.monotonic()
@@ -297,20 +288,6 @@ async def test_exchange_and_ipps_answer_a_revoked_sessions_challenge(
             assert challenge_not_before(claims) is not None, f"asks for something else: {claims}"
             assert answered[0]["Name"] == config[0]["Name"]
             assert renewed.token != revoked.token, "the call succeeded with the revoked token"
-
-            try:
-                _, calls, delay = await call_until_challenged(
-                    ipps_watcher, lambda: ipps.run("Get-Label"), revoked_at, "IPPS"
-                )
-            except InteractionRequired as error:
-                pytest.fail(f"IPPS's challenge needed a sign-in: {error}")
-            claims = claims_from_challenge(ipps_watcher.challenges[0])
-            print(
-                f"IPPS revocation: challenged after {delay:.0f}s, on call {calls};"
-                f" statuses {dict(ipps_watcher.statuses)}; claims {claims}"
-            )
-            assert ipps_watcher.statuses[401] == 1, "the token acquired with the claims was refused"
-            assert claims is not None, f"no claims challenge: {ipps_watcher.challenges[0]!r}"
         finally:
             expired = expire_cached_access_tokens(cache_path)
             print(
