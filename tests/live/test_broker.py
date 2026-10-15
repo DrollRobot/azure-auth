@@ -34,8 +34,11 @@ from azure_auth import (
 )
 from azure_auth.auth.cache import build_cache
 from azure_auth.clients import ResourceClient
+from azure_auth.clients.keyvault import KeyVaultClient
 from tests.live.support import (
     BROKER_CACHE_NAME,
+    KEYVAULT_SECRET_NAME,
+    KEYVAULT_URL,
     TENANT,
     USERNAME,
     _flag,
@@ -43,8 +46,10 @@ from tests.live.support import (
     needs_exchange_sign_in,
     needs_graph,
     needs_ipps,
+    needs_keyvault,
     needs_user,
     sign_in_step,
+    sign_in_to_vault,
     token_claims,
     token_user,
     walkthrough,
@@ -183,6 +188,28 @@ async def test_the_broker_renews_a_token_without_prompting(
 
     assert (token_user(token.token) or "").lower() == USERNAME.lower()
     assert token_claims(token.token)["aud"] == client.resource
+    assert_the_broker_holds_the_sign_in(broker_cache_path)
+
+
+@needs_user
+@needs_keyvault
+async def test_the_key_vault_client_reads_a_secret_through_the_broker(
+    broker_cache_path: Path,
+) -> None:
+    """The Key Vault client reads a secret on a token the broker issued.
+
+    The vault's token is asked for through the Azure SDK, which calls the context's
+    ``get_token`` rather than a resource client, with the scope the vault's challenge names.
+    The broker tests' cache never holds a refresh token, so a sign-in found there is the
+    broker's. The secret's value is never printed (``tests/live/test_keyvault_client.py``).
+    """
+    auth = broker_auth(broker_cache_path)
+    sign_in_to_vault(auth)
+    async with KeyVaultClient(auth, KEYVAULT_URL) as vault:
+        value = await vault.get_secret(KEYVAULT_SECRET_NAME)
+
+    has_value = bool(value)
+    assert has_value, f"the secret {KEYVAULT_SECRET_NAME!r} came back empty"
     assert_the_broker_holds_the_sign_in(broker_cache_path)
 
 
