@@ -150,6 +150,7 @@ SECRET_SERVICE = os.environ.get("AZURE_AUTH_TEST_APP_SECRET_SERVICE", "")
 SECRET_USERNAME = os.environ.get("AZURE_AUTH_TEST_APP_SECRET_USERNAME", "")
 KEYVAULT_URL = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_URL", "")
 KEYVAULT_SECRET_NAME = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME", "")
+GDAP = os.environ.get("AZURE_AUTH_TEST_GDAP") == "1"
 GDAP_TENANT = os.environ.get("AZURE_AUTH_TEST_GDAP_TENANT_ID", "")
 
 needs_user = pytest.mark.skipif(
@@ -177,7 +178,12 @@ needs_keyvault = pytest.mark.skipif(
     not (KEYVAULT_URL and KEYVAULT_SECRET_NAME),
     reason="set AZURE_AUTH_TEST_KEYVAULT_URL and AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME",
 )
-needs_gdap_tenant = pytest.mark.skipif(not GDAP_TENANT, reason="set AZURE_AUTH_TEST_GDAP_TENANT_ID")
+# The GDAP flag is the switch for every GDAP test; the customer tenant tests also need to
+# know which customer to reach.
+needs_gdap_tenant = pytest.mark.skipif(
+    not (GDAP and GDAP_TENANT),
+    reason="set AZURE_AUTH_TEST_GDAP=1 and AZURE_AUTH_TEST_GDAP_TENANT_ID",
+)
 
 
 def _flag(name: str) -> pytest.MarkDecorator:
@@ -194,9 +200,9 @@ needs_broker = _flag("AZURE_AUTH_TEST_BROKER")
 needs_exchange_sign_in = pytest.mark.skipif(
     not (
         "1" in (os.environ.get("AZURE_AUTH_TEST_EXCHANGE"), os.environ.get("AZURE_AUTH_TEST_IPPS"))
-        or GDAP_TENANT
+        or (GDAP and GDAP_TENANT)
     ),
-    reason="set AZURE_AUTH_TEST_EXCHANGE=1, _IPPS=1 or _GDAP_TENANT_ID",
+    reason="set AZURE_AUTH_TEST_EXCHANGE=1, _IPPS=1, or _GDAP=1 with _GDAP_TENANT_ID",
 )
 
 # The Azure PowerShell client id serves both the ARM and the Key Vault tests, so a sign-in to
