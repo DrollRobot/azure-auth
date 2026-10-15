@@ -16,7 +16,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import sys
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -44,7 +44,7 @@ from tests.live.support import (
     _flag,
     ensure_token,
     needs_broker,
-    needs_exchange_sign_in,
+    needs_exchange,
     needs_graph,
     needs_ipps,
     needs_keyvault,
@@ -67,15 +67,73 @@ pytestmark = [
     ),
 ]
 
-# Each client with its first-party application. IPPS signs in to the same application as
-# Exchange, for a different resource.
+
+async def read_graph(client: GraphClient) -> None:
+    """Read the signed-in user, proving Graph accepts the broker's token.
+
+    Args:
+        client: A Graph client signed in through the broker.
+    """
+    me = await client.get("/me", params={"$select": "userPrincipalName"})
+    assert me["userPrincipalName"].lower() == USERNAME.lower()
+
+
+async def read_exchange(client: ExchangeClient) -> None:
+    """Read the user's own mailbox, proving Exchange accepts the broker's token.
+
+    The user's own mailbox, because any user with one may read it; ``Get-OrganizationConfig``
+    needs an Exchange admin role, and Exchange refuses it with a bare 403 without one.
+
+    Args:
+        client: An Exchange client signed in through the broker.
+    """
+    mailbox = await client.run("Get-Mailbox", Identity=USERNAME)
+    assert len(mailbox) == 1
+    assert mailbox[0]["UserPrincipalName"].lower() == USERNAME.lower()
+
+
+async def read_ipps(client: IppsClient) -> None:
+    """List the sensitivity labels, proving Security & Compliance accepts the broker's token.
+
+    Args:
+        client: An IPPS client signed in through the broker.
+    """
+    labels = await client.run("Get-Label")
+    assert isinstance(labels, list)
+
+
+async def read_arm(client: AzureClient) -> None:
+    """List the user's subscriptions, proving ARM accepts the broker's token.
+
+    An empty list also comes back from a tenant the user cannot reach, so it is not a pass;
+    ``AZURE_AUTH_TEST_ARM`` says this user really has a subscription.
+
+    Args:
+        client: An ARM client signed in through the broker.
+    """
+    subscriptions = await client.get_all("/subscriptions", api_version="2022-12-01")
+    assert subscriptions, "the user can see no subscriptions; AZURE_AUTH_TEST_ARM is wrong"
+    assert all(subscription.get("subscriptionId") for subscription in subscriptions)
+
+
+# Each client with its first-party application, and a read-only call that proves the resource
+# accepts the broker's token. IPPS signs in to the same application as Exchange, for a
+# different resource.
 BROKER_CLIENTS = [
-    pytest.param(GraphClient, "Microsoft Graph Command Line Tools", marks=needs_graph, id="graph"),
     pytest.param(
-        ExchangeClient, "Exchange Online PowerShell", marks=needs_exchange_sign_in, id="exchange"
+        GraphClient, "Microsoft Graph Command Line Tools", read_graph, marks=needs_graph, id="graph"
     ),
-    pytest.param(IppsClient, "Exchange Online PowerShell", marks=needs_ipps, id="ipps"),
-    pytest.param(AzureClient, "Azure PowerShell", marks=_flag("AZURE_AUTH_TEST_ARM"), id="arm"),
+    pytest.param(
+        ExchangeClient,
+        "Exchange Online PowerShell",
+        read_exchange,
+        marks=needs_exchange,
+        id="exchange",
+    ),
+    pytest.param(IppsClient, "Exchange Online PowerShell", read_ipps, marks=needs_ipps, id="ipps"),
+    pytest.param(
+        AzureClient, "Azure PowerShell", read_arm, marks=_flag("AZURE_AUTH_TEST_ARM"), id="arm"
+    ),
 ]
 
 
@@ -144,22 +202,24 @@ def assert_the_broker_holds_the_sign_in(cache_path: Path) -> None:
 
 @needs_user
 @pytest.mark.interactive
-@pytest.mark.parametrize(("make_client", "application"), BROKER_CLIENTS)
+@pytest.mark.parametrize(("make_client", "application", "read"), BROKER_CLIENTS)
 async def test_a_broker_sign_in_is_the_brokers(
     make_client: Callable[[AuthContext], ResourceClient],
     application: str,
+    read: Callable[[Any], Awaitable[None]],
     broker_cache_path: Path,
 ) -> None:
     """A forced sign-in through the broker signs in the configured user; the broker keeps it.
 
     Forced, the broker shows its account picker even for an account it holds, so somebody
-    always has to pick.
+    always has to pick. A read-only call then shows the resource accepts the token.
     """
     walkthrough(sign_in_step("WAM"))
     auth = broker_auth(broker_cache_path)
     async with make_client(auth) as client:
         await client.login(force=True)
         token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
+        await read(client)
 
     assert (token_user(token.token) or "").lower() == USERNAME.lower()
     assert token_claims(token.token)["aud"] == client.resource
@@ -168,17 +228,19 @@ async def test_a_broker_sign_in_is_the_brokers(
 
 @needs_user
 @pytest.mark.cached_credential
-@pytest.mark.parametrize(("make_client", "application"), BROKER_CLIENTS)
+@pytest.mark.parametrize(("make_client", "application", "read"), BROKER_CLIENTS)
 async def test_the_broker_renews_a_token_without_prompting(
     make_client: Callable[[AuthContext], ResourceClient],
     application: str,
+    read: Callable[[Any], Awaitable[None]],
     broker_cache_path: Path,
 ) -> None:
     """A context that may not prompt gets a new token from the broker's sign-in.
 
     ``force_refresh`` skips the cached access token, and MSAL has no refresh token of its own,
     so the token can only come from the broker. When the broker holds no sign-in, a context
-    that may prompt makes one first.
+    that may prompt makes one first. A read-only call then shows the resource accepts the
+    renewed token.
     """
     auth = broker_auth(broker_cache_path)
     auth._interactive_allowed = False
@@ -187,6 +249,7 @@ async def test_the_broker_renews_a_token_without_prompting(
         token = await auth.aio.acquire_token(
             client.scopes, client_id=client.client_id, force_refresh=True
         )
+        await read(client)
 
     assert (token_user(token.token) or "").lower() == USERNAME.lower()
     assert token_claims(token.token)["aud"] == client.resource
@@ -228,16 +291,33 @@ def no_window(*args: Any, **kwargs: Any) -> NoReturn:
     raise AssertionError("MSAL asked the broker to show its window")
 
 
+def windows_default_account(auth: AuthContext, client: ResourceClient) -> str | None:
+    """Ask Windows which account it signs in with when no account is named.
+
+    This is the request MSAL sends when its cache is empty, sent here directly, outside the
+    package, so a test can know what Windows will answer before the package asks.
+
+    Args:
+        auth: The context, for its authority.
+        client: The client, for its application and scopes.
+
+    Returns:
+        The account's user name, or ``None`` when Windows signs nobody in.
+    """
+    from msal.broker import _signin_silently
+
+    response = _signin_silently(auth.authority, client.client_id, list(client.scopes))
+    if "error" in response:
+        return None
+    return str(response.get("id_token_claims", {}).get("preferred_username") or "") or None
+
+
 @needs_user
-@pytest.mark.xfail(
-    strict=True,
-    raises=BrokerUnavailable,
-    reason="MSAL asks Windows for a token without naming the account",
-)
-@pytest.mark.parametrize(("make_client", "application"), BROKER_CLIENTS)
+@pytest.mark.parametrize(("make_client", "application", "read"), BROKER_CLIENTS)
 async def test_the_broker_signs_in_with_nobody_at_the_desk(
     make_client: Callable[[AuthContext], ResourceClient],
     application: str,
+    read: Callable[[Any], Awaitable[None]],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -251,17 +331,34 @@ async def test_the_broker_signs_in_with_nobody_at_the_desk(
     starts empty, so the token cannot have come from an earlier sign-in of this application.
     MSAL's own log, shown on a failure, says what the silent attempt returned.
 
-    Expected to fail: with its cache empty, MSAL asks Windows without naming the account, and
-    Windows answers with an account of its own choosing, which the tenant refuses (AADSTS50020,
-    AADSTS90072; measured 2026-10-14). Strict, so the run reports the day it passes.
+    With its cache empty, MSAL asks Windows without naming the account, so this works only
+    where Windows' default account is the configured user. The test asks Windows first. When
+    the default is someone else, which the tenant refuses (AADSTS50020, AADSTS90072; measured
+    2026-10-14), the sign-in is expected to fail, and the test reports that as an expected
+    failure. If it signs in all the same, the test fails, so the run reports the day the
+    package learns to name the account.
     """
     caplog.set_level(logging.DEBUG, logger="msal")
     monkeypatch.setattr("msal.broker._signin_interactively", no_window)
     cache_path = tmp_path / "cache.bin"
     auth = broker_auth(cache_path)
     async with make_client(auth) as client:
+        default = windows_default_account(auth, client)
+        if (default or "").lower() != USERNAME.lower():
+            try:
+                await client.login()
+            except BrokerUnavailable:
+                pytest.xfail(
+                    f"Windows signs in {default or 'nobody'} by default, not {USERNAME}, and"
+                    " MSAL does not name the account"
+                )
+            pytest.fail(
+                f"signed in although Windows signs in {default or 'nobody'} by default: the"
+                " package names the account now, so this case should pass"
+            )
         await client.login()
         token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
+        await read(client)
 
     assert (token_user(token.token) or "").lower() == USERNAME.lower()
     assert token_claims(token.token)["aud"] == client.resource
