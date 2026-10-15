@@ -27,6 +27,7 @@ docs = [
     "mkdocstrings[python]>=1.0.4,<2",
 ]
 test = [
+    "azure-mgmt-resource-subscriptions>=1.0,<2",
     "keyring>=25.7,<26",
     "pytest>=9.0.3,<10",  # GHSA-6w46-j5rx-g56g
     "pytest-cov>=7.1,<8",

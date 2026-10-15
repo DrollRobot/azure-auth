@@ -10,6 +10,8 @@ from pathlib import Path
 
 import httpx
 import pytest
+from azure.mgmt.resource.subscriptions import SubscriptionClient
+from azure.mgmt.resource.subscriptions.aio import SubscriptionClient as AsyncSubscriptionClient
 
 from azure_auth import AuthContext, AzureClient
 from azure_auth.sync import AzureClient as BlockingAzureClient
@@ -48,6 +50,38 @@ async def test_arm_lists_subscriptions(user_auth: AuthContext) -> None:
     # must not count as a pass; the flag says this user really has a subscription.
     assert subscriptions, "the user can see no subscriptions; AZURE_AUTH_TEST_ARM is wrong"
     assert all(s.get("subscriptionId") for s in subscriptions)
+
+
+@needs_user
+@needs_arm
+async def test_an_azure_sdk_client_lists_subscriptions_with_the_context(
+    user_auth: AuthContext,
+) -> None:
+    """Azure's own management client, given the context, lists what the ARM client lists.
+
+    Every ``azure-mgmt-*`` client asks its credential for a token through ``get_token``: the
+    asynchronous one is handed ``auth.aio``, the blocking one ``auth`` itself. The package's
+    own ARM client is the witness. The cloud's ARM host and scope are passed, since the SDK
+    defaults to the commercial cloud's.
+    """
+    arm_url = user_auth.tenant.cloud.arm
+    scopes = [f"{arm_url}/.default"]
+    async with AzureClient(user_auth) as arm:
+        ensure_sign_in(arm)
+        expected = {
+            s["subscriptionId"]
+            for s in await arm.get_all("/subscriptions", api_version="2022-12-01")
+        }
+    async with AsyncSubscriptionClient(
+        user_auth.aio, base_url=arm_url, credential_scopes=scopes
+    ) as sdk:
+        listed = {s.subscription_id async for s in sdk.subscriptions.list()}
+    with SubscriptionClient(user_auth, base_url=arm_url, credential_scopes=scopes) as sdk:
+        blocking = {s.subscription_id for s in sdk.subscriptions.list()}
+
+    assert expected, "the user can see no subscriptions; AZURE_AUTH_TEST_ARM is wrong"
+    assert listed == expected
+    assert blocking == expected
 
 
 @needs_app
