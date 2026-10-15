@@ -11,8 +11,8 @@ workflows simple, so other packages don't have to deal with it.
 
 The high-level goals of this package.
 
-- Supports delegated user and application auth.
-- For delegated user, supports interactive browser auth.
+- Support delegated user and application auth.
+- For delegated user, support interactive browser auth.
 - For applications, supports secret and certificate auth. (including TMP-bound certs)
 - Provides clients for Graph, Exchange, IPPS, Azure (ARM) and Keyvault.
 - Azure auth object from this library can be passed to Azure SDKs.
@@ -20,7 +20,7 @@ The high-level goals of this package.
 - Supports saving the MSAL cache in memory, or on disk.
 - Supports async operation wherever possible.
 - Supports accessing multiple tenants through GDAP permissions.
-- Platform support: Windows, Linux, MacOs
+- Platform support: Windows, Linux
 - Supports all Microsoft clouds: Commercial, Gov, DoD, China.
 
 ### Non-goals
@@ -29,7 +29,6 @@ The high-level goals of this package.
 
 ### Todo
 
-- Supports using WAM credentials on Windows systems.
   Sign-in through the broker is live-tested. Still unverified: whether a broker sign-in can
   reach a customer tenant silently through `for_tenant()`.
 - Exchange(done) and IPPS clients.
@@ -38,12 +37,10 @@ The high-level goals of this package.
   regional redirect, and the blocking mirrors. Still open: the `InvokeCommand` endpoint is
   undocumented, `ResultSize` is not a cmdlet parameter there so results cannot be capped, and
   the app-only and GDAP paths have not been run.
-- Azure (ARM) and Keyvault clients.
-  Key Vault is live-tested. ARM is built, but untested: it needs a user with a subscription.
 - Supports accessing multiple tenants through GDAP permissions.
   Built, but untested: live testing is on hold until an account with sign-in rights to a
   GDAP partner tenant is available.
-- Platform support: Linux, MacOs
+- Platform support: Linux
 
 
 ## Documentation
