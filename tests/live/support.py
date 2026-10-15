@@ -150,6 +150,7 @@ SECRET_SERVICE = os.environ.get("AZURE_AUTH_TEST_APP_SECRET_SERVICE", "")
 SECRET_USERNAME = os.environ.get("AZURE_AUTH_TEST_APP_SECRET_USERNAME", "")
 KEYVAULT_URL = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_URL", "")
 KEYVAULT_SECRET_NAME = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME", "")
+GDAP = os.environ.get("AZURE_AUTH_TEST_GDAP") == "1"
 GDAP_TENANT = os.environ.get("AZURE_AUTH_TEST_GDAP_TENANT_ID", "")
 
 needs_user = pytest.mark.skipif(
@@ -177,7 +178,12 @@ needs_keyvault = pytest.mark.skipif(
     not (KEYVAULT_URL and KEYVAULT_SECRET_NAME),
     reason="set AZURE_AUTH_TEST_KEYVAULT_URL and AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME",
 )
-needs_gdap_tenant = pytest.mark.skipif(not GDAP_TENANT, reason="set AZURE_AUTH_TEST_GDAP_TENANT_ID")
+# The GDAP flag is the switch for every GDAP test; the customer tenant tests also need to
+# know which customer to reach.
+needs_gdap_tenant = pytest.mark.skipif(
+    not (GDAP and GDAP_TENANT),
+    reason="set AZURE_AUTH_TEST_GDAP=1 and AZURE_AUTH_TEST_GDAP_TENANT_ID",
+)
 
 
 def _flag(name: str) -> pytest.MarkDecorator:
@@ -194,9 +200,9 @@ needs_broker = _flag("AZURE_AUTH_TEST_BROKER")
 needs_exchange_sign_in = pytest.mark.skipif(
     not (
         "1" in (os.environ.get("AZURE_AUTH_TEST_EXCHANGE"), os.environ.get("AZURE_AUTH_TEST_IPPS"))
-        or GDAP_TENANT
+        or (GDAP and GDAP_TENANT)
     ),
-    reason="set AZURE_AUTH_TEST_EXCHANGE=1, _IPPS=1 or _GDAP_TENANT_ID",
+    reason="set AZURE_AUTH_TEST_EXCHANGE=1, _IPPS=1, or _GDAP=1 with _GDAP_TENANT_ID",
 )
 
 # The Azure PowerShell client id serves both the ARM and the Key Vault tests, so a sign-in to
@@ -416,18 +422,58 @@ def ensure_sign_in(client: ResourceClient | BlockingResourceClient) -> None:
     ensure_token(client.auth, client.scopes, client.client_id)
 
 
-# The only cmdlets the GDAP tests may run, each of which only reads, so the tests can run against
-# any customer tenant. ReadOnlyCmdlets refuses every other.
+class Recording(httpx.AsyncBaseTransport):
+    """A real network transport that records every request it sends.
+
+    The client builds its request URL and headers internally; this is the only place they
+    can be seen from a test without reaching into the client.
+    """
+
+    def __init__(self, *drop: str) -> None:
+        """Wrap the default transport, dropping the named request headers on the way out.
+
+        Args:
+            *drop: Header names to remove from every request before it is sent.
+        """
+        self._inner = httpx.AsyncHTTPTransport()
+        self._drop = {name.lower() for name in drop}
+        self.requests: list[httpx.Request] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """Send the request over the network, minus the dropped headers, and record it.
+
+        Args:
+            request: The outgoing request.
+
+        Returns:
+            The response, untouched.
+        """
+        for name in list(request.headers):
+            if name.lower() in self._drop:
+                del request.headers[name]
+        self.requests.append(request)
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        """Close the wrapped transport."""
+        await self._inner.aclose()
+
+
+# The only cmdlets the GDAP tests may run, and the only collections they may read, each of
+# which only reads, so the tests can run against any customer tenant. ReadOnlyCmdlets refuses
+# every other request.
 GDAP_CMDLETS = frozenset({"Get-OrganizationConfig"})
+GDAP_READS = frozenset({"Mailbox"})
 
 
 class ReadOnlyCmdlets(httpx.BaseTransport, httpx.AsyncBaseTransport):
-    """A transport that sends nothing but ``InvokeCommand`` requests for ``GDAP_CMDLETS``.
+    """A transport that sends only ``GDAP_CMDLETS`` through ``InvokeCommand``, and ``GDAP_READS``.
 
     The GDAP tests only read, so they can run against any customer tenant. A test that calls
     only read cmdlets is a promise; this makes it a check. Every request is read before it leaves
-    the machine, and one that does not run a listed cmdlet fails the test without being sent.
-    It serves the asynchronous and the blocking clients alike, and keeps what it sent.
+    the machine, and one that does not run a listed cmdlet, or read a listed collection whole,
+    fails the test without being sent. It serves the asynchronous and the blocking clients
+    alike, and keeps what it sent.
 
     Attributes:
         requests: Every request it let through, in order.
@@ -444,25 +490,37 @@ class ReadOnlyCmdlets(httpx.BaseTransport, httpx.AsyncBaseTransport):
         self.requests: list[httpx.Request] = []
 
     def _check(self, request: httpx.Request) -> None:
-        """Fail the test, with the request unsent, unless it runs a listed cmdlet.
+        """Fail the test, with the request unsent, unless it runs a listed cmdlet or read.
 
-        ``pytest.fail`` raises a ``BaseException``, so no ``except Exception`` in the client
-        can catch the refusal and carry on.
+        A read is a GET whose path ends in a listed collection: ``.../Mailbox``, with any
+        query. A key path (``Mailbox('...')``) and anything under one is not listed, so it is
+        refused. ``pytest.fail`` raises a ``BaseException``, so no ``except Exception`` in the
+        client can catch the refusal and carry on.
 
         Args:
             request: The outgoing request.
         """
-        try:
-            cmdlet = json.loads(request.content)["CmdletInput"]["CmdletName"]
-        except (ValueError, TypeError, KeyError):
-            cmdlet = None
-        allowed = isinstance(cmdlet, str) and cmdlet in GDAP_CMDLETS
-        if not (
-            allowed and request.method == "POST" and request.url.path.endswith("/InvokeCommand")
-        ):
+        path = request.url.path
+        what: Any
+        if request.method == "GET":
+            what = path.rsplit("/", 1)[-1]
+            allowed = what in GDAP_READS
+        else:
+            try:
+                what = json.loads(request.content)["CmdletInput"]["CmdletName"]
+            except (ValueError, TypeError, KeyError):
+                what = None
+            allowed = (
+                isinstance(what, str)
+                and what in GDAP_CMDLETS
+                and request.method == "POST"
+                and path.endswith("/InvokeCommand")
+            )
+        if not allowed:
             pytest.fail(
-                f"refused to send {request.method} {request.url.path} ({cmdlet or 'no cmdlet'}):"
-                f" the GDAP tests may only run {', '.join(sorted(GDAP_CMDLETS))}",
+                f"refused to send {request.method} {path} ({what or 'no cmdlet'}): the GDAP"
+                f" tests may only run {', '.join(sorted(GDAP_CMDLETS))} and read"
+                f" {', '.join(sorted(GDAP_READS))}",
                 pytrace=False,
             )
         self.requests.append(request)

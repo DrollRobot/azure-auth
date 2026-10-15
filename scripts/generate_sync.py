@@ -58,7 +58,13 @@ MIRRORS = (
     Mirror(
         ROOT / "tests" / "unit",
         ROOT / "tests" / "unit" / "sync",
-        ("test_graph_client", "test_arm_client", "test_invoke_command", "test_keyvault_client"),
+        (
+            "test_graph_client",
+            "test_arm_client",
+            "test_invoke_command",
+            "test_exchange",
+            "test_keyvault_client",
+        ),
         package_docstring="Generated tests for the blocking clients.",
     ),
 )

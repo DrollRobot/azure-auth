@@ -28,6 +28,7 @@ from azure_auth.sync import ExchangeClient as BlockingExchangeClient
 from azure_auth.sync import IppsClient as BlockingIppsClient
 from tests.live.support import (
     USERNAME,
+    Recording,
     ensure_sign_in,
     live_user_auth,
     needs_exchange,
@@ -44,43 +45,6 @@ pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
 # many pages are walked at that size, so a large tenant does not turn this into a crawl.
 PAGE_SIZE = 2
 MAX_PAGES = 25
-
-
-class Recording(httpx.AsyncBaseTransport):
-    """A real network transport that records every request it sends.
-
-    The client builds its request URL and headers internally; this is the only place they
-    can be seen from a test without reaching into the client.
-    """
-
-    def __init__(self, *drop: str) -> None:
-        """Wrap the default transport, dropping the named request headers on the way out.
-
-        Args:
-            *drop: Header names to remove from every request before it is sent.
-        """
-        self._inner = httpx.AsyncHTTPTransport()
-        self._drop = {name.lower() for name in drop}
-        self.requests: list[httpx.Request] = []
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        """Send the request over the network, minus the dropped headers, and record it.
-
-        Args:
-            request: The outgoing request.
-
-        Returns:
-            The response, untouched.
-        """
-        for name in list(request.headers):
-            if name.lower() in self._drop:
-                del request.headers[name]
-        self.requests.append(request)
-        return await self._inner.handle_async_request(request)
-
-    async def aclose(self) -> None:
-        """Close the wrapped transport."""
-        await self._inner.aclose()
 
 
 @needs_user
