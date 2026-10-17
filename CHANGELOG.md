@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Through the Windows broker, an Exchange token from a GDAP customer tenant made every later
+  silent token request fail with "No cached token", in every tenant.
+
 ## [0.4.0] - 2026-10-15 - Exchange REST reads, tenant object
 
 ### Added

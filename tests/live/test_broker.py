@@ -37,14 +37,17 @@ from azure_auth.clients import ResourceClient
 from azure_auth.clients.keyvault import KeyVaultClient
 from tests.live.support import (
     BROKER_CACHE_NAME,
+    GDAP_TENANT,
     KEYVAULT_SECRET_NAME,
     KEYVAULT_URL,
     TENANT,
     USERNAME,
     _flag,
+    ensure_sign_in,
     ensure_token,
     needs_broker,
     needs_exchange,
+    needs_gdap_tenant,
     needs_graph,
     needs_ipps,
     needs_keyvault,
@@ -398,3 +401,44 @@ async def test_a_cancelled_broker_sign_in_opens_no_browser() -> None:
     assert not isinstance(error, BrokerUnavailable)
     assert "Status_UserCanceled" in str(error)
     assert (client.client_id, False) not in auth._apps, "the browser was set up after a cancel"
+
+
+@needs_user
+@needs_gdap_tenant
+@pytest.mark.interactive
+@pytest.mark.regression
+async def test_a_customers_exchange_token_leaves_the_account_findable(tmp_path: Path) -> None:
+    """A GDAP customer's Exchange token does not hide the account from later requests.
+
+    Through the broker, MSAL saves an account entry for every tenant it gets a token in. A
+    customer tenant's Exchange token was saved under a placeholder username, and MSAL, which
+    describes the account by its entry saved last, then found nobody by the real one: every
+    later silent request failed with "No cached token", in every tenant (measured
+    2026-10-16). The test checks the broker still saves the placeholder, then forces a second
+    request past every cached access token, so the account has to be found again. The cache is
+    the test's own, so the customer's entries reach no other test.
+    """
+    cache_path = tmp_path / "cache.bin"
+    auth = broker_auth(cache_path)
+    async with ExchangeClient(auth) as home:
+        ensure_sign_in(home)
+    customer = auth.for_tenant(GDAP_TENANT)
+    async with ExchangeClient(customer) as exchange:
+        await customer.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
+        names = [
+            str(entry.get("username")).lower()
+            for entry in build_cache("disk", cache_path).search(
+                msal.TokenCache.CredentialType.ACCOUNT
+            )
+            if entry.get("realm") == customer.tenant.id
+        ]
+        assert names, "the broker saved no account entry for the customer tenant"
+        assert USERNAME.lower() not in names, (
+            f"the customer's Exchange entry is saved as {names}: the broker no longer saves a "
+            "placeholder username, so this test reproduces nothing"
+        )
+        token = await customer.aio.acquire_token(
+            exchange.scopes, client_id=exchange.client_id, force_refresh=True
+        )
+
+    assert token_claims(token.token)["tid"] == customer.tenant.id

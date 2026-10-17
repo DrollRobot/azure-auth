@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 import pytest
-from msal import BrowserInteractionTimeoutError
+from msal import BrowserInteractionTimeoutError, TokenCache
 
 from azure_auth import (
     AccountSelectionRequired,
@@ -409,6 +409,38 @@ def test_sibling_redeems_the_shared_account_silently(fake_msal: FakeMsal) -> Non
 
     assert token.token == f"https://login.microsoftonline.com/{CUSTOMER_GUID}"
     assert fake_msal.calls[0].kwargs["account"] == ACCOUNT
+
+
+def test_sibling_hands_msal_the_account_as_its_home_tenant_entry_describes_it(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # MSAL describes an account by its entry saved last, which through the broker can be a
+    # customer tenant's, under a placeholder username (tests/integration/test_account_lookup.py).
+    home = {
+        "home_account_id": "uid.utid",
+        "environment": "login.microsoftonline.com",
+        "realm": "utid",
+        "local_account_id": "uid",
+        "username": USER,
+        "account_source": "broker",
+        "authority_type": "MSSTS",
+    }
+    cache = TokenCache()
+    cache.modify(TokenCache.CredentialType.ACCOUNT, home, home)
+    monkeypatch.setattr("azure_auth.auth.context.build_cache", lambda *args: cache)
+    fake_msal.accounts = [
+        home
+        | {
+            "realm": CUSTOMER_GUID,
+            "local_account_id": f"uid.utid.{CUSTOMER_GUID}",
+            "username": "user_uid@partner.com",
+        }
+    ]
+    fake_msal.silent = lambda call: token_result()
+
+    user_context().for_tenant("customer").acquire_token([ARM_SCOPE])
+
+    assert fake_msal.calls[0].kwargs["account"] == home
 
 
 def test_sibling_never_prompts(fake_msal: FakeMsal) -> None:

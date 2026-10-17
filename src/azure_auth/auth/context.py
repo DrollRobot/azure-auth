@@ -24,7 +24,7 @@ from typing import Any, Self
 
 import msal
 from azure.core.credentials import AccessToken, AccessTokenInfo, TokenRequestOptions
-from msal import BrowserInteractionTimeoutError
+from msal import BrowserInteractionTimeoutError, TokenCache
 
 from azure_auth.auth import cng
 from azure_auth.auth.cache import CacheKind, build_cache
@@ -656,6 +656,41 @@ class AuthContext:
         _LOGGER.warning("Authentication broker unavailable; falling back to the browser")
         return False
 
+    def _accounts(self, app: Any) -> list[dict[str, Any]]:
+        """Find the user's cached accounts, each described by its home-tenant entry.
+
+        MSAL keeps one account entry per tenant the user has a token from, and
+        ``get_accounts`` merges them, keeping the username and account id of whichever entry
+        was saved last. Through the broker, a GDAP customer tenant's Exchange token is saved
+        under the username ``user_<object id>@<home domain>`` and the account id
+        ``<object id>.<home tenant>.<customer tenant>`` (measured 2026-10-16). MSAL's lookup by
+        username then finds nobody, and every later silent request fails, in every tenant.
+        The home-tenant entry keeps the real username, and its account id is the one the
+        broker answers for in every tenant. An account with no home-tenant entry, such as a
+        guest's, is left as MSAL describes it.
+
+        Args:
+            app: The MSAL application to look in.
+
+        Returns:
+            The accounts whose username is the context's, as ``acquire_token_silent`` takes
+            them.
+        """
+        homes = {
+            (entry.get("home_account_id"), entry.get("environment")): entry
+            for entry in self._cache.search(TokenCache.CredentialType.ACCOUNT)
+            if entry.get("realm") == str(entry.get("home_account_id") or "").rpartition(".")[2]
+        }
+        username = (self._username or "").lower()
+        accounts = []
+        for account in app.get_accounts():
+            home = homes.get((account.get("home_account_id"), account.get("environment")))
+            if home is not None:
+                account = {key: home.get(key) for key in account}
+            if str(account.get("username") or "").lower() == username:
+                accounts.append(account)
+        return accounts
+
     def _acquire_for_user(
         self,
         client_id: str,
@@ -680,7 +715,7 @@ class AuthContext:
         app = self._app(client_id, use_broker=use_broker)
         result: dict[str, Any] | None = None
         if not force_interactive:
-            accounts = app.get_accounts(username=self._username)
+            accounts = self._accounts(app)
             if len(accounts) > 1:
                 raise AccountSelectionRequired(
                     f"{len(accounts)} cached accounts match {self._username!r}"
