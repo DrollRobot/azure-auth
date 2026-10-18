@@ -1,0 +1,69 @@
+---
+base: develop
+title: feat(auth)!: replace is_sibling with home and give each thing one name
+---
+## Summary
+
+"Sibling context" and "root context" are not Microsoft terms, and several other things in the
+package had more than one name, or shared a name with something else. This PR gives each one
+a single plain name. It is a rename only: no behaviour changes, except the new `home`
+property, a clearer "never prompts" error, and one routing fix described below.
+
+**Public API**
+
+| Before | After |
+|---|---|
+| `auth.for_tenant(x)` | `auth.get_tenant_context(x)` |
+| `auth.is_sibling` | `auth.home is not auth` |
+| `login(force=True)` | `login(pick_account=True)` |
+| `AzureClient`, `AzureError` | `ArmClient`, `ArmError` |
+| `AuthContext(interactive_timeout=)` | `AuthContext(browser_timeout=)` |
+
+- `get_tenant_context(x)` returns a context for tenant `x` that reuses the existing sign-in.
+  The name now matches its cache, `_tenant_contexts`, and no longer reads like a loop.
+- `home` is the context the user signed in on. For a context you built yourself it is the
+  context itself; for one from `get_tenant_context()`, including one made from another
+  customer context, it points back to the one you built. `AsyncAuthContext.home` mirrors it.
+- The "never prompts" error now says to call `login()` on a client of `auth.home`.
+
+**Internal**
+
+- Clients store the context's async view as `_credential` (the Azure SDK's name, already used
+  by `KeyVaultClient`). The context's own secret or certificate is `_app_credential`, matching
+  its type.
+- The context's in-memory dict of fetched tokens is `_recent_tokens`, read by
+  `_recent_token()`, so "cache" only ever means the MSAL token cache.
+- `force_interactive` is `pick_account` throughout, and `_interactive_allowed` is
+  `_can_prompt`.
+
+**One routing fix.** The Exchange anchor-mailbox check now tests `auth.home is not auth`
+instead of whether the context may prompt. A home context with prompting switched off (as some
+live-test helpers do) now routes through the user's own mailbox, which is right for a user in
+their own tenant. Contexts from `get_tenant_context()` still route through the tenant's system
+mailbox.
+
+The guide, docstrings, tests and the generated blocking mirror are updated, and the CHANGELOG
+lists each breaking change under Unreleased.
+
+## Related Issues
+
+None.
+
+## Type of Change
+
+Breaking change: public names change, with no deprecation aliases.
+
+## How Has This Been Tested?
+
+- `uv run pytest -m "not live"`: 495 passed, 8 skipped. ruff, mypy and the sync-mirror check
+  are clean. New unit tests cover `home`: a directly built context is its own home, a context
+  from `get_tenant_context()` points at the original, a context made from a customer context
+  keeps the original home, and the async view's `home`.
+- Live, against the test tenant (`uv run --env-file .env pytest -rs -s`): 585 passed,
+  47 skipped, 1 failed. The failure is `test_app_flow_with_a_local_machine_certificate`: the
+  account running the tests has no read access to the `LocalMachine\My` certificate's private
+  key (`NTE_PERM`). It fails opening the key, before any request.
+- Live, against a second tenant with most service flags off: 537 passed, 96 skipped, including
+  the WAM cancel test.
+- Not run live: the GDAP tests (`AZURE_AUTH_TEST_GDAP` not set), so `get_tenant_context()` and
+  `home` against a real customer tenant have unit coverage only.
