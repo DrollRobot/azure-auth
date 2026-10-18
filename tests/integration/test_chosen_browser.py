@@ -40,6 +40,9 @@ TENANT = "11111111-1111-1111-1111-111111111111"
 USER = "admin@partner.com"
 SCOPE = "https://management.azure.com/.default"
 CLIENT_ID = "22222222-2222-2222-2222-222222222222"
+# A safety net only: each sign-in ends when the fake browser answers. Starting it can take
+# several seconds on a busy machine (measured up to 3.4 on Windows).
+SIGN_IN_TIMEOUT_SECONDS = 60
 
 
 class FakeEntra:
@@ -95,17 +98,20 @@ def entra(monkeypatch: pytest.MonkeyPatch) -> FakeEntra:
 
 
 def test_the_chosen_browser_answers_the_sign_in(entra: FakeEntra, tmp_path: Path) -> None:
-    record = tmp_path / "argv.json"
+    record = tmp_path / "record.json"
     browser = [sys.executable, "-I", fake_browser.__file__, "--record", str(record)]
     auth = AuthContext(
-        Tenant(TENANT, COMMERCIAL), username=USER, browser=browser, interactive_timeout=30
+        Tenant(TENANT, COMMERCIAL),
+        username=USER,
+        browser=browser,
+        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
 
     token = auth.acquire_token([SCOPE], client_id=CLIENT_ID)
 
     assert token.token == "chosen-browser-token"
     # The registered program was launched with its own arguments and the address last.
-    argv = json.loads(record.read_text(encoding="utf-8"))
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
     assert argv[:2] == ["--record", str(record)]
     address = urlsplit(argv[2])
     query = parse_qs(address.query)
@@ -122,19 +128,21 @@ def test_the_chosen_browser_answers_the_sign_in(entra: FakeEntra, tmp_path: Path
 
 
 def test_an_answer_with_the_wrong_state_is_refused(entra: FakeEntra, tmp_path: Path) -> None:
-    # A forged answer to the listener must not be redeemed. The receiver ignores it and keeps
-    # waiting, so the sign-in ends at the timeout.
-    record = tmp_path / "argv.json"
+    # A forged answer to the listener must not be redeemed. The receiver refuses it and keeps
+    # waiting; the person's decline that follows, with the right state, then ends the sign-in.
+    # Ending it that way, not by a timeout, keeps the test independent of how long the fake
+    # browser takes to start.
+    record = tmp_path / "record.json"
     browser = [sys.executable, "-I", fake_browser.__file__, "--record", str(record)]
     auth = AuthContext(
         Tenant(TENANT, COMMERCIAL),
         username=USER,
         browser=[*browser, "--wrong-state"],
-        interactive_timeout=3,
+        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
 
-    with pytest.raises(AuthError, match="not completed within 3 seconds"):
+    with pytest.raises(AuthError, match="access_denied"):
         auth.acquire_token([SCOPE], client_id=CLIENT_ID)
 
-    assert record.exists(), "the browser was never launched"
+    assert json.loads(record.read_text(encoding="utf-8"))["forged_status"] == 400
     assert entra.token_requests == []
