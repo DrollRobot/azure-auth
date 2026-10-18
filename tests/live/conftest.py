@@ -41,6 +41,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -53,6 +54,7 @@ from tests.live.support import (
     KEEPS_CONSENT,
     TENANT,
     USERNAME,
+    cancel_alarm,
     live_user_auth,
     restore_baseline,
 )
@@ -173,6 +175,28 @@ def _baseline_after_state_changes(
     disposable = bool(request.getfixturevalue("_remote_disposable_confirmed"))
     yield
     restore_baseline(_live_cache_path, may_remove=lambda: disposable)
+
+
+@pytest.fixture(autouse=True)
+def _alarm_ends_with_the_sign_in(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Stop a forced sign-in's alarm once the sign-in returns, and after every test.
+
+    ``walkthrough`` prints its steps at once and sets the alarm for later, so a person who
+    has already answered the window must not be called. ``AuthContext._interactive`` is where
+    every sign-in window opens and returns: the broker's, the default browser's and a chosen
+    browser's.
+    """
+    interactive = AuthContext._interactive
+
+    def answered(self: AuthContext, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return interactive(self, *args, **kwargs)
+        finally:
+            cancel_alarm()
+
+    monkeypatch.setattr(AuthContext, "_interactive", answered)
+    yield
+    cancel_alarm()
 
 
 @pytest.fixture(scope="module")

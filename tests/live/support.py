@@ -146,6 +146,14 @@ PROPAGATION_POLL_SECONDS = 10.0
 # somebody does not. Override with AZURE_AUTH_TEST_PROMPT_ALARM_SECONDS.
 PROMPT_ALARM_SECONDS = float(os.environ.get("AZURE_AUTH_TEST_PROMPT_ALARM_SECONDS", "5"))
 
+# How long a forced sign-in waits for the person before the alarm sounds. Its steps print at
+# once, but its window takes a few seconds to open, and an alarm before then calls the person
+# to nothing.
+FORCED_SIGN_IN_ALARM_SECONDS = 10.0
+
+# The alarm the last forced sign-in's walkthrough set, until that sign-in returns.
+_forced_alarm: threading.Timer | None = None
+
 # How long a test's browser sign-in waits before it fails. Enough to type a password and
 # approve MFA; half the package default, so a sign-in that can never finish -- stopped at a
 # Conditional Access block, which never returns to the test -- costs a minute, not two.
@@ -593,7 +601,7 @@ def sign_in_step(window: Literal["WAM", "browser"], user: str = USERNAME) -> str
 
 
 def walkthrough(*steps: str) -> None:
-    """Tell the person at the desktop what they are about to see, and sound the alarm.
+    """Tell the person at the desktop what they are about to see, and set the alarm.
 
     An interactive test blocks on a browser window, and a window that is not understood gets
     answered wrongly: clicking "Sign in with that account" on a "Need admin approval" page, or
@@ -610,6 +618,44 @@ def walkthrough(*steps: str) -> None:
     Call this directly only when somebody will certainly have to act, such as a second user
     signing in. Otherwise use :func:`walkthrough_if_waiting`.
 
+    The steps print at once. The alarm sounds after ``FORCED_SIGN_IN_ALARM_SECONDS``, unless
+    the sign-in has returned by then (:func:`cancel_alarm`).
+
+    Args:
+        *steps: The instructions, in order.
+    """
+    global _forced_alarm
+    cancel_alarm()
+    _print_steps(*steps)
+    _forced_alarm = threading.Timer(FORCED_SIGN_IN_ALARM_SECONDS, alert_user.main_for_tests)
+    _forced_alarm.daemon = True
+    _forced_alarm.start()
+
+
+def cancel_alarm() -> None:
+    """Stop the alarm :func:`walkthrough` set, so a person who has answered is not called.
+
+    ``tests/live/conftest.py`` calls this whenever a sign-in returns, and after every test.
+    """
+    global _forced_alarm
+    if _forced_alarm is not None:
+        _forced_alarm.cancel()
+        _forced_alarm = None
+
+
+def _call_person(*steps: str) -> None:
+    """Print the steps and sound the alarm at once, for a sign-in still waiting.
+
+    Args:
+        *steps: The instructions, in order.
+    """
+    _print_steps(*steps)
+    alert_user.main_for_tests()
+
+
+def _print_steps(*steps: str) -> None:
+    """Print a walkthrough's steps.
+
     Needs ``pytest -s``; without it pytest captures this and the person sees nothing.
 
     Args:
@@ -620,7 +666,6 @@ def walkthrough(*steps: str) -> None:
     for number, step in enumerate(steps, 1):
         print(f"    {number}. {step}")
     print(f"\n{line}\n", flush=True)
-    alert_user.main_for_tests()
 
 
 @contextlib.contextmanager
@@ -630,8 +675,8 @@ def walkthrough_if_waiting(*steps: str) -> Iterator[None]:
     Wrap a sign-in that is not forced but may still open a window: the baseline restore's,
     and every test's first sign-in (:func:`ensure_token`). A browser that is still signed in
     answers it by itself, and nobody needs calling for that. So the sign-in is timed, and
-    only when it is still waiting after the delay does :func:`walkthrough` print the steps and
-    sound the alarm. An alarm on every test would teach the person to ignore it. A forced
+    only when it is still waiting after the delay are the steps printed and the alarm
+    sounded. An alarm on every test would teach the person to ignore it. A forced
     sign-in always waits for the person at the account picker, so it calls
     :func:`walkthrough` before it starts.
 
@@ -643,7 +688,7 @@ def walkthrough_if_waiting(*steps: str) -> Iterator[None]:
     """
     # A timer thread, so it fires whether the sign-in blocks this thread (the blocking
     # client) or a worker thread (the asynchronous clients hand MSAL to asyncio.to_thread).
-    timer = threading.Timer(PROMPT_ALARM_SECONDS, walkthrough, args=steps)
+    timer = threading.Timer(PROMPT_ALARM_SECONDS, _call_person, args=steps)
     timer.daemon = True
     timer.start()
     try:

@@ -20,6 +20,7 @@ import pytest
 from azure_auth import AuthContext, ExchangeClient, Tenant
 from azure_auth.clouds import COMMERCIAL
 from azure_auth.sync import ExchangeClient as BlockingExchangeClient
+from tests import alert_user
 from tests.fakes import FakeMsal, token_result
 from tests.http import Recorder, fake_jwt, ok
 from tests.live import support
@@ -27,11 +28,13 @@ from tests.live.support import (
     BASELINE_SCOPES,
     ReadOnlyCmdlets,
     _holds_baseline,
+    cancel_alarm,
     is_test_user,
     missing_scopes,
     token_claims,
     token_scopes,
     token_user,
+    walkthrough,
 )
 
 pytestmark = [pytest.mark.unit]
@@ -98,6 +101,38 @@ def test_the_configured_user_is_recognised_as_a_guest(monkeypatch: pytest.Monkey
     assert is_test_user("someone_outlook.com#EXT#@someoneoutlook.onmicrosoft.com")
     assert not is_test_user("other_outlook.com#EXT#@someoneoutlook.onmicrosoft.com")
     assert not is_test_user("someone_outlook.com@someoneoutlook.onmicrosoft.com")
+
+
+@pytest.fixture
+def alarms(monkeypatch: pytest.MonkeyPatch) -> list[None]:
+    """Record the alarm instead of sounding it, and make a forced sign-in's wait short."""
+    sounded: list[None] = []
+    monkeypatch.setattr(alert_user, "main_for_tests", lambda: sounded.append(None))
+    monkeypatch.setattr(support, "FORCED_SIGN_IN_ALARM_SECONDS", 0.01)
+    return sounded
+
+
+def test_a_forced_sign_in_prints_its_steps_at_once_and_sounds_the_alarm_later(
+    alarms: list[None], capsys: pytest.CaptureFixture[str]
+) -> None:
+    walkthrough("In the browser window, sign in with X.")
+    assert "1. In the browser window, sign in with X." in capsys.readouterr().out
+    alarm = support._forced_alarm
+    assert alarm is not None
+    alarm.join(5)
+    assert alarms == [None]
+
+
+def test_a_sign_in_that_returns_in_time_sounds_no_alarm(
+    alarms: list[None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(support, "FORCED_SIGN_IN_ALARM_SECONDS", 5.0)
+    walkthrough("In the browser window, sign in with X.")
+    alarm = support._forced_alarm
+    cancel_alarm()
+    assert alarm is not None
+    alarm.join(5)
+    assert alarms == []
 
 
 def test_the_baseline_has_to_be_in_a_tenant_wide_grant_for_graph() -> None:
