@@ -2,6 +2,8 @@
 # ignore any .local files
 *.local*
 
+*.env*
+!.env.example
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
