@@ -1,0 +1,65 @@
+---
+base: develop
+title: "feat(auth): let a context sign in with a browser other than the default"
+---
+## Summary
+
+Browser sign-ins always opened the system default browser. One account needs to sign in with
+Edge while the others in the same process keep the default, and on Windows MSAL's
+`acquire_token_interactive` can't be told which browser to use. The `BROWSER` environment
+variable works, but for the whole process.
+
+This adds `AuthContext(browser=...)`. It takes a program (a name on `PATH` or, as the docs
+recommend, an absolute path) or a list of the program and its arguments, such as
+`[edge_path, "--profile-directory=Profile 8"]`. When it's set, the context runs MSAL's
+sign-in steps itself: `initiate_auth_code_flow`, then MSAL's `AuthCodeReceiver` opening the
+address in the registered browser, then `acquire_token_by_auth_code_flow`. The token cache is
+written exactly as before. Without `browser`, nothing changes.
+
+`AuthCodeReceiver` lives in `msal.oauth2cli.authcode` and isn't exported from `msal`. It's
+the only way to choose a browser per sign-in on Windows, so the reasoning is recorded in
+`.local/DECISIONS.md`, and an integration test runs it against the installed msal so that an
+upgrade that changes it fails loudly.
+
+The browser is registered with Python's `webbrowser` once per process, under a name made from
+a hash of the command, and not as preferred, so other contexts keep the default. A broker
+that falls back to the browser uses the chosen one, siblings from `for_tenant` inherit it, and
+app flows reject it.
+
+The PR also updates the commit command in `AGENTS.COMMITTING.md` to check the signing key
+with `ssh-add -T` before committing, so a commit without the key fails at once instead of
+after the pre-commit hooks.
+
+## Related Issues
+
+None.
+
+## Type of Change
+
+- [ ] Bug fix (non-breaking change that fixes an issue)
+- [x] New feature (non-breaking change that adds functionality)
+- [ ] Breaking change (fix or feature that would change existing behavior)
+- [x] Documentation update
+- [ ] Refactor / tooling (no functional change)
+
+## How Has This Been Tested?
+
+- Unit tests in `tests/unit/test_context.py` cover the auth code path and what's passed to
+  it, arguments, `Path` input, registering once, timeout, a failed sign-in, refusing someone
+  else, broker fallback, siblings, and rejected inputs.
+- `tests/integration/test_chosen_browser.py` runs the real MSAL and a real launched stand-in
+  browser (`tests/integration/fake_browser.py`): the program gets its arguments with the
+  address last, the code is redeemed, and an answer with the wrong state is refused.
+- `tests/live/test_sign_in.py::test_interactive_login_in_a_chosen_browser` passed against a
+  real tenant, opening in Edge, both plain and with `--profile-directory`. It runs when
+  `AZURE_AUTH_TEST_BROWSER` is set (see `.env.example`).
+- The pre-push suite (510 tests), ruff and mypy pass.
+
+## Checklist
+
+- [x] My code follows the project's style guidelines
+- [x] I have performed a self-review of my changes
+- [x] I have commented my code where non-obvious
+- [x] I have updated documentation as needed
+- [x] My changes generate no new warnings
+- [x] New and existing tests pass locally
