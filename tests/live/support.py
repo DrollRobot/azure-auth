@@ -707,6 +707,53 @@ def token_user(token: str) -> str | None:
     return name.removeprefix(provider) if name.startswith(provider) else name or None
 
 
+def is_test_user(name: str | None) -> bool:
+    """Tell whether a user principal name is the configured user's, whatever its case.
+
+    A member of the tenant is named ``USERNAME`` there. A guest, such as the personal
+    Microsoft account that created the tenant, is named in Entra's guest format instead:
+    ``someone_outlook.com#EXT#@contoso.onmicrosoft.com`` for ``someone@outlook.com``.
+
+    Args:
+        name: A user principal name, from a token or a service, or ``None``.
+
+    Returns:
+        ``True`` when it names the configured user, as a member or as a guest.
+    """
+    name = (name or "").lower()
+    username = USERNAME.lower()
+    return name == username or name.startswith(f"{username.replace('@', '_')}#ext#@")
+
+
+@functools.cache
+def tenant_domain(cache_path: Path) -> str:
+    """Return the verified domain the configured user is named under in the tenant.
+
+    For a member that is ``USERNAME``'s own domain. A guest is named under one of the
+    tenant's own domains (see :func:`is_test_user`), and ``USERNAME``'s domain then belongs
+    to another tenant or to none. Read once per run from Graph's ``/me``, as Azure
+    PowerShell, which Graph accepts in every tenant without consent.
+
+    Args:
+        cache_path: The shared disk cache.
+
+    Returns:
+        The domain, lower case.
+    """
+    auth = live_user_auth(cache_path)
+    graph = live_cloud().graph
+    scopes = [f"{graph}/.default"]
+    ensure_token(auth, scopes)
+    token = auth.acquire_token(scopes)
+    me = httpx.get(
+        f"{graph}/v1.0/me",
+        params={"$select": "userPrincipalName"},
+        headers={"Authorization": f"Bearer {token.token}"},
+    )
+    me.raise_for_status()
+    return str(me.json()["userPrincipalName"]).rsplit("@", 1)[-1].lower()
+
+
 def missing_scopes(token: str, required: Iterable[str]) -> set[str]:
     """Return the scopes in ``required`` that ``token`` does not carry.
 

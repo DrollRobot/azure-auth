@@ -31,6 +31,7 @@ from tests.live.support import (
     cached_user_auth,
     ensure_sign_in,
     expire_cached_access_tokens,
+    is_test_user,
     live_user_auth,
     needs_arm_or_keyvault,
     needs_browser,
@@ -74,7 +75,7 @@ async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
     async with GraphClient(auth, scopes=BASELINE_SCOPES) as graph:
         await graph.login(pick_account=True)
         me = await graph.get("/me", params={"$select": "userPrincipalName"})
-    assert me["userPrincipalName"].lower() == USERNAME.lower()
+    assert is_test_user(me["userPrincipalName"])
 
 
 @needs_user
@@ -116,7 +117,7 @@ async def test_interactive_login_to_another_first_party_client(
     cached = cached_user_auth(cache_path)
     token = await cached.aio.acquire_token(client.scopes, client_id=client.client_id)
     assert token.token
-    assert (token_user(token.token) or "").lower() == USERNAME.lower()
+    assert is_test_user(token_user(token.token))
     assert token_claims(token.token)["aud"] == client.resource
 
 
@@ -147,7 +148,7 @@ async def test_interactive_login_in_a_chosen_browser() -> None:
         await client.login(pick_account=True)
         token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
 
-    assert (token_user(token.token) or "").lower() == USERNAME.lower()
+    assert is_test_user(token_user(token.token))
     assert token_claims(token.token)["aud"] == client.resource
 
 

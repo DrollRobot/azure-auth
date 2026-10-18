@@ -15,7 +15,13 @@ import pytest
 
 from azure_auth import AuthContext
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
-from tests.live.support import USERNAME, ensure_token, live_cloud, needs_user, token_claims
+from tests.live.support import (
+    ensure_token,
+    is_test_user,
+    live_cloud,
+    needs_user,
+    token_claims,
+)
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
 
@@ -56,7 +62,7 @@ async def test_get_token_and_get_token_info_hand_the_sdk_one_usable_token(
             headers={"Authorization": f"Bearer {token.token}"},
         )
     assert me.status_code == 200, me.text
-    assert me.json()["userPrincipalName"].lower() == USERNAME.lower()
+    assert is_test_user(me.json()["userPrincipalName"])
 
     info = user_auth.get_token_info(
         scope, options={"tenant_id": user_auth.tenant.id, "enable_cae": True}

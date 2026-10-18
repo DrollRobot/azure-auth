@@ -19,12 +19,13 @@ import pytest
 from azure_auth import AuthContext, ConsentRequired, GraphClient, GraphError, InteractionRequired
 from azure_auth.sync import GraphClient as BlockingGraphClient
 from tests.live.support import (
-    USERNAME,
     cached_user_auth,
     ensure_sign_in,
+    is_test_user,
     live_user_auth,
     needs_graph,
     needs_user,
+    tenant_domain,
     token_scopes,
 )
 
@@ -167,7 +168,7 @@ async def test_post_sends_a_batch_and_the_answers_come_back_in_order(
     assert responses[0]["status"] == 200
     assert responses[0]["body"]["id"]
     assert responses[1]["status"] == 200
-    assert responses[1]["body"]["userPrincipalName"].lower() == USERNAME.lower()
+    assert is_test_user(responses[1]["body"]["userPrincipalName"])
     assert responses[2]["status"] >= 400, "a request for a user that cannot exist succeeded"
 
 
@@ -323,7 +324,7 @@ def test_the_blocking_client_calls_graph(cache_path: Path) -> None:
     with BlockingGraphClient(live_user_auth(cache_path), scopes=["User.Read"]) as graph:
         ensure_sign_in(graph)
         me = graph.get("/me", params={"$select": "userPrincipalName"})
-    assert me["userPrincipalName"].lower() == USERNAME.lower()
+    assert is_test_user(me["userPrincipalName"])
 
 
 async def _once_replicated(call: Callable[[], Awaitable[Any]]) -> tuple[Any, float]:
@@ -350,7 +351,9 @@ async def _once_replicated(call: Callable[[], Awaitable[Any]]) -> tuple[Any, flo
 
 @needs_user
 @pytest.mark.destructive_remote
-async def test_graph_creates_changes_and_removes_an_object(user_auth: AuthContext) -> None:
+async def test_graph_creates_changes_and_removes_an_object(
+    user_auth: AuthContext, cache_path: Path
+) -> None:
     """``post``, ``patch``, ``put`` and ``delete`` change the real directory, not only ``$batch``.
 
     No live call had ever been made with ``patch``, ``put`` or ``delete``, and ``post`` only
@@ -383,8 +386,8 @@ async def test_graph_creates_changes_and_removes_an_object(user_auth: AuthContex
                 "accountEnabled": False,
                 "displayName": name,
                 "mailNickname": nickname,
-                # The signed-in user's own domain is verified in the tenant by definition.
-                "userPrincipalName": f"{nickname}@{USERNAME.partition('@')[2]}",
+                # The domain the signed-in user is named under is verified in the tenant.
+                "userPrincipalName": f"{nickname}@{tenant_domain(cache_path)}",
                 "passwordProfile": {
                     "password": secrets.token_urlsafe(32),
                     "forceChangePasswordNextSignIn": True,

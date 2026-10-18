@@ -45,6 +45,7 @@ from tests.live.support import (
     _flag,
     ensure_sign_in,
     ensure_token,
+    is_test_user,
     needs_broker,
     needs_exchange,
     needs_gdap_tenant,
@@ -78,7 +79,7 @@ async def read_graph(client: GraphClient) -> None:
         client: A Graph client signed in through the broker.
     """
     me = await client.get("/me", params={"$select": "userPrincipalName"})
-    assert me["userPrincipalName"].lower() == USERNAME.lower()
+    assert is_test_user(me["userPrincipalName"])
 
 
 async def read_exchange(client: ExchangeClient) -> None:
@@ -92,7 +93,7 @@ async def read_exchange(client: ExchangeClient) -> None:
     """
     mailbox = await client.run("Get-Mailbox", Identity=USERNAME)
     assert len(mailbox) == 1
-    assert mailbox[0]["UserPrincipalName"].lower() == USERNAME.lower()
+    assert is_test_user(mailbox[0]["UserPrincipalName"])
 
 
 async def read_ipps(client: IppsClient) -> None:
@@ -224,7 +225,7 @@ async def test_a_broker_sign_in_is_the_brokers(
         token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
         await read(client)
 
-    assert (token_user(token.token) or "").lower() == USERNAME.lower()
+    assert is_test_user(token_user(token.token))
     assert token_claims(token.token)["aud"] == client.resource
     assert_the_broker_holds_the_sign_in(broker_cache_path)
 
@@ -254,7 +255,7 @@ async def test_the_broker_renews_a_token_without_prompting(
         )
         await read(client)
 
-    assert (token_user(token.token) or "").lower() == USERNAME.lower()
+    assert is_test_user(token_user(token.token))
     assert token_claims(token.token)["aud"] == client.resource
     assert_the_broker_holds_the_sign_in(broker_cache_path)
 
@@ -363,7 +364,7 @@ async def test_the_broker_signs_in_with_nobody_at_the_desk(
         token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
         await read(client)
 
-    assert (token_user(token.token) or "").lower() == USERNAME.lower()
+    assert is_test_user(token_user(token.token))
     assert token_claims(token.token)["aud"] == client.resource
     assert_the_broker_holds_the_sign_in(cache_path)
 

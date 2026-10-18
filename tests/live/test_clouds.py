@@ -61,6 +61,7 @@ from tests.live.support import (
     needs_graph,
     needs_user,
     sign_in_step,
+    tenant_domain,
     token_claims,
     walkthrough,
 )
@@ -355,9 +356,9 @@ def test_an_app_sign_in_reaches_its_clouds_token_server(
 
 
 def discovered_auth(cache_path: Path) -> AuthContext:
-    """A context built by a caller who knows only the user: the tenant is their domain."""
+    """A context built by a caller who knows only the user: the tenant is their domain in it."""
     return AuthContext(
-        USERNAME.rsplit("@", 1)[-1],
+        tenant_domain(cache_path),
         username=USERNAME,
         cache="disk",
         cache_path=cache_path,
@@ -424,9 +425,11 @@ async def test_a_user_given_the_wrong_cloud_is_refused() -> None:
 
 
 @needs_user
-def test_the_configured_tenant_is_the_same_by_id_and_by_the_users_domain() -> None:
+def test_the_configured_tenant_is_the_same_by_id_and_by_the_users_domain(
+    cache_path: Path,
+) -> None:
     by_id = Tenant.lookup(TENANT)
-    by_domain = Tenant.lookup(USERNAME.rsplit("@", 1)[-1])
+    by_domain = Tenant.lookup(tenant_domain(cache_path))
 
     assert by_id == by_domain
     assert by_id.cloud == live_cloud()
@@ -450,7 +453,7 @@ async def test_a_discovered_context_reaches_graph_in_its_cloud(cache_path: Path)
     assert [item["id"] for item in organization] == [tenant_guid]
     # The context holds the tenant the token is really for, and the domain it was given.
     assert auth.tenant.id == tenant_guid
-    assert auth.tenant.domain == USERNAME.rsplit("@", 1)[-1].lower()
+    assert auth.tenant.domain == tenant_domain(cache_path)
     assert auth.get_tenant_context(tenant_guid) is auth
 
 

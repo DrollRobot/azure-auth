@@ -22,10 +22,12 @@ from azure_auth.clouds import COMMERCIAL
 from azure_auth.sync import ExchangeClient as BlockingExchangeClient
 from tests.fakes import FakeMsal, token_result
 from tests.http import Recorder, fake_jwt, ok
+from tests.live import support
 from tests.live.support import (
     BASELINE_SCOPES,
     ReadOnlyCmdlets,
     _holds_baseline,
+    is_test_user,
     missing_scopes,
     token_claims,
     token_scopes,
@@ -82,6 +84,20 @@ def test_token_user_takes_the_v2_claim_first_and_the_v1_claims_after() -> None:
     assert token_user(fake_jwt(upn="b@x.com")) == "b@x.com"
     assert token_user(fake_jwt(unique_name="c@x.com")) == "c@x.com"
     assert token_user(fake_jwt(sub="nobody")) is None
+
+
+def test_the_configured_user_is_recognised_as_a_member(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(support, "USERNAME", "Admin@Contoso.com")
+    assert is_test_user("admin@contoso.com")
+    assert not is_test_user("other@contoso.com")
+    assert not is_test_user(None)
+
+
+def test_the_configured_user_is_recognised_as_a_guest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(support, "USERNAME", "someone@outlook.com")
+    assert is_test_user("someone_outlook.com#EXT#@someoneoutlook.onmicrosoft.com")
+    assert not is_test_user("other_outlook.com#EXT#@someoneoutlook.onmicrosoft.com")
+    assert not is_test_user("someone_outlook.com@someoneoutlook.onmicrosoft.com")
 
 
 def test_the_baseline_has_to_be_in_a_tenant_wide_grant_for_graph() -> None:

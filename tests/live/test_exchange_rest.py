@@ -27,6 +27,7 @@ from tests.live.support import (
     USERNAME,
     Recording,
     ensure_sign_in,
+    is_test_user,
     live_app_auth,
     live_user_auth,
     needs_app,
@@ -71,7 +72,7 @@ def names(user: str) -> bool:
     Returns:
         ``True`` for the user's UPN.
     """
-    return user.lower() == USERNAME.lower()
+    return is_test_user(user)
 
 
 @needs_user

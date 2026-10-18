@@ -30,10 +30,12 @@ from tests.live.support import (
     USERNAME,
     Recording,
     ensure_sign_in,
+    is_test_user,
     live_user_auth,
     needs_exchange,
     needs_ipps,
     needs_user,
+    tenant_domain,
     token_claims,
     token_scopes,
     token_user,
@@ -69,14 +71,14 @@ async def test_exchange_runs_a_cmdlet_as_the_signed_in_user(user_auth: AuthConte
 
     claims = token_claims(token.token)
     assert claims["aud"] == user_auth.tenant.cloud.exchange
-    assert (token_user(token.token) or "").lower() == USERNAME.lower()
+    assert is_test_user(token_user(token.token))
     assert "AdminApi.AccessAsUser.All" in token_scopes(token.token)
     print(f"exchange token scopes: {' '.join(sorted(token_scopes(token.token)))}")
 
     assert len(config) == 1
     assert config[0]["Name"]
     assert len(mailbox) == 1
-    assert mailbox[0]["UserPrincipalName"].lower() == USERNAME.lower()
+    assert is_test_user(mailbox[0]["UserPrincipalName"])
     assert exchange.last_warnings == []
 
 
@@ -198,12 +200,12 @@ async def test_a_domain_name_works_as_the_tenant(cache_path: Path) -> None:
     """A context given a verified domain still addresses ``InvokeCommand`` by tenant GUID.
 
     The endpoint wants the GUID in its path, and the client reads it from the token's
-    ``tid`` claim rather than trusting what the context was given. The user's own UPN domain
-    is a verified domain of the tenant, so it serves as the name. No prompt: MSAL keys the
+    ``tid`` claim rather than trusting what the context was given. The domain the user is
+    named under in the tenant is verified there, so it serves as the name. No prompt: MSAL keys the
     cache by the tenant id the authority resolves to, so the existing sign-in answers
     (measured 2026-09-25).
     """
-    domain = USERNAME.rsplit("@", 1)[1]
+    domain = tenant_domain(cache_path)
     recording = Recording()
     async with ExchangeClient(
         live_user_auth(cache_path, tenant=domain), transport=recording
