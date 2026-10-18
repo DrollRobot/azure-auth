@@ -16,7 +16,9 @@ The per-customer tests run once for every tenant in ``AZURE_AUTH_TEST_GDAP_TENAN
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -31,6 +33,7 @@ from azure_auth import (
     IppsClient,
 )
 from azure_auth.clients.invoke_command import SYSTEM_MAILBOX
+from azure_auth.constants import GRAPH_APP_ID
 from azure_auth.sync import ExchangeClient as BlockingExchangeClient
 from azure_auth.sync import GraphClient as BlockingGraphClient
 from tests.live.support import (
@@ -49,9 +52,6 @@ from tests.live.support import (
 )
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio]
-
-# Microsoft Graph's own application id; its service principal exists in every tenant.
-GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
 
 # What a customer may have granted the application, from the least to the most, and the one
 # small read each grant allows. A customer's Graph test runs the first read whose scope the
@@ -180,6 +180,40 @@ async def test_gdap_reads_a_customers_directory_without_prompting(
         assert isinstance(answer["value"], list)
         if path == "/organization":
             assert answer["value"][0]["id"] == sibling.tenant.id
+
+
+@needs_user
+@needs_gdap_tenant
+@each_customer
+async def test_gdap_names_what_a_customer_has_not_granted(
+    user_auth: AuthContext, tenant: str
+) -> None:
+    """A sibling asking for a scope the customer has not granted is told what is missing.
+
+    Read-only: the client asks silently for ``.default``, compares, and raises
+    ``ConsentRequired`` without asking Entra for the missing scope. The scope is the first of
+    a few read-only ones that the customer's ``granted_scopes()`` lacks.
+    """
+    async with GraphClient(user_auth, scopes=GDAP_SCOPES) as home:
+        ensure_sign_in(home)
+    sibling = user_auth.for_tenant(tenant)
+
+    async with GraphClient(sibling) as default:
+        granted = await default.granted_scopes()
+    held = {scope.lower() for scope in granted}
+    candidates = ["Sites.Read.All", "Agreement.Read.All", "PeopleSettings.Read.All"]
+    scope = next((name for name in candidates if name.lower() not in held), None)
+    if scope is None:
+        pytest.skip(f"{tenant} has granted every candidate scope")
+
+    with pytest.raises(ConsentRequired) as caught:
+        async with GraphClient(sibling, scopes=[scope]) as graph:
+            await graph.get("/organization", params={"$select": "id"})
+
+    print(f"GDAP check {tenant}: {len(granted)} granted; refused {scope}: {caught.value}")
+    assert caught.value.missing == (scope,)
+    assert set(caught.value.granted) == set(granted)
+    assert caught.value.tenant_id == sibling.tenant.id
 
 
 @needs_user
@@ -392,3 +426,98 @@ def test_the_disk_cache_reaches_customer_tenants_without_prompting(cache_path: P
         reached.append(tenant)
     print(f"GDAP from the disk cache: {len(reached)} of {len(GDAP_TENANTS)} customers reached")
     assert reached, "no customer tenant could be reached from the cache"
+
+
+# The scope the one writing test adds and removes again: read-only, and one no customer is
+# expected to have granted.
+GRANT_TEST_SCOPE = "Sites.Read.All"
+
+
+async def tenant_wide_grant(graph: GraphClient) -> dict[str, Any] | None:
+    """Return the application's tenant-wide Graph grant in the client's tenant, if any.
+
+    Args:
+        graph: A client whose scopes the tenant has granted, so a ``.default`` one.
+
+    Returns:
+        The ``AllPrincipals`` grant whose resource is Graph, or ``None``.
+    """
+    graph_principal = await graph.get_all(
+        "/servicePrincipals", params={"$filter": f"appId eq '{GRAPH_APP_ID}'", "$select": "id"}
+    )
+    own_principal = await graph.get_all(
+        "/servicePrincipals", params={"$filter": f"appId eq '{graph.client_id}'", "$select": "id"}
+    )
+    grants = await graph.get_all(
+        "/oauth2PermissionGrants", params={"$filter": f"clientId eq '{own_principal[0]['id']}'"}
+    )
+    return next(
+        (
+            dict(grant)
+            for grant in grants
+            if grant.get("consentType") == "AllPrincipals"
+            and grant.get("resourceId") == graph_principal[0]["id"]
+        ),
+        None,
+    )
+
+
+@needs_user
+@needs_gdap_tenant
+@pytest.mark.grant_when_possible
+async def test_grant_when_possible_adds_a_scope_in_a_customer_tenant(
+    user_auth: AuthContext,
+) -> None:
+    """``grant_when_possible`` adds a refused scope to the application's grant and gets a token.
+
+    The one test in this module that changes a customer tenant, which is why it runs only
+    when ``--grant-when-possible`` is passed on the command line, every time, with no
+    environment variable standing in for it, and not under the suite's ``destructive_remote``
+    gate, whose check looks at the home tenant. It takes the
+    first configured customer whose token carries ``DelegatedPermissionGrant.ReadWrite.All``
+    and whose grant lacks ``Sites.Read.All``, asks a client for that scope with
+    ``grant_when_possible`` on, checks the token it ends up with carries the scope, and puts
+    the grant back as it was, pass or fail. Measured 2026-10-17: Entra honours the change
+    after about a minute.
+    """
+    async with GraphClient(user_auth, scopes=GDAP_SCOPES) as home:
+        ensure_sign_in(home)
+
+    for tenant in GDAP_TENANTS:
+        sibling = user_auth.for_tenant(tenant)
+        async with GraphClient(sibling) as default:
+            try:
+                held = await sibling.aio.acquire_token(default.scopes, client_id=default.client_id)
+            except ConsentRequired:
+                continue
+            scp = {scope.lower() for scope in str(token_claims(held.token).get("scp", "")).split()}
+            if "delegatedpermissiongrant.readwrite.all" not in scp:
+                continue
+            grant = await tenant_wide_grant(default)
+        if grant is None:
+            continue
+        before = str(grant["scope"])
+        if GRANT_TEST_SCOPE.lower() not in {scope.lower() for scope in before.split()}:
+            break
+    else:
+        pytest.skip(
+            "no configured customer grants DelegatedPermissionGrant.ReadWrite.All and lacks "
+            f"{GRANT_TEST_SCOPE}"
+        )
+
+    print(f"GDAP grant {tenant}: adding {GRANT_TEST_SCOPE} to a grant of {len(before.split())}")
+    started = time.monotonic()
+    try:
+        async with GraphClient(
+            sibling, scopes=[GRANT_TEST_SCOPE], grant_when_possible=True
+        ) as graph:
+            await graph.login()
+            token = await sibling.aio.acquire_token(graph.scopes, client_id=graph.client_id)
+        claims = token_claims(token.token)
+        print(f"GDAP grant {tenant}: token carries it after {time.monotonic() - started:.0f}s")
+        assert claims["tid"] == sibling.tenant.id
+        assert GRANT_TEST_SCOPE.lower() in {scope.lower() for scope in str(claims["scp"]).split()}
+    finally:
+        async with GraphClient(sibling) as default:
+            await default.patch(f"/oauth2PermissionGrants/{grant['id']}", {"scope": before})
+        print(f"GDAP grant {tenant}: grant restored to {len(before.split())} scopes")

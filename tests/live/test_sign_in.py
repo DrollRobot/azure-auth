@@ -29,6 +29,9 @@ from tests.live.support import (
     TENANT,
     USERNAME,
     cached_user_auth,
+    ensure_sign_in,
+    expire_cached_access_tokens,
+    live_user_auth,
     needs_arm_or_keyvault,
     needs_browser,
     needs_exchange_sign_in,
@@ -194,6 +197,42 @@ async def test_signing_in_as_somebody_else_is_refused(broker: bool) -> None:
     assert not isinstance(caught.value, BrokerUnavailable)
     assert f"signed in as '{USERNAME.lower()}'" in message.lower()
     assert nobody in message
+
+
+@needs_user
+@needs_graph
+@pytest.mark.interactive
+async def test_a_signed_in_context_missing_a_scope_reaches_the_consent_screen(
+    cache_path: Path,
+) -> None:
+    """A context that may prompt, already signed in, gets Entra's consent screen for a new scope.
+
+    The Graph client checks ``.default`` first and finds ``CANCEL_SCOPE`` missing. Because
+    this context may prompt, it goes on to the sign-in instead of raising its own
+    ``ConsentRequired``. Pressing Cancel proves the screen opened: Entra answers AADSTS65004,
+    which only the consent screen produces, while the check's own refusal names no AADSTS
+    code and lists what is missing. Nothing is granted.
+
+    The cached access tokens are expired first. A token keeps the scopes it was issued with
+    for its whole lifetime, so one issued before the baseline took a scope out still carries
+    it, and MSAL would answer the request from that token without asking Entra (seen
+    2026-10-18: no window, a token carrying ``CANCEL_SCOPE``). The refresh token stays.
+    """
+    expire_cached_access_tokens(cache_path)
+    auth = live_user_auth(cache_path)
+    async with GraphClient(auth) as default:
+        ensure_sign_in(default)
+
+    walkthrough(sign_in_step("browser"), "Consent screen: click CANCEL.")
+    async with GraphClient(auth, scopes=[CANCEL_SCOPE]) as graph:
+        with pytest.raises(ConsentRequired) as caught:
+            await graph.login()
+
+    message = str(caught.value)
+    assert "Signed in as" not in message, "the browser signed in as somebody else"
+    assert "AADSTS65004" in message, f"the consent screen did not answer: {message}"
+    # Entra's refusal, not the check's: the check fills in what is missing.
+    assert caught.value.missing == ()
 
 
 @needs_user

@@ -35,6 +35,10 @@ pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio, needs_graph]
 # prompt. Being outside BASELINE_SCOPES is enough: every test starts from exactly the baseline.
 UNGRANTED_SCOPE = "Mail.ReadWrite"
 
+# What the grant test adds to the application's grant. Read-only, and outside BASELINE_SCOPES:
+# the test is destructive_remote, so restore_baseline takes it back out afterwards.
+GRANT_TEST_SCOPE = "Sites.Read.All"
+
 # How many audit log requests go out at once, how many the test sends before giving up, and
 # how many times a refused one is retried.
 #
@@ -203,6 +207,47 @@ async def test_default_scope_carries_only_what_the_tenant_already_granted(
             await ungranted.aio.acquire_token(
                 graph.scopes, client_id=graph.client_id, force_refresh=True
             )
+
+
+@needs_user
+@pytest.mark.destructive_remote
+async def test_grant_when_possible_adds_a_missing_scope_where_no_prompt_can_appear(
+    user_auth: AuthContext, cache_path: Path
+) -> None:
+    """A context that may not prompt grants the application a missing scope, then uses it.
+
+    The same code path a GDAP sibling takes in a customer tenant: the client checks what the
+    tenant has granted, finds ``GRANT_TEST_SCOPE`` missing, sees the context cannot prompt,
+    and, with ``grant_when_possible``, adds the scope to the application's tenant-wide grant
+    and waits for a token that carries it. The baseline grants
+    ``DelegatedPermissionGrant.ReadWrite.All``, which the grant needs.
+
+    First, without the flag, the same request is refused with what is granted and missing,
+    and nothing is asked of Entra for the missing scope. Marked ``destructive_remote``: the
+    grant changes, and ``restore_baseline`` takes the scope back out after the test, pass or
+    fail.
+    """
+    async with GraphClient(user_auth) as default:
+        ensure_sign_in(default)
+        granted = await default.granted_scopes()
+    held = {scope.lower() for scope in granted}
+    assert "delegatedpermissiongrant.readwrite.all" in held, "the baseline lacks the grant scope"
+    assert GRANT_TEST_SCOPE.lower() not in held, f"the baseline already grants {GRANT_TEST_SCOPE}"
+
+    quiet = cached_user_auth(cache_path)
+    async with GraphClient(quiet, scopes=[GRANT_TEST_SCOPE]) as plain:
+        with pytest.raises(ConsentRequired) as caught:
+            await plain.login()
+    assert caught.value.missing == (GRANT_TEST_SCOPE,)
+    assert "could grant itself the requested scopes" in str(caught.value)
+
+    started = time.monotonic()
+    async with GraphClient(quiet, scopes=[GRANT_TEST_SCOPE], grant_when_possible=True) as graph:
+        await graph.login()
+        token = await quiet.aio.acquire_token(graph.scopes, client_id=graph.client_id)
+    waited = time.monotonic() - started
+    print(f"grant_when_possible: token carries {GRANT_TEST_SCOPE} after {waited:.0f}s")
+    assert GRANT_TEST_SCOPE.lower() in {scope.lower() for scope in token_scopes(token.token)}
 
 
 @needs_user

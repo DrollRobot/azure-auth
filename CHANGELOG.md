@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A context can sign in with a browser other than the system default, with its own
   arguments, such as an Edge profile. Other contexts keep the default browser.
+- A Graph client that names scopes, in a user flow, checks what the tenant has granted before
+  asking for them, with a silent `.default` request. A sibling context that lacks some raises
+  `ConsentRequired` at once, without asking Entra for them; a context that may prompt goes on
+  to the sign-in and its consent screen, as before.
+- `ConsentRequired.granted` and `ConsentRequired.missing`: the short names of the scopes the
+  tenant has granted and of the requested ones it has not, when that was checked.
+- `GraphClient.granted_scopes()`: the Graph scopes the tenant has granted the client's
+  application, from a silent `.default` request that never prompts.
+- `AuthContext.acquire_token_silently()`: a token from the cache or the refresh token, never a
+  prompt, even where the context may prompt.
+- `GraphClient(grant_when_possible=True)`: when a tenant has not consented to a requested
+  scope and no consent screen can be shown, add the scope to the application's tenant-wide
+  grant there, provided the application already holds `DelegatedPermissionGrant.ReadWrite.All`
+  in that tenant, and wait for a token that carries it (`wait_for_grant=False` skips the wait).
+  Otherwise the refusal is raised as before. Off by default. Built for GDAP customer tenants,
+  where a partner cannot consent.
 
 ## [0.4.1] - 2026-10-16 - Broker fix for GDAP customers
 

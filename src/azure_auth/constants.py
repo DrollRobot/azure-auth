@@ -20,3 +20,7 @@ AZURE_POWERSHELL_CLIENT_ID = "1950a258-227b-4e31-a9cf-717495945fc2"
 
 # Exchange Online PowerShell. Pre-authorised for Exchange Online and Security & Compliance.
 EXCHANGE_POWERSHELL_CLIENT_ID = "fb78d390-0c51-40cd-8e17-fdbfab77341b"
+
+# Microsoft Graph itself, as a resource application. Its service principal exists in every
+# tenant; the principal's object id differs per tenant and has to be looked up.
+GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"

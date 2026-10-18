@@ -67,19 +67,35 @@ class ConsentRequired(AuthError):
     Attributes:
         tenant_id: Tenant in which consent is missing.
         scopes: Scopes that were requested.
+        granted: Short names of the scopes the tenant has granted the application, when that
+            was checked (the Graph client checks before asking for named scopes); else empty.
+        missing: Short names of the requested scopes the tenant has not granted, when that
+            was checked; else empty.
     """
 
-    def __init__(self, message: str, *, tenant_id: str, scopes: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        tenant_id: str,
+        scopes: Sequence[str] = (),
+        granted: Sequence[str] = (),
+        missing: Sequence[str] = (),
+    ) -> None:
         """Create the error.
 
         Args:
             message: Human readable description.
             tenant_id: Tenant in which consent is missing.
             scopes: Scopes that were requested.
+            granted: Short names of the scopes the tenant has granted, if known.
+            missing: Short names of the requested scopes it has not granted, if known.
         """
         super().__init__(message)
         self.tenant_id = tenant_id
         self.scopes = tuple(scopes)
+        self.granted = tuple(granted)
+        self.missing = tuple(missing)
 
 
 class AccountSelectionRequired(AuthError):

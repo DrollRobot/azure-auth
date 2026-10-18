@@ -15,6 +15,7 @@ from types import TracebackType
 from typing import Any, ClassVar, Self
 
 import httpx
+from azure.core.credentials import AccessTokenInfo
 
 from azure_auth.auth.context import AuthContext
 from azure_auth.clients.errors import ResourceError
@@ -248,6 +249,23 @@ class ResourceClient:
 
     # ------------------------------------------------------------------ requests
 
+    def _token(self, *, claims: str | None = None, force_refresh: bool = False) -> AccessTokenInfo:
+        """Acquire the token this client sends.
+
+        The one place every token this client needs comes through, so a subclass can add
+        behaviour around it; :class:`~azure_auth._sync.graph.GraphClient` does.
+
+        Args:
+            claims: Claims challenge to satisfy, as a JSON string.
+            force_refresh: Skip cached access tokens.
+
+        Returns:
+            The token with its expiry time and type.
+        """
+        return self._tokens.acquire_token(
+            self._scopes, client_id=self._client_id, claims=claims, force_refresh=force_refresh
+        )
+
     def _url(self, url: str) -> httpx.URL:
         """Resolve a request URL and make sure the token may be sent to it.
 
@@ -312,9 +330,7 @@ class ResourceClient:
         claims: str | None = None
         force_refresh = False
         while True:
-            token = self._tokens.acquire_token(
-                self._scopes, client_id=self._client_id, claims=claims, force_refresh=force_refresh
-            )
+            token = self._token(claims=claims, force_refresh=force_refresh)
             claims, force_refresh = None, False
             request = self._http.build_request(
                 method,

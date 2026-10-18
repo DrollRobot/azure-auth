@@ -544,6 +544,39 @@ class AuthContext:
         """
         self._acquire(scopes, client_id, None, force, force_interactive=force)
 
+    def acquire_token_silently(
+        self,
+        scopes: Iterable[str],
+        *,
+        client_id: str | None = None,
+        force_refresh: bool = False,
+    ) -> AccessTokenInfo:
+        """Acquire a token without ever prompting, even where this context may prompt.
+
+        A token in the cache, or one the refresh token can get, is returned; when somebody
+        would have to sign in, the request fails instead. Resource clients use it to look at
+        what a tenant has granted before asking for more.
+
+        Args:
+            scopes: Scopes to request.
+            client_id: Client id to use; defaults as for :meth:`acquire_token`.
+            force_refresh: Skip cached access tokens and ask Entra, through the refresh token.
+                A cached token carries the scopes it was issued with, so it can predate a
+                change to the tenant's grant by up to its lifetime. The Windows broker answers
+                from its own cache even so (msal 1.39 does not pass this on).
+
+        Returns:
+            The token with its expiry time and type.
+
+        Raises:
+            InteractionRequired: If the user would have to sign in.
+            ConsentRequired: If consent is missing in the tenant.
+            AuthError: For any other failure.
+        """
+        return self._acquire(
+            scopes, client_id, None, force_refresh, force_interactive=False, silent_only=True
+        )
+
     # ------------------------------------------------------------------ internals
 
     def resolve_client_id(self, client_id: str | None = None) -> str:
@@ -590,6 +623,7 @@ class AuthContext:
         force_refresh: bool,
         *,
         force_interactive: bool,
+        silent_only: bool = False,
     ) -> AccessTokenInfo:
         """Acquire a token under the single-flight lock for its key.
 
@@ -599,6 +633,7 @@ class AuthContext:
             claims: Claims challenge to satisfy.
             force_refresh: Skip cached access tokens.
             force_interactive: Prompt even when a silent token is available.
+            silent_only: Never prompt, even where this context may: fail instead.
 
         Returns:
             The token with its expiry time and type.
@@ -619,7 +654,12 @@ class AuthContext:
                 result = self._acquire_for_app(resolved, scope_list, claims, force_refresh)
             else:
                 result = self._acquire_for_user(
-                    resolved, scope_list, claims, force_refresh, force_interactive
+                    resolved,
+                    scope_list,
+                    claims,
+                    force_refresh,
+                    force_interactive,
+                    silent_only=silent_only,
                 )
             info = AccessTokenInfo(
                 str(result["access_token"]),
@@ -758,6 +798,8 @@ class AuthContext:
         claims: str | None,
         force_refresh: bool,
         force_interactive: bool,
+        *,
+        silent_only: bool = False,
     ) -> dict[str, Any]:
         """Get a user token: silently if possible, interactively if allowed.
 
@@ -767,6 +809,7 @@ class AuthContext:
             claims: Claims challenge to satisfy.
             force_refresh: Skip cached access tokens.
             force_interactive: Prompt even when a silent token is available.
+            silent_only: Never prompt, even where this context may: fail instead.
 
         Returns:
             The successful MSAL result.
@@ -790,6 +833,8 @@ class AuthContext:
             if result and "access_token" in result:
                 return dict(result)
 
+        if silent_only and self._interactive_allowed:
+            raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
         if not self._interactive_allowed:
             error = error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
             if isinstance(error, InteractionRequired):
@@ -1065,6 +1110,34 @@ class AsyncAuthContext:
             scopes,
             client_id=client_id,
             claims=claims,
+            force_refresh=force_refresh,
+        )
+
+    async def acquire_token_silently(
+        self,
+        scopes: Sequence[str],
+        *,
+        client_id: str | None = None,
+        force_refresh: bool = False,
+    ) -> AccessTokenInfo:
+        """Acquire a token without ever prompting; see :meth:`AuthContext.acquire_token_silently`.
+
+        Args:
+            scopes: Scopes to request.
+            client_id: Client id to use.
+            force_refresh: Skip cached access tokens and ask Entra.
+
+        Returns:
+            The token with its expiry time and type.
+        """
+        if not force_refresh:
+            cached = self._sync.cached_token(scopes, client_id)
+            if cached is not None:
+                return cached
+        return await asyncio.to_thread(
+            self._sync.acquire_token_silently,
+            scopes,
+            client_id=client_id,
             force_refresh=force_refresh,
         )
 
