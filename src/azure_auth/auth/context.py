@@ -12,11 +12,13 @@ attribute implements ``AsyncTokenCredential``, so any ``azure-*`` SDK client acc
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import logging
 import sys
 import threading
 import time
+import webbrowser
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from types import TracebackType
@@ -25,6 +27,10 @@ from typing import Any, Self
 import msal
 from azure.core.credentials import AccessToken, AccessTokenInfo, TokenRequestOptions
 from msal import BrowserInteractionTimeoutError, TokenCache
+
+# Not exported from msal. The only way to choose a browser per sign-in on Windows, where
+# acquire_token_interactive always uses the default; see .local/DECISIONS.md.
+from msal.oauth2cli.authcode import AuthCodeReceiver
 
 from azure_auth.auth import cng
 from azure_auth.auth.cache import CacheKind, build_cache
@@ -67,6 +73,49 @@ _TokenKey = tuple[str, frozenset[str]]
 
 # The broker's status for a person who closed its sign-in window (seen live 2026-09-29).
 _BROKER_CANCELLED_STATUS = "Status_UserCanceled"
+
+# The names this process has registered browsers under with ``webbrowser``. Each registration
+# appends to webbrowser's try order, so a command is registered once, not at every sign-in.
+_registered_browsers: set[str] = set()
+
+
+def _browser_command(browser: str | Path | Sequence[str]) -> tuple[str, ...]:
+    """Turn the ``browser`` argument into a program and its arguments.
+
+    Args:
+        browser: A program, as a name on ``PATH`` or a path, or a sequence of the program
+            followed by its arguments.
+
+    Returns:
+        The program followed by its arguments.
+
+    Raises:
+        ValueError: If no program is named.
+    """
+    command = (str(browser),) if isinstance(browser, str | Path) else tuple(browser)
+    if not command or not command[0]:
+        raise ValueError("browser must name a program")
+    return command
+
+
+def _register_browser(command: tuple[str, ...]) -> str:
+    """Register a browser command with ``webbrowser``, leaving the default browser alone.
+
+    Args:
+        command: The program followed by its arguments.
+
+    Returns:
+        The name the command is registered under, for MSAL's ``browser_name``. It never
+        contains ``%s``, which ``webbrowser.get`` would read as a command line.
+    """
+    digest = hashlib.sha256("\0".join(command).encode()).hexdigest()[:16]
+    name = f"azure-auth-{digest}"
+    if name not in _registered_browsers:
+        # Not preferred, so it goes to the end of the try order and the default stays first.
+        # "%s" is where webbrowser puts the sign-in address.
+        webbrowser.register(name, None, webbrowser.BackgroundBrowser([*command, "%s"]))
+        _registered_browsers.add(name)
+    return name
 
 
 def _broker_installed() -> bool:
@@ -197,6 +246,7 @@ class AuthContext:
         broker: bool = False,
         broker_fallback: bool = True,
         interactive_timeout: float = _DEFAULT_INTERACTIVE_TIMEOUT_SECONDS,
+        browser: str | Path | Sequence[str] | None = None,
     ) -> None:
         """Configure the context, looking the tenant up when it is given as a string.
 
@@ -231,11 +281,17 @@ class AuthContext:
             interactive_timeout: Seconds a browser sign-in waits for the person before it
                 fails with :class:`AuthError` (default 120). A closed window would otherwise
                 wait for ever.
+            browser: The browser for this context's browser sign-ins, in place of the
+                system default: a program, as a name on ``PATH`` or (recommended) an absolute
+                path, or a list of the program followed by its arguments, such as
+                ``[edge_path, "--profile-directory=Profile 2"]``. The sign-in
+                address is added as the last argument. Other contexts keep the default.
 
         Raises:
-            ValueError: If the arguments do not describe exactly one flow, or ``tenant`` is a
-                multi-tenant authority such as ``organizations``, which has nothing to look
-                up: build its :class:`Tenant` by hand.
+            ValueError: If the arguments do not describe exactly one flow, ``browser`` names
+                no program, or ``tenant`` is a multi-tenant authority such as
+                ``organizations``, which has nothing to look up: build its :class:`Tenant` by
+                hand.
             CacheEncryptionUnavailable: If ``cache='disk'`` cannot be encrypted here.
             CertificateUnavailable: If a PFX archive cannot be read.
             TenantNotFound: If the lookup finds no such tenant.
@@ -265,6 +321,8 @@ class AuthContext:
                 raise ValueError("username is not used for app flows")
             if broker:
                 raise ValueError("broker is only available for user flows")
+            if browser is not None:
+                raise ValueError("browser is only available for user flows")
 
         self._client_id = client_id
         self._username = username
@@ -273,6 +331,7 @@ class AuthContext:
         self._broker = broker
         self._broker_fallback = broker_fallback
         self._interactive_timeout = interactive_timeout
+        self._browser = None if browser is None else _browser_command(browser)
         self._interactive_allowed = True
         self._tenant = tenant if isinstance(tenant, Tenant) else Tenant.lookup(tenant)
         self._init_state()
@@ -383,6 +442,7 @@ class AuthContext:
                 sibling._broker = self._broker
                 sibling._broker_fallback = self._broker_fallback
                 sibling._interactive_timeout = self._interactive_timeout
+                sibling._browser = self._browser
                 sibling._interactive_allowed = False
                 sibling._init_state()
                 self._siblings[guid] = sibling
@@ -812,6 +872,8 @@ class AuthContext:
                 _LOGGER.warning("Authentication broker failed; using the browser")
 
         app = self._app(client_id, use_broker=False)
+        if self._browser is not None:
+            return self._browser_sign_in(app, scopes, claims, prompt, self._browser)
         try:
             result = app.acquire_token_interactive(
                 scopes,
@@ -821,13 +883,69 @@ class AuthContext:
                 timeout=self._interactive_timeout,
             )
         except BrowserInteractionTimeoutError as exc:
-            raise AuthError(
-                f"The browser sign-in was not completed within {self._interactive_timeout:g} "
-                "seconds. The window was closed, nobody answered it, or the sign-in page stopped "
-                "at an error that never returns to the application, such as a Conditional "
-                "Access block."
-            ) from exc
+            raise self._browser_timeout() from exc
         return dict(result)
+
+    def _browser_sign_in(
+        self,
+        app: Any,
+        scopes: list[str],
+        claims: str | None,
+        prompt: str | None,
+        browser: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Sign in in the chosen browser, as ``acquire_token_interactive`` would in the default.
+
+        ``acquire_token_interactive`` cannot be told which browser to use on Windows (msal
+        1.39), so this runs its steps itself: build the sign-in address, open it in the
+        browser and wait for the answer, then redeem the code. The token cache is written as
+        ``acquire_token_interactive`` writes it.
+
+        Args:
+            app: The MSAL public client application.
+            scopes: Scopes to request.
+            claims: Claims challenge to satisfy.
+            prompt: The OIDC ``prompt``, or ``None``.
+            browser: The program followed by its arguments.
+
+        Returns:
+            The MSAL result, successful or not.
+
+        Raises:
+            AuthError: If the sign-in is not completed within ``interactive_timeout``.
+        """
+        name = _register_browser(browser)
+        with AuthCodeReceiver(port=0) as receiver:
+            flow = app.initiate_auth_code_flow(
+                scopes,
+                redirect_uri=f"http://localhost:{receiver.get_port()}",
+                prompt=prompt,
+                login_hint=self._username,
+                claims_challenge=claims,
+                response_mode="form_post",
+            )
+            response = receiver.get_auth_response(
+                auth_uri=flow["auth_uri"],
+                state=flow["state"],
+                timeout=self._interactive_timeout,
+                browser_name=name,
+            )
+        if response is None:
+            raise self._browser_timeout()
+        return dict(app.acquire_token_by_auth_code_flow(flow, response, scopes=scopes))
+
+    def _browser_timeout(self) -> AuthError:
+        """Build the error for a browser sign-in nobody completed.
+
+        Returns:
+            The error, naming ``interactive_timeout``.
+        """
+        return AuthError(
+            f"The browser sign-in was not completed within {self._interactive_timeout:g} "
+            "seconds. The window was closed, nobody answered it, or the sign-in page stopped "
+            "at an error that never returns to the application, such as a Conditional "
+            "Access block."
+        )
 
     def _check_signed_in_user(self, result: dict[str, Any]) -> None:
         """Make sure the person who signed in is the configured user.
