@@ -84,14 +84,14 @@ def test_broker_is_rejected_for_app_flows() -> None:
 
 
 def test_construction_makes_no_msal_application(fake_msal: FakeMsal) -> None:
-    user_context().for_tenant("customer")
+    user_context().get_tenant_context("customer")
     assert fake_msal.apps == []
 
 
 def test_repr_does_not_reveal_the_secret() -> None:
     auth = AuthContext("tenant", client_id="app", client_secret="s3cret")
     assert "s3cret" not in repr(auth)
-    assert "s3cret" not in repr(auth._credential)
+    assert "s3cret" not in repr(auth._app_credential)
 
 
 # ---------------------------------------------------------------------------- resolution order
@@ -140,7 +140,7 @@ def test_browser_sign_in_is_given_a_timeout(fake_msal: FakeMsal) -> None:
 
 
 def test_the_browser_timeout_can_be_set(fake_msal: FakeMsal) -> None:
-    user_context(interactive_timeout=5).acquire_token([ARM_SCOPE])
+    user_context(browser_timeout=5).acquire_token([ARM_SCOPE])
 
     assert fake_msal.calls[0].kwargs["timeout"] == 5
 
@@ -207,14 +207,14 @@ def test_a_bare_access_denied_explains_both_things_it_can_mean(fake_msal: FakeMs
     assert fake_msal.methods() == ["interactive"]
 
 
-def test_a_sibling_reports_missing_consent_without_prompting(fake_msal: FakeMsal) -> None:
+def test_a_customer_reports_missing_consent_without_prompting(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: _consent_error()
 
     with pytest.raises(ConsentRequired):
-        user_context().for_tenant("customer").acquire_token(["User.Read.All"])
+        user_context().get_tenant_context("customer").acquire_token(["User.Read.All"])
 
-    # A sibling has no browser of its own; it reports and stops.
+    # A context from get_tenant_context() has no browser of its own; it reports and stops.
     assert fake_msal.methods() == ["silent"]
 
 
@@ -269,7 +269,7 @@ def test_forced_login_always_prompts(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: token_result()
 
-    user_context().login(client_id=GRAPH_CLI_CLIENT_ID, scopes=["User.Read"], force=True)
+    user_context().login(client_id=GRAPH_CLI_CLIENT_ID, scopes=["User.Read"], pick_account=True)
 
     assert fake_msal.methods() == ["interactive"]
     # A still signed-in browser would otherwise complete the page with nobody choosing.
@@ -385,37 +385,61 @@ def test_rejected_certificate_assertion_is_not_retried(fake_msal: FakeMsal) -> N
     with pytest.raises(AuthError, match="invalid_client"):
         auth.get_token(ARM_SCOPE)
 
-    assert isinstance(auth._credential, CertStoreCredential)
-    assert auth._credential.algorithm == "PS256"
+    assert isinstance(auth._app_credential, CertStoreCredential)
+    assert auth._app_credential.algorithm == "PS256"
     assert fake_msal.methods() == ["for_client"]
 
 
 # ---------------------------------------------------------------------------- tenants
 
 
-def test_sibling_shares_cache_username_and_credentials() -> None:
-    auth = user_context(client_id="custom-app")
-    sibling = auth.for_tenant("customer")
+def test_get_tenant_shares_cache_username_and_credentials() -> None:
+    home = user_context(client_id="custom-app")
+    customer = home.get_tenant_context("customer")
 
-    assert sibling is auth.for_tenant("CUSTOMER")
-    assert sibling is not auth
-    assert sibling._cache is auth._cache
-    assert (sibling.username, sibling.client_id) == (USER, "custom-app")
-    assert sibling.authority == f"https://login.microsoftonline.com/{CUSTOMER_GUID}"
-    assert auth.for_tenant("partner-tenant") is auth
+    assert customer is home.get_tenant_context("CUSTOMER")
+    assert customer is not home
+    assert customer._cache is home._cache
+    assert (customer.username, customer.client_id) == (USER, "custom-app")
+    assert customer.authority == f"https://login.microsoftonline.com/{CUSTOMER_GUID}"
+    assert home.get_tenant_context("partner-tenant") is home
 
 
-def test_sibling_redeems_the_shared_account_silently(fake_msal: FakeMsal) -> None:
+def test_a_directly_built_context_is_its_own_home() -> None:
+    auth = user_context()
+
+    assert auth.home is auth
+    assert auth.aio.home is auth.aio
+
+
+def test_get_tenant_points_home_at_the_original_context() -> None:
+    home = user_context()
+    customer = home.get_tenant_context("customer")
+
+    assert customer.home is home
+    assert customer.aio.home is home.aio
+    assert home.aio.get_tenant_context("customer") is customer.aio
+
+
+def test_a_context_from_a_customer_context_keeps_the_original_home() -> None:
+    home = user_context()
+
+    other = home.get_tenant_context("customer").get_tenant_context("other-customer")
+
+    assert other.home is home
+
+
+def test_get_tenant_redeems_the_shared_account_silently(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: token_result(call.app.authority)
 
-    token = user_context().for_tenant("customer").get_token(ARM_SCOPE)
+    token = user_context().get_tenant_context("customer").get_token(ARM_SCOPE)
 
     assert token.token == f"https://login.microsoftonline.com/{CUSTOMER_GUID}"
     assert fake_msal.calls[0].kwargs["account"] == ACCOUNT
 
 
-def test_sibling_hands_msal_the_account_as_its_home_tenant_entry_describes_it(
+def test_a_customer_hands_msal_the_account_as_its_home_tenant_entry_describes_it(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # MSAL describes an account by its entry saved last, which through the broker can be a
@@ -442,50 +466,53 @@ def test_sibling_hands_msal_the_account_as_its_home_tenant_entry_describes_it(
     ]
     fake_msal.silent = lambda call: token_result()
 
-    user_context().for_tenant("customer").acquire_token([ARM_SCOPE])
+    user_context().get_tenant_context("customer").acquire_token([ARM_SCOPE])
 
     assert fake_msal.calls[0].kwargs["account"] == home
 
 
-def test_sibling_never_prompts(fake_msal: FakeMsal) -> None:
+def test_get_tenant_never_prompts(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: error_result("interaction_required", "MFA needed")
 
-    with pytest.raises(InteractionRequired, match="Sibling contexts never prompt") as caught:
-        user_context().for_tenant("customer").acquire_token([ARM_SCOPE])
+    with pytest.raises(
+        InteractionRequired, match=r"from get_tenant_context\(\) never prompt"
+    ) as caught:
+        user_context().get_tenant_context("customer").acquire_token([ARM_SCOPE])
 
+    assert "client of the home context (auth.home)" in str(caught.value)
     assert caught.value.tenant_id == CUSTOMER_GUID
     assert fake_msal.methods() == ["silent"]
 
 
-def test_sibling_without_an_account_asks_for_a_root_login(fake_msal: FakeMsal) -> None:
+def test_get_tenant_without_an_account_asks_for_a_home_login(fake_msal: FakeMsal) -> None:
     with pytest.raises(InteractionRequired) as caught:
-        user_context().for_tenant("customer").acquire_token([ARM_SCOPE])
+        user_context().get_tenant_context("customer").acquire_token([ARM_SCOPE])
     assert caught.value.tenant_id == CUSTOMER_GUID
     assert fake_msal.methods() == []
 
 
-def test_sibling_reports_missing_consent(fake_msal: FakeMsal) -> None:
+def test_a_customer_reports_missing_consent(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: error_result(
         "invalid_grant", "AADSTS65001", suberror="consent_required"
     )
 
     with pytest.raises(ConsentRequired) as caught:
-        user_context().for_tenant("customer").acquire_token(["User.Read.All"])
+        user_context().get_tenant_context("customer").acquire_token(["User.Read.All"])
 
     assert caught.value.tenant_id == CUSTOMER_GUID
     assert caught.value.scopes == ("User.Read.All",)
 
 
-def test_forced_login_on_a_sibling_is_refused(fake_msal: FakeMsal) -> None:
-    sibling = user_context().for_tenant("customer")
+def test_forced_login_on_a_get_tenant_context_is_refused(fake_msal: FakeMsal) -> None:
+    customer = user_context().get_tenant_context("customer")
     with pytest.raises(InteractionRequired):
-        sibling.login(client_id="app", scopes=["a"], force=True)
+        customer.login(client_id="app", scopes=["a"], pick_account=True)
     assert fake_msal.methods() == []
 
 
-def test_get_token_for_another_tenant_uses_the_sibling(fake_msal: FakeMsal) -> None:
+def test_get_token_for_another_tenant_uses_get_tenant_context(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: token_result(call.app.authority)
 
@@ -507,7 +534,7 @@ def test_get_token_info_honours_options(fake_msal: FakeMsal) -> None:
     assert fake_msal.calls[0].kwargs["claims_challenge"] == "{}"
 
 
-def test_app_flow_sibling_gets_its_own_assertion_audience(fake_msal: FakeMsal) -> None:
+def test_app_flow_get_tenant_gets_its_own_assertion_audience(fake_msal: FakeMsal) -> None:
     auth = AuthContext("home", client_id="app", certificate_thumbprint="AB" * 20)
     seen: list[str] = []
 
@@ -515,11 +542,11 @@ def test_app_flow_sibling_gets_its_own_assertion_audience(fake_msal: FakeMsal) -
         seen.append(token_endpoint)
         return "assertion"
 
-    assert isinstance(auth._credential, CertStoreCredential)
-    auth._credential.build_assertion = record  # type: ignore[method-assign]
+    assert isinstance(auth._app_credential, CertStoreCredential)
+    auth._app_credential.build_assertion = record  # type: ignore[method-assign]
 
     auth.get_token(ARM_SCOPE)
-    auth.for_tenant("customer").get_token(ARM_SCOPE)
+    auth.get_tenant_context("customer").get_token(ARM_SCOPE)
     for app in fake_msal.apps:
         app.client_credential["client_assertion"]()
 
@@ -608,7 +635,7 @@ def test_user_cancelling_in_the_broker_does_not_open_a_browser(
     assert len(fake_msal.calls) == 1
 
 
-def test_a_sibling_the_broker_cannot_serve_silently_asks_for_a_sign_in(
+def test_a_customer_the_broker_cannot_serve_silently_asks_for_a_sign_in(
     fake_msal: FakeMsal, broker_installed: None
 ) -> None:
     # What MSAL returned live when the broker held no sign-in for the application.
@@ -618,8 +645,10 @@ def test_a_sibling_the_broker_cannot_serve_silently_asks_for_a_sign_in(
         "(pii). Status: Response_Status.Status_InteractionRequired, Error code: 3399614476, "
         "Tag: 557973645",
     )
-    with pytest.raises(InteractionRequired, match="Sibling contexts never prompt") as caught:
-        user_context(broker=True).for_tenant("customer").acquire_token([ARM_SCOPE])
+    with pytest.raises(
+        InteractionRequired, match=r"from get_tenant_context\(\) never prompt"
+    ) as caught:
+        user_context(broker=True).get_tenant_context("customer").acquire_token([ARM_SCOPE])
     assert caught.value.tenant_id == CUSTOMER_GUID
     assert fake_msal.methods() == ["silent"]
 
@@ -630,7 +659,7 @@ def test_a_forced_broker_sign_in_shows_the_account_picker(
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: token_result()
 
-    user_context(broker=True).login(client_id="app", scopes=["a"], force=True)
+    user_context(broker=True).login(client_id="app", scopes=["a"], pick_account=True)
 
     # Without it the broker answers silently for an account it holds, and force does nothing.
     call = fake_msal.calls[0]
@@ -715,7 +744,7 @@ async def test_async_view_serves_other_tenants_and_login(fake_msal: FakeMsal) ->
 
     await auth.aio.login(client_id="app", scopes=["a"])
     token = await auth.aio.get_token(ARM_SCOPE, tenant_id="customer")
-    info = await auth.aio.for_tenant("customer").get_token_info(ARM_SCOPE)
+    info = await auth.aio.get_tenant_context("customer").get_token_info(ARM_SCOPE)
 
     assert token.token.endswith(f"/{CUSTOMER_GUID}")
     assert info.token == token.token
@@ -770,7 +799,7 @@ def test_messages_name_the_tenant_by_domain_and_errors_carry_the_guid(
     fake_msal: FakeMsal,
 ) -> None:
     with pytest.raises(InteractionRequired) as caught:
-        user_context().for_tenant(CUSTOMER).acquire_token([ARM_SCOPE])
+        user_context().get_tenant_context(CUSTOMER).acquire_token([ARM_SCOPE])
 
     assert caught.value.tenant_id == CUSTOMER_GUID
     assert f"tenant {CUSTOMER};" in str(caught.value)
@@ -779,14 +808,15 @@ def test_messages_name_the_tenant_by_domain_and_errors_carry_the_guid(
 
 def test_a_request_for_the_contexts_own_tenant_by_guid_may_prompt(fake_msal: FakeMsal) -> None:
     # Key Vault and the other Azure SDK clients name the tenant of a request by GUID, which
-    # must come back to the context itself, and so may sign the person in, not to a sibling
-    # that never can. Seen with a context built from a domain name (2026-09-29).
+    # must come back to the context itself, and so may sign the person in, not to a context
+    # from get_tenant_context() that never can. Seen with a context built from a domain name
+    # (2026-09-29).
     auth = user_context()
 
     token = auth.get_token(ARM_SCOPE, tenant_id=TENANT_GUID)
 
-    assert auth.for_tenant(TENANT_GUID) is auth
-    assert auth.for_tenant(TENANT.upper()) is auth
+    assert auth.get_tenant_context(TENANT_GUID) is auth
+    assert auth.get_tenant_context(TENANT.upper()) is auth
     assert token.token
     assert fake_msal.methods() == ["interactive"]
 
@@ -816,7 +846,7 @@ def test_a_multi_tenant_authority_is_built_by_hand(fake_lookup: FakeLookup, auth
     assert fake_lookup.calls == []
 
 
-def test_a_sibling_by_guid_shares_the_cloud_without_a_lookup(
+def test_get_tenant_by_guid_shares_the_cloud_without_a_lookup(
     fake_lookup: FakeLookup, fake_msal: FakeMsal
 ) -> None:
     fake_msal.accounts = [ACCOUNT]
@@ -826,38 +856,42 @@ def test_a_sibling_by_guid_shares_the_cloud_without_a_lookup(
 
     token = auth.get_token(ARM_SCOPE, tenant_id=CUSTOMER_GUID)
 
-    sibling = auth.for_tenant(CUSTOMER_GUID)
-    assert sibling.tenant == Tenant(CUSTOMER_GUID, US_GOV)
-    assert (sibling.tenant.domain, sibling.tenant.oidc) == (None, None)
+    customer = auth.get_tenant_context(CUSTOMER_GUID)
+    assert customer.tenant == Tenant(CUSTOMER_GUID, US_GOV)
+    assert (customer.tenant.domain, customer.tenant.oidc) == (None, None)
     assert token.token == f"https://login.microsoftonline.us/{CUSTOMER_GUID}"
     assert fake_lookup.names == [TENANT]
 
 
-def test_a_sibling_named_by_domain_is_looked_up_once_in_the_parents_cloud(
+def test_a_customer_named_by_domain_is_looked_up_once_in_the_home_cloud(
     fake_lookup: FakeLookup,
 ) -> None:
     fake_lookup.cloud = US_GOV
     auth = user_context()
 
-    sibling = auth.for_tenant(CUSTOMER)
+    customer = auth.get_tenant_context(CUSTOMER)
 
-    assert sibling is auth.for_tenant(CUSTOMER.upper()) is auth.for_tenant(CUSTOMER_GUID)
+    assert (
+        customer
+        is auth.get_tenant_context(CUSTOMER.upper())
+        is auth.get_tenant_context(CUSTOMER_GUID)
+    )
     # A customer tenant is in its partner's cloud, so it is looked for only there.
     assert fake_lookup.calls == [(TENANT, None), (CUSTOMER, US_GOV)]
-    assert (sibling.tenant.id, sibling.tenant.cloud, sibling.tenant.domain) == (
+    assert (customer.tenant.id, customer.tenant.cloud, customer.tenant.domain) == (
         CUSTOMER_GUID,
         US_GOV,
         CUSTOMER,
     )
 
 
-def test_a_sibling_first_made_by_guid_learns_its_domain_later(fake_lookup: FakeLookup) -> None:
+def test_a_customer_first_made_by_guid_learns_its_domain_later(fake_lookup: FakeLookup) -> None:
     auth = user_context()
 
-    by_guid = auth.for_tenant(CUSTOMER_GUID)
+    by_guid = auth.get_tenant_context(CUSTOMER_GUID)
     assert by_guid.tenant.domain is None
 
-    assert auth.for_tenant(CUSTOMER) is by_guid
+    assert auth.get_tenant_context(CUSTOMER) is by_guid
     assert by_guid.tenant.domain == CUSTOMER
     assert by_guid.tenant.oidc is not None
 
@@ -964,8 +998,8 @@ def test_a_chosen_browser_is_registered_once(
     monkeypatch.setattr(webbrowser, "register", lambda name, *args: registered.append(name))
     auth = user_context(browser=_unique_program())
 
-    auth.login(client_id="app", scopes=[ARM_SCOPE], force=True)
-    auth.login(client_id="app", scopes=[ARM_SCOPE], force=True)
+    auth.login(client_id="app", scopes=[ARM_SCOPE], pick_account=True)
+    auth.login(client_id="app", scopes=[ARM_SCOPE], pick_account=True)
 
     assert len(fake_receiver.requests) == 2
     assert registered == [fake_receiver.requests[0]["browser_name"]]
@@ -974,10 +1008,10 @@ def test_a_chosen_browser_is_registered_once(
 def test_a_chosen_browser_is_given_the_claims_and_the_forced_prompt(
     fake_msal: FakeMsal, fake_receiver: FakeReceiver
 ) -> None:
-    auth = user_context(browser="msedge", interactive_timeout=5)
+    auth = user_context(browser="msedge", browser_timeout=5)
 
     auth.acquire_token([ARM_SCOPE], claims='{"access_token": {}}')
-    auth.login(client_id="app", scopes=[ARM_SCOPE], force=True)
+    auth.login(client_id="app", scopes=[ARM_SCOPE], pick_account=True)
 
     claimed, forced = (call for call in fake_msal.calls if call.method == "initiate_auth_code_flow")
     assert claimed.kwargs["claims_challenge"] == '{"access_token": {}}'
@@ -1030,10 +1064,10 @@ def test_a_broker_falling_back_uses_the_chosen_browser(
     assert fake_msal.methods() == ["interactive", "initiate_auth_code_flow", "auth_code_flow"]
 
 
-def test_a_sibling_keeps_the_chosen_browser() -> None:
+def test_a_customer_keeps_the_chosen_browser() -> None:
     auth = user_context(browser=["msedge", "--inprivate"])
 
-    assert auth.for_tenant(CUSTOMER)._browser == ("msedge", "--inprivate")
+    assert auth.get_tenant_context(CUSTOMER)._browser == ("msedge", "--inprivate")
 
 
 def test_browser_is_rejected_for_app_flows() -> None:

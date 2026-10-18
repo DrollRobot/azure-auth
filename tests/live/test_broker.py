@@ -24,9 +24,9 @@ import msal
 import pytest
 
 from azure_auth import (
+    ArmClient,
     AuthContext,
     AuthError,
-    AzureClient,
     BrokerUnavailable,
     ExchangeClient,
     GraphClient,
@@ -105,7 +105,7 @@ async def read_ipps(client: IppsClient) -> None:
     assert isinstance(labels, list)
 
 
-async def read_arm(client: AzureClient) -> None:
+async def read_arm(client: ArmClient) -> None:
     """List the user's subscriptions, proving ARM accepts the broker's token.
 
     An empty list also comes back from a tenant the user cannot reach, so it is not a pass;
@@ -135,7 +135,7 @@ BROKER_CLIENTS = [
     ),
     pytest.param(IppsClient, "Exchange Online PowerShell", read_ipps, marks=needs_ipps, id="ipps"),
     pytest.param(
-        AzureClient, "Azure PowerShell", read_arm, marks=_flag("AZURE_AUTH_TEST_ARM"), id="arm"
+        ArmClient, "Azure PowerShell", read_arm, marks=_flag("AZURE_AUTH_TEST_ARM"), id="arm"
     ),
 ]
 
@@ -220,7 +220,7 @@ async def test_a_broker_sign_in_is_the_brokers(
     walkthrough(sign_in_step("WAM"))
     auth = broker_auth(broker_cache_path)
     async with make_client(auth) as client:
-        await client.login(force=True)
+        await client.login(pick_account=True)
         token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
         await read(client)
 
@@ -246,7 +246,7 @@ async def test_the_broker_renews_a_token_without_prompting(
     renewed token.
     """
     auth = broker_auth(broker_cache_path)
-    auth._interactive_allowed = False
+    auth._can_prompt = False
     async with make_client(auth) as client:
         ensure_token(broker_auth(broker_cache_path), client.scopes, client.client_id)
         token = await auth.aio.acquire_token(
@@ -382,11 +382,11 @@ async def test_a_cancelled_broker_sign_in_opens_no_browser() -> None:
     """
     walkthrough("Close the WAM window with the X in its title bar.")
     auth = AuthContext(
-        TENANT, username=USERNAME, broker=True, interactive_timeout=FALLBACK_TIMEOUT_SECONDS
+        TENANT, username=USERNAME, broker=True, browser_timeout=FALLBACK_TIMEOUT_SECONDS
     )
-    async with AzureClient(auth) as client:
+    async with ArmClient(auth) as client:
         try:
-            await client.login(force=True)
+            await client.login(pick_account=True)
         except AuthError as exc:
             error = exc
         else:
@@ -422,7 +422,7 @@ async def test_a_customers_exchange_token_leaves_the_account_findable(tmp_path: 
     auth = broker_auth(cache_path)
     async with ExchangeClient(auth) as home:
         ensure_sign_in(home)
-    customer = auth.for_tenant(GDAP_TENANT)
+    customer = auth.get_tenant_context(GDAP_TENANT)
     async with ExchangeClient(customer) as exchange:
         await customer.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
         names = [

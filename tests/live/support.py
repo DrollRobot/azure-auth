@@ -306,7 +306,7 @@ def live_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
         username=USERNAME,
         cache="disk",
         cache_path=cache_path,
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
 
 
@@ -375,7 +375,7 @@ def cached_user_auth(
     auth = AuthContext(
         tenant, username=USERNAME, client_id=client_id, cache="disk", cache_path=cache_path
     )
-    auth._interactive_allowed = False
+    auth._can_prompt = False
     return auth
 
 
@@ -750,7 +750,7 @@ def _consent_to_baseline(cache_path: Path, *, force: bool) -> None:
         username=USERNAME,
         cache="disk",
         cache_path=cache_path,
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
     scopes = graph_scopes(BASELINE_SCOPES)
     with walkthrough_if_waiting(
@@ -758,7 +758,7 @@ def _consent_to_baseline(cache_path: Path, *, force: bool) -> None:
         "Consent screen: tick 'Consent on behalf of your organization'. Click Accept.",
     ):
         if force:
-            admin.login(client_id=GRAPH_CLI_CLIENT_ID, scopes=scopes, force=True)
+            admin.login(client_id=GRAPH_CLI_CLIENT_ID, scopes=scopes, pick_account=True)
         token = admin.acquire_token(scopes, client_id=GRAPH_CLI_CLIENT_ID, force_refresh=True)
     missing = missing_scopes(token.token, BASELINE_SCOPES)
     if missing:

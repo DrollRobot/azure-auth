@@ -57,7 +57,7 @@ def held_tokens(
     kinds = msal.TokenCache.CredentialType
     tokens = into if into is not None else {"access token": [], "refresh token": []}
     tokens["access token"] += [item["secret"] for item in auth._cache.search(kinds.ACCESS_TOKEN)]
-    tokens["access token"] += [info.token for info in auth._tokens.values()]
+    tokens["access token"] += [info.token for info in auth._recent_tokens.values()]
     tokens["refresh token"] += [item["secret"] for item in auth._cache.search(kinds.REFRESH_TOKEN)]
     return tokens
 

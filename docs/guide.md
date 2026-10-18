@@ -31,15 +31,15 @@ from source or a plain-text file.
 ### Signing in
 
 Signing in is lazy: the first request prompts if it has to. To choose the moment, call
-`await client.login()`. Pass `force=True` to show the account picker even when a token is
-cached, or the broker or a still signed-in browser could sign in by itself.
+`await client.login()`. Pass `pick_account=True` to show the account picker even when a token
+is cached, or the broker or a still signed-in browser could sign in by itself.
 
 `username` selects the cached account and pre-fills the sign-in page. If somebody else signs
 in, the context raises `AuthError`, because their tokens would never be found again.
 
 A browser sign-in that is never completed -- the window closed or left alone, or stopped at an
 error page such as a Conditional Access block, which never returns to the application -- fails
-with `AuthError` after `interactive_timeout` seconds (default 120) rather than waiting for ever.
+with `AuthError` after `browser_timeout` seconds (default 120) rather than waiting for ever.
 
 Browser sign-ins open the system default browser. To use another one for a context, pass
 `browser=`: a program, or a list of the program followed by its arguments. A name on `PATH`
@@ -159,7 +159,7 @@ App flows never use a first-party id; without a client id they raise `ValueError
 | Client | Default client id (user flows) | Default scope (commercial cloud) |
 |---|---|---|
 | `GraphClient` | Microsoft Graph PowerShell | `scopes=` argument, else `https://graph.microsoft.com/.default` |
-| `AzureClient`, `KeyVaultClient`, Azure SDK clients | Azure PowerShell | `https://management.azure.com/.default`, `https://vault.azure.net/.default` |
+| `ArmClient`, `KeyVaultClient`, Azure SDK clients | Azure PowerShell | `https://management.azure.com/.default`, `https://vault.azure.net/.default` |
 | `ExchangeClient` | Exchange Online PowerShell | `https://outlook.office365.com/.default` |
 | `IppsClient` | Exchange Online PowerShell | `https://ps.compliance.protection.outlook.com/.default` |
 
@@ -205,7 +205,7 @@ When a sign-in ends without a token, the error says which of three things happen
   ("User declined to consent"), and the library raises `ConsentRequired` carrying the scopes
   and the tenant.
 - A browser window that is closed, or never answered, is given up with an `AuthError` saying
-  so after `interactive_timeout` seconds (default 120). Without that limit the wait would be
+  so after `browser_timeout` seconds (default 120). Without that limit the wait would be
   indefinite.
 
 The library does not reopen the browser on any of them: the first cannot be fixed by asking
@@ -213,7 +213,7 @@ again, the second is the user's decision, and the third means nobody is there.
 
 A Graph client that names scopes checks what the tenant has granted before asking for them
 (see "Checking what a tenant has granted" below). A context that may prompt goes on to the
-sign-in, and the consent screen, as described here. Sibling contexts from `for_tenant()` never
+sign-in, and the consent screen, as described here. Contexts from `get_tenant_context()` never
 prompt at all, so they raise `ConsentRequired` naming what is granted and what is missing, and
 stop. Consent for a customer tenant has to be granted in that tenant, by an account of that
 tenant, or by the application itself where it holds `DelegatedPermissionGrant.ReadWrite.All`
@@ -234,25 +234,30 @@ plain text and never silently switches to the memory cache.
 
 ## Multi-tenant access (GDAP)
 
-`auth.for_tenant(tenant)` returns a sibling context for another tenant. It shares the
-credentials, the cache, the username and the cloud. A GUID costs no network call, so it is
-cheap to call in a loop; a domain name is looked up once, for its GUID, and remembered.
+`auth.get_tenant_context(tenant)` returns a context for another tenant that reuses the sign-in
+you already did. It shares the credentials, the cache, the username and the cloud. A GUID
+costs no network call, so it is cheap to call in a loop; a domain name is looked up once, for
+its GUID, and remembered. Calling it again for the same tenant returns the same context.
 
 ```python
 home = GraphClient(auth, scopes=["DelegatedAdminRelationship.Read.All"])
 await home.login()
 
 for customer in await home.list_customers():
-    graph = GraphClient(auth.for_tenant(customer["tenantId"]), scopes=["User.Read.All"])
+    customer_auth = auth.get_tenant_context(customer["tenantId"])
+    graph = GraphClient(customer_auth, scopes=["User.Read.All"])
     try:
         users = await graph.get_all("/users")
     except (ConsentRequired, InteractionRequired) as error:
         print(f"skipping {customer['displayName']}: {error}")
 ```
 
-- A sibling **never prompts.** When a token cannot be obtained silently it raises
-  `InteractionRequired` or `ConsentRequired`, and the error carries the tenant id. Sign in on
-  a client of the root context first.
+- A customer tenant's context **never prompts.** When a token cannot be obtained silently it
+  raises `InteractionRequired` or `ConsentRequired`, and the error carries the tenant id. Sign
+  in on a client of the home context first.
+- `auth.home` is the context you signed in on. For a context you built yourself it is the
+  context itself; for one from `get_tenant_context()` it points back to the one you built. So
+  `auth.home is not auth` tells you that `auth` came from `get_tenant_context()`.
 - `list_customers()` reads `GET /tenantRelationships/delegatedAdminCustomers` and needs
   `DelegatedAdminRelationship.Read.All` consented in the home tenant. Each customer is the
   object Graph returns, whole (`tenantId`, `displayName`, and whatever Graph adds), listed
@@ -261,8 +266,8 @@ for customer in await home.list_customers():
   A partner cannot consent there: Entra refuses a GDAP partner's interactive sign-in at a
   customer tenant (AADSTS90099), and a partner has no user object in it to hold a per-user
   grant. What a customer has granted differs from one to the next.
-- In app flows each sibling builds its own client assertion, because the assertion audience
-  is the tenant's token endpoint.
+- In app flows each customer tenant's context builds its own client assertion, because the
+  assertion audience is the tenant's token endpoint.
 
 ### Checking what a tenant has granted
 
@@ -273,11 +278,12 @@ compares them with the ones it was given:
 - **All granted:** it asks for the named scopes, and MSAL answers from the token it just got.
 - **Some missing, and the context may prompt:** the named sign-in, as before, where Entra shows
   its consent screen to someone who can consent.
-- **Some missing, in a sibling:** `ConsentRequired` at once, with no request for the missing
-  scopes. Its `granted` and `missing` attributes list the short scope names, and the message
-  names the application and the tenant. With nothing granted at all, it says so.
-- **Not signed in yet:** as before. A context that may prompt signs in; a sibling raises
-  `InteractionRequired`.
+- **Some missing, in a customer tenant's context:** `ConsentRequired` at once, with no request
+  for the missing scopes. Its `granted` and `missing` attributes list the short scope names,
+  and the message names the application and the tenant. With nothing granted at all, it says
+  so.
+- **Not signed in yet:** as before. A context that may prompt signs in; a customer tenant's
+  context raises `InteractionRequired`.
 
 The check runs once while the named token is cached, never for `.default` clients or app flows,
 and never prompts on its own. It reads the scopes from the token's `scp` claim; should a token
@@ -295,7 +301,7 @@ work starts:
 
 ```python
 for customer in await home.list_customers():
-    graph = GraphClient(auth.for_tenant(customer["tenantId"]))
+    graph = GraphClient(auth.get_tenant_context(customer["tenantId"]))
     print(customer["displayName"], sorted(await graph.granted_scopes()))
 ```
 
@@ -303,11 +309,14 @@ for customer in await home.list_customers():
 
 Where a customer has granted the application `DelegatedPermissionGrant.ReadWrite.All`, the
 application can change its own tenant-wide grant there. `grant_when_possible=True` asks the
-Graph client to do that when the check above finds a scope missing in a sibling:
+Graph client to do that when the check above finds a scope missing in a customer tenant's
+context:
 
 ```python
 graph = GraphClient(
-    auth.for_tenant(customer["tenantId"]), scopes=["Sites.Read.All"], grant_when_possible=True
+    auth.get_tenant_context(customer["tenantId"]),
+    scopes=["Sites.Read.All"],
+    grant_when_possible=True,
 )
 sites = await graph.get_all("/sites")
 ```
@@ -380,7 +389,7 @@ AuthError
 └── AmbiguousTenant(tenant, candidates)
 ResourceError(status, code, request_id, body)
 ├── GraphError
-├── AzureError
+├── ArmError
 └── InvokeCommandError
 ```
 
@@ -405,7 +414,7 @@ their status; they are not raised.
 Every call needs the `api_version` of the resource provider.
 
 ```python
-async with AzureClient(auth) as arm:
+async with ArmClient(auth) as arm:
     groups = await arm.get_all(f"/subscriptions/{sub}/resourcegroups", api_version="2021-04-01")
     started = await arm.send("PUT", path, api_version="2021-04-01", json=body)
     resource = await arm.wait(started)  # polls Azure-AsyncOperation or Location
@@ -470,7 +479,7 @@ from module version 3.10.1:
   `InvokeCommand`, and the reads above use it too; the module's `v1.0` base URI serves only
   its own setup calls at connect time.
 - Routing header `X-AnchorMailbox`: `UPN:<username>` for a user in their own tenant, and the
-  tenant's system mailbox for app flows and for sibling (GDAP) contexts. Override it with
+  tenant's system mailbox for app flows and for GDAP customer tenants. Override it with
   `anchor_mailbox=`.
 - Security & Compliance in an app flow finds the tenant only by its domain name, never its
   GUID, so the client uses `auth.tenant.domain`. When the tenant has none, it asks Exchange

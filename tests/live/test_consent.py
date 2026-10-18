@@ -139,7 +139,7 @@ async def test_a_user_who_may_not_consent_is_refused_with_a_useful_error(
     instead leaves MSAL waiting for a redirect that never comes. Then the administrator's
     sign-in and consent screen in the fixture's teardown, which restores the baseline.
     """
-    auth = AuthContext(TENANT, username=NONADMIN, interactive_timeout=SIGN_IN_TIMEOUT_SECONDS)
+    auth = AuthContext(TENANT, username=NONADMIN, browser_timeout=SIGN_IN_TIMEOUT_SECONDS)
     async with GraphClient(auth, scopes=[NONADMIN_SCOPE]) as graph:
         with pytest.raises(AuthError) as caught:
             await graph.get("/users", params={"$top": "1"})

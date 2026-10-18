@@ -37,7 +37,7 @@ async def test_app_flow_with_a_store_certificate() -> None:
         organization = await graph.get_all("/organization")
     assert organization
     # Which algorithm Entra ID accepted for this key is worth knowing; see plan section 4.
-    print(f"client assertion algorithm in use: {auth._credential.algorithm}")  # type: ignore[union-attr]
+    print(f"client assertion algorithm in use: {auth._app_credential.algorithm}")  # type: ignore[union-attr]
 
 
 @needs_machine_certificate

@@ -369,11 +369,11 @@ def test_a_read_follows_the_regional_redirect_with_its_token(auth: AuthContext) 
 
 def test_reads_route_like_cmdlets(auth: AuthContext) -> None:
     app = AuthContext("contoso.onmicrosoft.com", client_id="app", client_secret="s3cret")
-    sibling = auth.for_tenant("managed.onmicrosoft.com")
+    customer = auth.get_tenant_context("managed.onmicrosoft.com")
     recorder = Recorder(lambda request: ok({"value": []}))
 
     ExchangeClient(app, transport=recorder.transport).mailboxes()
-    ExchangeClient(sibling, transport=recorder.transport).mailboxes()
+    ExchangeClient(customer, transport=recorder.transport).mailboxes()
     ExchangeClient(
         auth, anchor_mailbox="UPN:shared@partner.com", transport=recorder.transport
     ).mailboxes()

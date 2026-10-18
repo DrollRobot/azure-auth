@@ -216,7 +216,7 @@ async def test_grant_when_possible_adds_a_missing_scope_where_no_prompt_can_appe
 ) -> None:
     """A context that may not prompt grants the application a missing scope, then uses it.
 
-    The same code path a GDAP sibling takes in a customer tenant: the client checks what the
+    The same code path a GDAP customer tenant's context takes: the client checks what the
     tenant has granted, finds ``GRANT_TEST_SCOPE`` missing, sees the context cannot prompt,
     and, with ``grant_when_possible``, adds the scope to the application's tenant-wide grant
     and waits for a token that carries it. The baseline grants

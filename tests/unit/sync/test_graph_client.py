@@ -110,7 +110,7 @@ def test_app_flow_rules(fake_msal: FakeMsal) -> None:
 def test_login_uses_the_clients_id_and_scopes(auth: AuthContext, fake_msal: FakeMsal) -> None:
     graph = GraphClient(auth, scopes=["User.Read.All"])
     graph.login()
-    graph.login(force=True)
+    graph.login(pick_account=True)
 
     assert fake_msal.methods() == ["interactive", "interactive"]
     assert fake_msal.apps[0].client_id == GRAPH_CLI_CLIENT_ID
@@ -525,10 +525,10 @@ def grant_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 
 def customer_graph(tenant: GrantTenant, **kwargs: Any) -> GraphClient:
-    """Build a Graph client on a sibling context for the customer tenant."""
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    """Build a Graph client on a context from get_tenant_context() for the customer tenant."""
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
     return GraphClient(
-        sibling, scopes=["Sites.Read.All"], transport=tenant.recorder.transport, **kwargs
+        customer, scopes=["Sites.Read.All"], transport=tenant.recorder.transport, **kwargs
     )
 
 
@@ -713,30 +713,30 @@ def named_requests(fake_msal: FakeMsal) -> list[str]:
     return [call.method for call in fake_msal.calls if call.scopes != [DEFAULT_SCOPE]]
 
 
-def test_a_sibling_missing_a_scope_is_told_what_is_granted_without_asking_for_it(
+def test_a_customer_missing_a_scope_is_told_what_is_granted_without_asking_for_it(
     fake_msal: FakeMsal,
 ) -> None:
     scripted(fake_msal, held=("User.Read", "Group.Read.All", "openid"))
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
     with pytest.raises(ConsentRequired) as caught:
-        GraphClient(sibling, scopes=["User.Read.All"]).get("/users")
+        GraphClient(customer, scopes=["User.Read.All"]).get("/users")
 
     assert caught.value.missing == ("User.Read.All",)
     assert caught.value.granted == ("Group.Read.All", "User.Read")
-    assert caught.value.tenant_id == sibling.tenant.id
+    assert caught.value.tenant_id == customer.tenant.id
     assert "has not granted User.Read.All" in str(caught.value)
-    assert "for_tenant()" in str(caught.value)
+    assert "get_tenant_context()" in str(caught.value)
     # .default was asked; the named scope never was.
     assert named_requests(fake_msal) == []
 
 
-def test_a_sibling_with_no_consent_at_all_says_so(fake_msal: FakeMsal) -> None:
+def test_a_customer_with_no_consent_at_all_says_so(fake_msal: FakeMsal) -> None:
     scripted(fake_msal, default_error=consent_error())
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
     with pytest.raises(ConsentRequired) as caught:
-        GraphClient(sibling, scopes=["User.Read.All"]).get("/users")
+        GraphClient(customer, scopes=["User.Read.All"]).get("/users")
 
     assert caught.value.granted == ()
     assert caught.value.missing == ("User.Read.All",)
@@ -744,13 +744,13 @@ def test_a_sibling_with_no_consent_at_all_says_so(fake_msal: FakeMsal) -> None:
     assert named_requests(fake_msal) == []
 
 
-def test_a_sibling_with_everything_granted_goes_on_with_the_named_request(
+def test_a_customer_with_everything_granted_goes_on_with_the_named_request(
     fake_msal: FakeMsal, recorder: Recorder
 ) -> None:
     scripted(fake_msal, held=("User.Read", "user.read.all"))
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    with GraphClient(sibling, scopes=["User.Read.All"], transport=recorder.transport) as g:
+    with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
         g.get("/users")
 
     assert recorder.requests[0].headers["Authorization"] == "Bearer named"
@@ -761,10 +761,10 @@ def test_the_refusal_says_when_the_application_could_grant_itself_the_scopes(
     fake_msal: FakeMsal,
 ) -> None:
     scripted(fake_msal, held=("User.Read", "DelegatedPermissionGrant.ReadWrite.All"))
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
     with pytest.raises(ConsentRequired) as caught:
-        GraphClient(sibling, scopes=["User.Read.All"]).get("/users")
+        GraphClient(customer, scopes=["User.Read.All"]).get("/users")
 
     assert "could grant itself the requested scopes" in str(caught.value)
     assert "grant_when_possible" not in str(caught.value)
@@ -804,14 +804,14 @@ def test_a_context_that_has_not_signed_in_signs_in_as_before(
     assert [(c.method, c.scopes) for c in fake_msal.calls] == [("interactive", [USERS])]
 
 
-def test_a_sibling_whose_home_has_not_signed_in_is_told_to_sign_in(
+def test_a_customer_whose_home_has_not_signed_in_is_told_to_sign_in(
     fake_msal: FakeMsal,
 ) -> None:
     scripted(fake_msal, accounts=False)
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
     with pytest.raises(InteractionRequired):
-        GraphClient(sibling, scopes=["User.Read.All"]).get("/users")
+        GraphClient(customer, scopes=["User.Read.All"]).get("/users")
     assert fake_msal.methods() == []
 
 
@@ -819,9 +819,9 @@ def test_an_unreadable_default_token_skips_the_check(
     fake_msal: FakeMsal, recorder: Recorder
 ) -> None:
     scripted(fake_msal, held=None)
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    with GraphClient(sibling, scopes=["User.Read.All"], transport=recorder.transport) as g:
+    with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
         g.get("/users")
 
     assert recorder.requests[0].headers["Authorization"] == "Bearer named"
@@ -840,9 +840,9 @@ def test_a_cached_token_holding_every_scope_saves_the_request_to_entra(
     fake_msal: FakeMsal, recorder: Recorder
 ) -> None:
     scripted(fake_msal, held=("User.Read.All",))
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    with GraphClient(sibling, scopes=["User.Read.All"], transport=recorder.transport) as g:
+    with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
         g.get("/users")
 
     # One .default request, answered as MSAL likes: no fresh one was needed.
@@ -863,9 +863,9 @@ def test_a_scope_the_cached_token_lacks_is_checked_with_entra_before_refusing(
         return token_result("named")
 
     fake_msal.silent = silent
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    with GraphClient(sibling, scopes=["User.Read.All"], transport=recorder.transport) as g:
+    with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
         g.get("/users")
 
     assert default_requests(fake_msal) == [False, True]
@@ -874,10 +874,10 @@ def test_a_scope_the_cached_token_lacks_is_checked_with_entra_before_refusing(
 
 def test_a_scope_missing_from_the_fresh_token_too_is_refused(fake_msal: FakeMsal) -> None:
     scripted(fake_msal, held=("User.Read",))
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
     with pytest.raises(ConsentRequired) as caught:
-        GraphClient(sibling, scopes=["User.Read.All"]).get("/users")
+        GraphClient(customer, scopes=["User.Read.All"]).get("/users")
 
     assert caught.value.missing == ("User.Read.All",)
     assert default_requests(fake_msal) == [False, True]
@@ -885,9 +885,9 @@ def test_a_scope_missing_from_the_fresh_token_too_is_refused(fake_msal: FakeMsal
 
 def test_granted_scopes_always_asks_entra(fake_msal: FakeMsal) -> None:
     scripted(fake_msal, held=("User.Read",))
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    GraphClient(sibling).granted_scopes()
+    GraphClient(customer).granted_scopes()
 
     assert default_requests(fake_msal) == [True]
 
@@ -896,9 +896,9 @@ def test_the_check_runs_once_while_the_named_token_is_cached(
     fake_msal: FakeMsal, recorder: Recorder
 ) -> None:
     scripted(fake_msal, held=("User.Read.All",))
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    with GraphClient(sibling, scopes=["User.Read.All"], transport=recorder.transport) as g:
+    with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
         g.get("/users")
         g.get("/users")
 
@@ -907,18 +907,18 @@ def test_the_check_runs_once_while_the_named_token_is_cached(
 
 def test_default_and_app_flow_clients_are_not_checked(fake_msal: FakeMsal) -> None:
     scripted(fake_msal)
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    GraphClient(sibling).login()
+    GraphClient(customer).login()
 
     assert [call.scopes for call in fake_msal.calls] == [[DEFAULT_SCOPE]]
 
 
 def test_granted_scopes_reports_what_the_tenant_granted(fake_msal: FakeMsal) -> None:
     scripted(fake_msal, held=("User.Read", "Group.Read.All", "profile"))
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    assert GraphClient(sibling).granted_scopes() == {"User.Read", "Group.Read.All"}
+    assert GraphClient(customer).granted_scopes() == {"User.Read", "Group.Read.All"}
 
 
 def test_granted_scopes_never_prompts(fake_msal: FakeMsal) -> None:
@@ -931,19 +931,19 @@ def test_granted_scopes_never_prompts(fake_msal: FakeMsal) -> None:
 
 def test_granted_scopes_is_empty_without_any_consent(fake_msal: FakeMsal) -> None:
     scripted(fake_msal, default_error=consent_error())
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    assert GraphClient(sibling).granted_scopes() == frozenset()
+    assert GraphClient(customer).granted_scopes() == frozenset()
 
 
 def test_granted_scopes_refuses_an_unreadable_token_and_app_flows(
     fake_msal: FakeMsal,
 ) -> None:
     scripted(fake_msal, held=None)
-    sibling = AuthContext("tenant", username=USER).for_tenant(CUSTOMER)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
     with pytest.raises(AuthError, match="cannot be read"):
-        GraphClient(sibling).granted_scopes()
+        GraphClient(customer).granted_scopes()
     app = AuthContext("tenant", client_id="app", client_secret="s3cret")
     with pytest.raises(ValueError, match="roles"):
         GraphClient(app).granted_scopes()

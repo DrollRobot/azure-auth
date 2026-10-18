@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from azure_auth import AuthContext
-from azure_auth.clients import AzureClient, AzureError
+from azure_auth.clients import ArmClient, ArmError
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
 from tests.fakes import FakeLookup, FakeMsal
@@ -37,7 +37,7 @@ def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 async def test_api_version_is_added_to_every_verb(auth: AuthContext, fake_msal: FakeMsal) -> None:
     recorder = Recorder(lambda request: ok({"name": "rg"}))
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
     await arm.get(GROUP, api_version="2021-04-01", params={"$expand": "x"})
     await arm.put(GROUP, {"location": "westeurope"}, api_version="2021-04-01")
@@ -60,7 +60,7 @@ async def test_requests_go_to_the_resource_manager_of_the_contexts_cloud(
     auth = AuthContext("tenant", username="admin@contoso.com")
     recorder = Recorder([ok({"name": "rg"})])
 
-    await AzureClient(auth, transport=recorder.transport).get(GROUP, api_version="2021-04-01")
+    await ArmClient(auth, transport=recorder.transport).get(GROUP, api_version="2021-04-01")
 
     assert recorder.requests[0].url.host == httpx.URL(cloud.arm).host
     assert fake_msal.calls[0].scopes == [f"{cloud.arm}/.default"]
@@ -70,7 +70,7 @@ async def test_requests_go_to_the_resource_manager_of_the_contexts_cloud(
 async def test_get_all_follows_next_link_as_given(auth: AuthContext) -> None:
     next_link = f"{ARM}/subscriptions?api-version=2022-12-01&$skiptoken=abc"
     recorder = Recorder([ok({"value": ["a"], "nextLink": next_link}), ok({"value": ["b"]})])
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
     assert await arm.get_all("/subscriptions", api_version="2022-12-01") == ["a", "b"]
     assert recorder.requests[1].url.params.get_list("api-version") == ["2022-12-01"]
@@ -79,9 +79,9 @@ async def test_get_all_follows_next_link_as_given(auth: AuthContext) -> None:
 async def test_error_becomes_azure_error(auth: AuthContext) -> None:
     body = {"error": {"code": "ResourceGroupNotFound", "message": "gone"}}
     recorder = Recorder([ok(body, 404, {"x-ms-request-id": "arm-1"})])
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
-    with pytest.raises(AzureError) as caught:
+    with pytest.raises(ArmError) as caught:
         await arm.get(GROUP, api_version="2021-04-01")
 
     assert (caught.value.code, caught.value.request_id) == ("ResourceGroupNotFound", "arm-1")
@@ -105,7 +105,7 @@ async def test_put_polls_the_operation_then_reads_the_resource(
             ok({"properties": {"provisioningState": "Succeeded"}}),
         ]
     )
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
     started = await arm.send("PUT", GROUP, api_version="2021-04-01", json={"location": "x"})
     result = await arm.wait(started)
@@ -126,7 +126,7 @@ async def test_post_operation_returns_the_location_result(
             ok({"output": 42}),
         ]
     )
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
     started = await arm.send("POST", f"{GROUP}/export", api_version="2021-04-01")
 
@@ -144,7 +144,7 @@ async def test_operation_without_location_returns_its_status(
             ok({"status": "Succeeded", "properties": {"x": 1}}),
         ]
     )
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
     started = await arm.send("DELETE", GROUP, api_version="2021-04-01")
 
@@ -161,10 +161,10 @@ async def test_failed_operation_raises(auth: AuthContext, sleeps: list[float], s
             ok(failure, headers={"x-ms-request-id": "arm-2"}),
         ]
     )
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
     started = await arm.send("DELETE", GROUP, api_version="2021-04-01")
-    with pytest.raises(AzureError, match=f"Operation {state} QuotaExceeded: too many") as caught:
+    with pytest.raises(ArmError, match=f"Operation {state} QuotaExceeded: too many") as caught:
         await arm.wait(started)
 
     assert (caught.value.code, caught.value.request_id) == ("QuotaExceeded", "arm-2")
@@ -182,7 +182,7 @@ async def test_location_only_operation_is_polled_until_done(
             ok(status=204),
         ]
     )
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
     started = await arm.send("DELETE", GROUP, api_version="2021-04-01")
 
@@ -191,7 +191,7 @@ async def test_location_only_operation_is_polled_until_done(
 
 
 async def test_completed_response_is_returned_as_is(auth: AuthContext, sleeps: list[float]) -> None:
-    arm = AzureClient(auth, transport=Recorder([ok({"done": True})]).transport)
+    arm = ArmClient(auth, transport=Recorder([ok({"done": True})]).transport)
     started = await arm.send("PUT", GROUP, api_version="2021-04-01")
     assert await arm.wait(started) == {"done": True}
     assert sleeps == []
@@ -201,7 +201,7 @@ async def test_wait_times_out(auth: AuthContext, sleeps: list[float]) -> None:
     recorder = Recorder(
         lambda request: ok({"status": "InProgress"}, 202, {"Azure-AsyncOperation": OPERATION})
     )
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
     started = await arm.send("DELETE", GROUP, api_version="2021-04-01")
     with pytest.raises(TimeoutError, match="still running"):
@@ -214,7 +214,7 @@ async def test_operation_url_on_another_host_is_refused(
     recorder = Recorder(
         [httpx.Response(202, headers={"Azure-AsyncOperation": "https://evil.example/op"})]
     )
-    arm = AzureClient(auth, transport=recorder.transport)
+    arm = ArmClient(auth, transport=recorder.transport)
 
     started = await arm.send("DELETE", GROUP, api_version="2021-04-01")
     with pytest.raises(ValueError, match="Refusing to send a token"):

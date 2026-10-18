@@ -109,7 +109,8 @@ class GraphClient(ResourceClient):
             client_id: Client id for this client; see :class:`ResourceClient`.
             scopes: Delegated scopes for a user flow, such as ``["User.Read.All"]``. Before
                 asking for them, the client checks what the tenant has granted (see
-                :meth:`_token`): a sibling context that lacks some raises
+                :meth:`_token`): a context from
+                :meth:`~azure_auth.AuthContext.get_tenant_context` that lacks some raises
                 :class:`ConsentRequired` naming them, without asking Entra for them.
             api_version: ``v1.0`` (default) or ``beta``.
             timeout: Timeout for each HTTP request, in seconds.
@@ -124,7 +125,8 @@ class GraphClient(ResourceClient):
                 :class:`ConsentRequired` is raised exactly as it is with this off. The grant
                 is tenant-wide: every user of the application in that tenant gets the scopes,
                 each still bounded by their own roles. Engages only where no consent screen
-                can appear: contexts that may not prompt, such as siblings. Off by default.
+                can appear: contexts that may not prompt, such as those from
+                :meth:`~azure_auth.AuthContext.get_tenant_context`. Off by default.
             wait_for_grant: After the grant is changed, ask for the token every ten seconds
                 until Entra issues one carrying the new scopes, about a minute, or three
                 minutes pass. The change reaches only tokens Entra issues afterwards, and
@@ -160,19 +162,19 @@ class GraphClient(ResourceClient):
         """Whether refused scopes are added to the application's grant where that is possible."""
         return self._grant_when_possible
 
-    def login(self, *, force: bool = False) -> None:
+    def login(self, *, pick_account: bool = False) -> None:
         """Sign in now instead of at the first request.
 
-        Without ``force`` this is the first request's token, so the check of what the tenant
+        Without ``pick_account`` this is the first request's token, so the check of what the tenant
         has granted (see :meth:`granted_scopes`) runs here too.
 
         Args:
-            force: Show the account picker, even when a cached token or account exists or
-                the broker or browser could sign in by itself. Someone other than the
-                configured user is refused.
+            pick_account: Show the account picker, even when a cached token or account
+                exists or the broker or browser could sign in by itself. Someone other than
+                the configured user is refused.
         """
-        if force:
-            super().login(force=True)
+        if pick_account:
+            super().login(pick_account=True)
             return
         self._token()
 
@@ -217,7 +219,7 @@ class GraphClient(ResourceClient):
         """
         default = [f"{self._resource}/.default"]
         try:
-            held = self._tokens.acquire_token_silently(
+            held = self._credential.acquire_token_silently(
                 default, client_id=self._client_id, force_refresh=fresh
             )
         except ConsentRequired:
@@ -242,9 +244,10 @@ class GraphClient(ResourceClient):
         - Every scope granted, or the token unreadable: the named request, as without it.
         - Some missing, and the context may prompt: the named sign-in, which shows Entra's
           consent screen to someone who can consent.
-        - Some missing, and the context may not prompt (a sibling): with ``grant_when_possible``
-          and ``DelegatedPermissionGrant.ReadWrite.All`` among the granted scopes, the grant;
-          otherwise :class:`ConsentRequired` at once, saying what is granted and missing.
+        - Some missing, and the context may not prompt (one from ``get_tenant_context()``):
+          with ``grant_when_possible`` and ``DelegatedPermissionGrant.ReadWrite.All`` among
+          the granted scopes, the grant; otherwise :class:`ConsentRequired` at once, saying
+          what is granted and missing.
         - Not signed in yet: as without the check; a context that may prompt signs in.
 
         Args:
@@ -255,9 +258,10 @@ class GraphClient(ResourceClient):
             The token with its expiry time and type.
 
         Raises:
-            ConsentRequired: When a sibling lacks scopes it cannot be granted; or when they
-                were granted and no token carried them in time.
-            InteractionRequired: When a sibling's home context has not signed in.
+            ConsentRequired: When a context that may not prompt lacks scopes it cannot be
+                granted; or when they were granted and no token carried them in time.
+            InteractionRequired: When a context that may not prompt has no sign-in to use:
+                for one from ``get_tenant_context()``, its home has not signed in.
         """
         default = [f"{self._resource}/.default"]
         if (
@@ -265,7 +269,7 @@ class GraphClient(ResourceClient):
             or self._scopes == default
             or claims
             or force_refresh
-            or self._auth.cached_token(self._scopes, self._client_id) is not None
+            or self._auth._recent_token(self._scopes, self._client_id) is not None
         ):
             return super()._token(claims=claims, force_refresh=force_refresh)
         try:
@@ -276,13 +280,13 @@ class GraphClient(ResourceClient):
                 granted = self._granted(fresh=True)
                 missing = self._missing(granted)
         except InteractionRequired:
-            if self._auth.is_sibling:
+            if not self._auth._can_prompt:
                 raise
             return super()._token()
         if granted is None:
             return super()._token()
         held = {scope.lower() for scope in granted}
-        if not missing or not self._auth.is_sibling:
+        if not missing or self._auth._can_prompt:
             return super()._token()
         refusal = self._refusal(granted, missing)
         if not (self._grant_when_possible and GRANT_SCOPE.lower() in held):
@@ -309,7 +313,7 @@ class GraphClient(ResourceClient):
         ]
 
     def _refusal(self, granted: frozenset[str], missing: Sequence[str]) -> ConsentRequired:
-        """Build the error for a sibling that lacks scopes.
+        """Build the error for a context that may not prompt and lacks scopes.
 
         Args:
             granted: Short names of the scopes the tenant has granted.
@@ -330,8 +334,8 @@ class GraphClient(ResourceClient):
                 f"{', '.join(missing)} cannot be issued."
             )
         message += (
-            " This context was made by for_tenant() and cannot show a consent screen; an "
-            "administrator in that tenant has to grant the scopes."
+            " This context was made by get_tenant_context() and cannot show a consent screen; "
+            "an administrator in that tenant has to grant the scopes."
         )
         if GRANT_SCOPE.lower() in {scope.lower() for scope in granted}:
             if not self._grant_when_possible:

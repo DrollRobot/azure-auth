@@ -49,7 +49,7 @@ async def assert_refreshed_without_prompting(
     # Prompting being off is what proves the new token came from the refresh token. With it
     # on, a broken refresh would open a browser, somebody would sign in, and the test would
     # pass. Live contexts may prompt, so it is switched off here.
-    auth._interactive_allowed = False
+    auth._can_prompt = False
     try:
         me = await graph.get("/me", params={"$select": "id"})
     except InteractionRequired as error:

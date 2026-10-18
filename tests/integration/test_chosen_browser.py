@@ -104,7 +104,7 @@ def test_the_chosen_browser_answers_the_sign_in(entra: FakeEntra, tmp_path: Path
         Tenant(TENANT, COMMERCIAL),
         username=USER,
         browser=browser,
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
 
     token = auth.acquire_token([SCOPE], client_id=CLIENT_ID)
@@ -138,7 +138,7 @@ def test_an_answer_with_the_wrong_state_is_refused(entra: FakeEntra, tmp_path: P
         Tenant(TENANT, COMMERCIAL),
         username=USER,
         browser=[*browser, "--wrong-state"],
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
 
     with pytest.raises(AuthError, match="access_denied"):

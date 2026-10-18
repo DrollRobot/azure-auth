@@ -65,9 +65,9 @@ _REFRESH_MARGIN_SECONDS = 300
 _CLIENT_CAPABILITIES = ["CP1"]
 
 # How long a browser sign-in waits for the person before it is abandoned, unless the context
-# is given ``interactive_timeout``. Without a limit, a closed browser window leaves MSAL
+# is given ``browser_timeout``. Without a limit, a closed browser window leaves MSAL
 # waiting for a redirect that never arrives.
-_DEFAULT_INTERACTIVE_TIMEOUT_SECONDS = 120
+_DEFAULT_BROWSER_TIMEOUT_SECONDS = 120
 
 _TokenKey = tuple[str, frozenset[str]]
 
@@ -245,7 +245,7 @@ class AuthContext:
         cache_path: str | Path | None = None,
         broker: bool = False,
         broker_fallback: bool = True,
-        interactive_timeout: float = _DEFAULT_INTERACTIVE_TIMEOUT_SECONDS,
+        browser_timeout: float = _DEFAULT_BROWSER_TIMEOUT_SECONDS,
         browser: str | Path | Sequence[str] | None = None,
     ) -> None:
         """Configure the context, looking the tenant up when it is given as a string.
@@ -278,7 +278,7 @@ class AuthContext:
                 ``broker`` extra.
             broker_fallback: When the broker cannot be used, fall back to the browser
                 (default) instead of raising :class:`BrokerUnavailable`.
-            interactive_timeout: Seconds a browser sign-in waits for the person before it
+            browser_timeout: Seconds a browser sign-in waits for the person before it
                 fails with :class:`AuthError` (default 120). A closed window would otherwise
                 wait for ever.
             browser: The browser for this context's browser sign-ins, in place of the
@@ -326,13 +326,14 @@ class AuthContext:
 
         self._client_id = client_id
         self._username = username
-        self._credential = credential
+        self._app_credential = credential
         self._cache = build_cache(cache, cache_path)
         self._broker = broker
         self._broker_fallback = broker_fallback
-        self._interactive_timeout = interactive_timeout
+        self._browser_timeout = browser_timeout
         self._browser = None if browser is None else _browser_command(browser)
-        self._interactive_allowed = True
+        self._can_prompt = True
+        self._home = self
         self._tenant = tenant if isinstance(tenant, Tenant) else Tenant.lookup(tenant)
         self._init_state()
 
@@ -340,8 +341,8 @@ class AuthContext:
         """Create the per-context mutable state."""
         self._apps: dict[tuple[str, bool], Any] = {}
         self._locks: dict[_TokenKey, threading.Lock] = {}
-        self._tokens: dict[_TokenKey, AccessTokenInfo] = {}
-        self._siblings: dict[str, AuthContext] = {}
+        self._recent_tokens: dict[_TokenKey, AccessTokenInfo] = {}
+        self._tenant_contexts: dict[str, AuthContext] = {}
         self._lookups: dict[str, Tenant] = {}
         self._guard = threading.Lock()
         self._aio: AsyncAuthContext | None = None
@@ -375,12 +376,18 @@ class AuthContext:
     @property
     def is_app_flow(self) -> bool:
         """Whether this context authenticates as an application."""
-        return self._credential is not None
+        return self._app_credential is not None
 
     @property
-    def is_sibling(self) -> bool:
-        """Whether this context was created by :meth:`for_tenant` and so never prompts."""
-        return not self._interactive_allowed
+    def home(self) -> AuthContext:
+        """The context the user signed in on.
+
+        For a context you built yourself, this is the context itself. For one from
+        :meth:`get_tenant_context`, it points back to the context you built. Only that
+        context can prompt, so ``auth.home is not auth`` tells you ``auth`` cannot sign
+        anyone in, and that a sign-in has to happen on ``auth.home`` instead.
+        """
+        return self._home
 
     @property
     def authority(self) -> str:
@@ -401,22 +408,22 @@ class AuthContext:
 
     # ------------------------------------------------------------------ tenants
 
-    def for_tenant(self, tenant: str) -> AuthContext:
-        """Return a sibling context for another tenant.
+    def get_tenant_context(self, tenant: str) -> AuthContext:
+        """Return a context for another tenant that reuses this context's sign-in.
 
-        The sibling shares this context's credentials, cache, username and cloud, so a user
-        with GDAP access obtains managed-tenant tokens from the one home-tenant sign-in. A
-        GUID costs no network call; a domain name is looked up once, for its GUID, and
-        remembered. A sibling never opens a browser: when a token cannot be obtained silently
-        it raises :class:`InteractionRequired` or :class:`ConsentRequired` carrying the
-        tenant id.
+        The new context shares this context's credentials, cache, username and cloud, so a
+        user with GDAP access obtains customer-tenant tokens from the one home-tenant sign-in.
+        A GUID costs no network call; a domain name is looked up once, for its GUID, and
+        remembered. The new context never opens a browser: when a token cannot be obtained
+        silently it raises :class:`InteractionRequired` or :class:`ConsentRequired` carrying
+        the tenant id. Its :attr:`home` is this context's :attr:`home`.
 
         Args:
             tenant: Tenant id (GUID) or verified domain name of the other tenant.
 
         Returns:
-            The sibling context, or this context when the tenant is its own. Repeated calls
-            return the same object.
+            The context for that tenant, or this context when the tenant is its own. Repeated
+            calls return the same object.
 
         Raises:
             TenantNotFound, AuthError: From looking a domain name up, in this cloud.
@@ -431,25 +438,26 @@ class AuthContext:
         if guid == self._tenant.id:
             return self
         with self._guard:
-            sibling = self._siblings.get(guid)
-            if sibling is None:
-                sibling = AuthContext.__new__(AuthContext)
-                sibling._tenant = found or Tenant(guid, self._tenant.cloud)
-                sibling._client_id = self._client_id
-                sibling._username = self._username
-                sibling._credential = self._credential
-                sibling._cache = self._cache
-                sibling._broker = self._broker
-                sibling._broker_fallback = self._broker_fallback
-                sibling._interactive_timeout = self._interactive_timeout
-                sibling._browser = self._browser
-                sibling._interactive_allowed = False
-                sibling._init_state()
-                self._siblings[guid] = sibling
-            elif found is not None and sibling._tenant.oidc is None:
+            context = self._tenant_contexts.get(guid)
+            if context is None:
+                context = AuthContext.__new__(AuthContext)
+                context._tenant = found or Tenant(guid, self._tenant.cloud)
+                context._client_id = self._client_id
+                context._username = self._username
+                context._app_credential = self._app_credential
+                context._cache = self._cache
+                context._broker = self._broker
+                context._broker_fallback = self._broker_fallback
+                context._browser_timeout = self._browser_timeout
+                context._browser = self._browser
+                context._can_prompt = False
+                context._home = self._home
+                context._init_state()
+                self._tenant_contexts[guid] = context
+            elif found is not None and context._tenant.oidc is None:
                 # First addressed by GUID, now by name: keep what the name's lookup found.
-                sibling._tenant = found
-            return sibling
+                context._tenant = found
+            return context
 
     # ------------------------------------------------------------------ public token API
 
@@ -467,7 +475,7 @@ class AuthContext:
             *scopes: Scopes to request, normally one ``<resource>/.default`` value.
             claims: Claims challenge returned by a resource, as a JSON string.
             tenant_id: Tenant to request the token from. A tenant other than this context's
-                is served by :meth:`for_tenant`.
+                is served by :meth:`get_tenant_context`.
             enable_cae: Accepted for protocol compatibility. Every application declares
                 continuous access evaluation, so the token is CAE-capable either way.
             **kwargs: Ignored.
@@ -475,7 +483,7 @@ class AuthContext:
         Returns:
             The token and its expiry time.
         """
-        context = self.for_tenant(tenant_id or self._tenant.id)
+        context = self.get_tenant_context(tenant_id or self._tenant.id)
         info = context.acquire_token(scopes, claims=claims)
         return AccessToken(info.token, info.expires_on)
 
@@ -493,7 +501,7 @@ class AuthContext:
             The token with its expiry time and type.
         """
         options = options or {}
-        context = self.for_tenant(options.get("tenant_id") or self._tenant.id)
+        context = self.get_tenant_context(options.get("tenant_id") or self._tenant.id)
         return context.acquire_token(scopes, claims=options.get("claims"))
 
     def acquire_token(
@@ -524,9 +532,9 @@ class AuthContext:
             ConsentRequired: If consent is missing in the tenant.
             AuthError: For any other failure.
         """
-        return self._acquire(scopes, client_id, claims, force_refresh, force_interactive=False)
+        return self._acquire(scopes, client_id, claims, force_refresh, pick_account=False)
 
-    def login(self, *, client_id: str, scopes: Iterable[str], force: bool = False) -> None:
+    def login(self, *, client_id: str, scopes: Iterable[str], pick_account: bool = False) -> None:
         """Sign in now instead of at the first request.
 
         Resource clients call this from their own ``login()`` with their client id and
@@ -535,14 +543,15 @@ class AuthContext:
         Args:
             client_id: Client id to sign in to.
             scopes: Scopes to request.
-            force: Show the account picker, even when a cached token or account exists or
-                the broker or browser could sign in by itself. Someone other than the
-                configured user is refused. Ignored by app flows.
+            pick_account: Show the account picker, even when a cached token or account
+                exists or the broker or browser could sign in by itself. Someone other than
+                the configured user is refused. Ignored by app flows.
 
         Raises:
-            InteractionRequired: If this is a sibling context and the user must sign in.
+            InteractionRequired: If this context came from :meth:`get_tenant_context` and the
+                user must sign in.
         """
-        self._acquire(scopes, client_id, None, force, force_interactive=force)
+        self._acquire(scopes, client_id, None, pick_account, pick_account=pick_account)
 
     def acquire_token_silently(
         self,
@@ -574,7 +583,7 @@ class AuthContext:
             AuthError: For any other failure.
         """
         return self._acquire(
-            scopes, client_id, None, force_refresh, force_interactive=False, silent_only=True
+            scopes, client_id, None, force_refresh, pick_account=False, silent_only=True
         )
 
     # ------------------------------------------------------------------ internals
@@ -599,8 +608,11 @@ class AuthContext:
             raise ValueError("App flows need a client_id; first-party client ids cannot be used")
         return AZURE_POWERSHELL_CLIENT_ID
 
-    def cached_token(self, scopes: Iterable[str], client_id: str | None) -> AccessTokenInfo | None:
-        """Return a still-fresh token from the in-process memo, without locking.
+    def _recent_token(self, scopes: Iterable[str], client_id: str | None) -> AccessTokenInfo | None:
+        """Return a still-fresh token this context fetched recently, without locking.
+
+        These tokens are kept in this context's memory, in front of the MSAL token cache,
+        so a fresh token is returned without asking MSAL.
 
         Args:
             scopes: Scopes the token was requested for.
@@ -610,7 +622,7 @@ class AuthContext:
             The token, or ``None`` when there is none or it is close to expiry.
         """
         key = (self.resolve_client_id(client_id), frozenset(scopes))
-        info = self._tokens.get(key)
+        info = self._recent_tokens.get(key)
         if info is not None and info.expires_on - time.time() > _REFRESH_MARGIN_SECONDS:
             return info
         return None
@@ -622,7 +634,7 @@ class AuthContext:
         claims: str | None,
         force_refresh: bool,
         *,
-        force_interactive: bool,
+        pick_account: bool,
         silent_only: bool = False,
     ) -> AccessTokenInfo:
         """Acquire a token under the single-flight lock for its key.
@@ -632,7 +644,7 @@ class AuthContext:
             client_id: Client id chosen by the caller, if any.
             claims: Claims challenge to satisfy.
             force_refresh: Skip cached access tokens.
-            force_interactive: Prompt even when a silent token is available.
+            pick_account: Show the account picker, even when a silent token is available.
             silent_only: Never prompt, even where this context may: fail instead.
 
         Returns:
@@ -646,10 +658,10 @@ class AuthContext:
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
         with lock:
-            if not (claims or force_refresh or force_interactive):
-                cached = self.cached_token(scope_list, resolved)
-                if cached is not None:
-                    return cached
+            if not (claims or force_refresh or pick_account):
+                recent = self._recent_token(scope_list, resolved)
+                if recent is not None:
+                    return recent
             if self.is_app_flow:
                 result = self._acquire_for_app(resolved, scope_list, claims, force_refresh)
             else:
@@ -658,7 +670,7 @@ class AuthContext:
                     scope_list,
                     claims,
                     force_refresh,
-                    force_interactive,
+                    pick_account,
                     silent_only=silent_only,
                 )
             info = AccessTokenInfo(
@@ -666,7 +678,7 @@ class AuthContext:
                 int(time.time()) + int(result.get("expires_in", 0)),
                 token_type=str(result.get("token_type", "Bearer")),
             )
-            self._tokens[key] = info
+            self._recent_tokens[key] = info
             return info
 
     def _app(self, client_id: str, *, use_broker: bool = False) -> Any:
@@ -683,10 +695,10 @@ class AuthContext:
         key = (client_id, use_broker)
         app = self._apps.get(key)
         if app is None:
-            if self._credential is not None:
+            if self._app_credential is not None:
                 app = msal.ConfidentialClientApplication(
                     client_id,
-                    client_credential=self._credential.msal_client_credential(
+                    client_credential=self._app_credential.msal_client_credential(
                         client_id=client_id, token_endpoint=self.token_endpoint
                     ),
                     authority=self.authority,
@@ -797,7 +809,7 @@ class AuthContext:
         scopes: list[str],
         claims: str | None,
         force_refresh: bool,
-        force_interactive: bool,
+        pick_account: bool,
         *,
         silent_only: bool = False,
     ) -> dict[str, Any]:
@@ -808,7 +820,7 @@ class AuthContext:
             scopes: Scopes to request.
             claims: Claims challenge to satisfy.
             force_refresh: Skip cached access tokens.
-            force_interactive: Prompt even when a silent token is available.
+            pick_account: Show the account picker, even when a silent token is available.
             silent_only: Never prompt, even where this context may: fail instead.
 
         Returns:
@@ -817,7 +829,7 @@ class AuthContext:
         use_broker = self._broker_usable()
         app = self._app(client_id, use_broker=use_broker)
         result: dict[str, Any] | None = None
-        if not force_interactive:
+        if not pick_account:
             accounts = self._accounts(app)
             if len(accounts) > 1:
                 raise AccountSelectionRequired(
@@ -833,14 +845,14 @@ class AuthContext:
             if result and "access_token" in result:
                 return dict(result)
 
-        if silent_only and self._interactive_allowed:
+        if silent_only and self._can_prompt:
             raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
-        if not self._interactive_allowed:
+        if not self._can_prompt:
             error = error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
             if isinstance(error, InteractionRequired):
                 raise InteractionRequired(
-                    f"{error} Sibling contexts never prompt; call login() on a client of the "
-                    "root context first.",
+                    f"{error} Contexts from get_tenant_context() never prompt; call login() on a "
+                    "client of the home context (auth.home) first.",
                     tenant_id=self._tenant.id,
                     scopes=scopes,
                 )
@@ -856,7 +868,7 @@ class AuthContext:
         # browser on either would be wrong, and the retry could never fire in the case it was
         # written for.
         result = self._interactive(
-            client_id, scopes, claims, use_broker=use_broker, pick_account=force_interactive
+            client_id, scopes, claims, use_broker=use_broker, pick_account=pick_account
         )
         if "access_token" not in result:
             raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
@@ -925,10 +937,10 @@ class AuthContext:
                 prompt=prompt,
                 login_hint=self._username,
                 claims_challenge=claims,
-                timeout=self._interactive_timeout,
+                timeout=self._browser_timeout,
             )
         except BrowserInteractionTimeoutError as exc:
-            raise self._browser_timeout() from exc
+            raise self._browser_timeout_error() from exc
         return dict(result)
 
     def _browser_sign_in(
@@ -957,7 +969,7 @@ class AuthContext:
             The MSAL result, successful or not.
 
         Raises:
-            AuthError: If the sign-in is not completed within ``interactive_timeout``.
+            AuthError: If the sign-in is not completed within ``browser_timeout``.
         """
         name = _register_browser(browser)
         with AuthCodeReceiver(port=0) as receiver:
@@ -972,21 +984,21 @@ class AuthContext:
             response = receiver.get_auth_response(
                 auth_uri=flow["auth_uri"],
                 state=flow["state"],
-                timeout=self._interactive_timeout,
+                timeout=self._browser_timeout,
                 browser_name=name,
             )
         if response is None:
-            raise self._browser_timeout()
+            raise self._browser_timeout_error()
         return dict(app.acquire_token_by_auth_code_flow(flow, response, scopes=scopes))
 
-    def _browser_timeout(self) -> AuthError:
+    def _browser_timeout_error(self) -> AuthError:
         """Build the error for a browser sign-in nobody completed.
 
         Returns:
-            The error, naming ``interactive_timeout``.
+            The error, naming ``browser_timeout``.
         """
         return AuthError(
-            f"The browser sign-in was not completed within {self._interactive_timeout:g} "
+            f"The browser sign-in was not completed within {self._browser_timeout:g} "
             "seconds. The window was closed, nobody answered it, or the sign-in page stopped "
             "at an error that never returns to the application, such as a Conditional "
             "Access block."
@@ -1029,16 +1041,21 @@ class AsyncAuthContext:
         """The synchronous context behind this view."""
         return self._sync
 
-    def for_tenant(self, tenant: str) -> AsyncAuthContext:
-        """Return the asynchronous view of a sibling context.
+    @property
+    def home(self) -> AsyncAuthContext:
+        """The asynchronous view of :attr:`AuthContext.home`."""
+        return self._sync.home.aio
+
+    def get_tenant_context(self, tenant: str) -> AsyncAuthContext:
+        """Return the asynchronous view of :meth:`AuthContext.get_tenant_context`.
 
         Args:
             tenant: Tenant id (GUID) or verified domain name of the other tenant.
 
         Returns:
-            The sibling's asynchronous view.
+            The asynchronous view of the context for that tenant.
         """
-        return self._sync.for_tenant(tenant).aio
+        return self._sync.get_tenant_context(tenant).aio
 
     async def get_token(
         self,
@@ -1061,8 +1078,8 @@ class AsyncAuthContext:
         Returns:
             The token and its expiry time.
         """
-        view = self.for_tenant(tenant_id or self._sync.tenant.id)
-        info = await view.acquire_token(scopes, claims=claims)
+        context = self.get_tenant_context(tenant_id or self._sync.tenant.id)
+        info = await context.acquire_token(scopes, claims=claims)
         return AccessToken(info.token, info.expires_on)
 
     async def get_token_info(
@@ -1079,8 +1096,8 @@ class AsyncAuthContext:
             The token with its expiry time and type.
         """
         options = options or {}
-        view = self.for_tenant(options.get("tenant_id") or self._sync.tenant.id)
-        return await view.acquire_token(scopes, claims=options.get("claims"))
+        context = self.get_tenant_context(options.get("tenant_id") or self._sync.tenant.id)
+        return await context.acquire_token(scopes, claims=options.get("claims"))
 
     async def acquire_token(
         self,
@@ -1102,9 +1119,9 @@ class AsyncAuthContext:
             The token with its expiry time and type.
         """
         if not (claims or force_refresh):
-            cached = self._sync.cached_token(scopes, client_id)
-            if cached is not None:
-                return cached
+            recent = self._sync._recent_token(scopes, client_id)
+            if recent is not None:
+                return recent
         return await asyncio.to_thread(
             self._sync.acquire_token,
             scopes,
@@ -1131,9 +1148,9 @@ class AsyncAuthContext:
             The token with its expiry time and type.
         """
         if not force_refresh:
-            cached = self._sync.cached_token(scopes, client_id)
-            if cached is not None:
-                return cached
+            recent = self._sync._recent_token(scopes, client_id)
+            if recent is not None:
+                return recent
         return await asyncio.to_thread(
             self._sync.acquire_token_silently,
             scopes,
@@ -1141,15 +1158,19 @@ class AsyncAuthContext:
             force_refresh=force_refresh,
         )
 
-    async def login(self, *, client_id: str, scopes: Sequence[str], force: bool = False) -> None:
+    async def login(
+        self, *, client_id: str, scopes: Sequence[str], pick_account: bool = False
+    ) -> None:
         """Sign in now; see :meth:`AuthContext.login`.
 
         Args:
             client_id: Client id to sign in to.
             scopes: Scopes to request.
-            force: Show the account picker; see :meth:`AuthContext.login`.
+            pick_account: Show the account picker; see :meth:`AuthContext.login`.
         """
-        await asyncio.to_thread(self._sync.login, client_id=client_id, scopes=scopes, force=force)
+        await asyncio.to_thread(
+            self._sync.login, client_id=client_id, scopes=scopes, pick_account=pick_account
+        )
 
     async def close(self) -> None:
         """Do nothing; present for the ``AsyncTokenCredential`` protocol."""

@@ -17,7 +17,7 @@ extra; import it from :mod:`azure_auth.sync.keyvault`.
 from __future__ import annotations
 
 from azure_auth._sync import (
-    AzureClient,
+    ArmClient,
     ExchangeClient,
     GraphClient,
     InvokeCommandClient,
@@ -26,7 +26,7 @@ from azure_auth._sync import (
 )
 
 __all__ = [
-    "AzureClient",
+    "ArmClient",
     "ExchangeClient",
     "GraphClient",
     "InvokeCommandClient",

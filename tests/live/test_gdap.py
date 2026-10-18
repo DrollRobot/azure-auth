@@ -1,10 +1,11 @@
-"""One home-tenant sign-in, then silent sibling contexts on GDAP customer tenants.
+"""One home-tenant sign-in, then silent contexts from get_tenant_context() on GDAP customer tenants.
 
 Every test here only reads, so it can run against any customer tenant. A sign-in window
-can open only in the home tenant: a sibling context, which is what reaches a customer tenant,
-never prompts, so no consent screen can come up there. The Exchange and Security & Compliance
-tests send every request through :class:`~tests.live.support.ReadOnlyCmdlets`, which fails the
-test, without sending, any request that is not one of its read-only cmdlets.
+can open only in the home tenant: a context from get_tenant_context(), which is what reaches a
+customer tenant, never prompts, so no consent screen can come up there. The Exchange and
+Security & Compliance tests send every request through
+:class:`~tests.live.support.ReadOnlyCmdlets`, which fails the test, without sending, any
+request that is not one of its read-only cmdlets.
 
 The home sign-in is the browser's, and the customer-tenant tokens come from its refresh token.
 The Windows broker issues customer-tenant tokens too, but without the GDAP role claims, and
@@ -23,9 +24,9 @@ from typing import Any
 import pytest
 
 from azure_auth import (
+    ArmClient,
+    ArmError,
     AuthContext,
-    AzureClient,
-    AzureError,
     ConsentRequired,
     ExchangeClient,
     GraphClient,
@@ -121,8 +122,8 @@ async def test_gdap_loop_reaches_customer_tenants_without_prompting(
     reached = 0
     skipped: list[str] = []
     for tenant_id in tenant_ids[:5]:
-        sibling = user_auth.for_tenant(tenant_id)
-        async with GraphClient(sibling, scopes=GDAP_SCOPES[1:]) as graph:
+        customer = user_auth.get_tenant_context(tenant_id)
+        async with GraphClient(customer, scopes=GDAP_SCOPES[1:]) as graph:
             try:
                 organization = await graph.get_all("/organization")
             except (ConsentRequired, InteractionRequired) as error:
@@ -143,12 +144,12 @@ async def test_gdap_reads_a_customers_directory_without_prompting(
 ) -> None:
     """Graph answers a directory read in a customer tenant with the home sign-in's token.
 
-    The sibling asks for ``.default``, so the token carries exactly the scopes the customer
-    has granted the application. Customers grant different scopes, so the test reads the
-    least the token allows (``MINIMAL_READS``), one request, and says which. A customer that
-    has granted the application nothing refuses the token request itself (AADSTS65001),
-    reported as ``ConsentRequired``; the test skips there, since the consent is the customer's
-    to give, and likewise when none of the listed scopes is granted.
+    The customer tenant's context asks for ``.default``, so the token carries exactly the
+    scopes the customer has granted the application. Customers grant different scopes, so the
+    test reads the least the token allows (``MINIMAL_READS``), one request, and says which. A
+    customer that has granted the application nothing refuses the token request itself
+    (AADSTS65001), reported as ``ConsentRequired``; the test skips there, since the consent is
+    the customer's to give, and likewise when none of the listed scopes is granted.
 
     The token must carry the GDAP roles (``wids``): Graph resolves the partner through them.
     Measured 2026-10-17: a token without them, which is what the broker issues, gets
@@ -156,16 +157,16 @@ async def test_gdap_reads_a_customers_directory_without_prompting(
     """
     async with GraphClient(user_auth, scopes=GDAP_SCOPES) as home:
         ensure_sign_in(home)
-    sibling = user_auth.for_tenant(tenant)
-    assert sibling is not user_auth, f"{tenant} is the home tenant"
+    customer = user_auth.get_tenant_context(tenant)
+    assert customer is not user_auth, f"{tenant} is the home tenant"
 
-    async with GraphClient(sibling) as graph:
+    async with GraphClient(customer) as graph:
         try:
-            token = await sibling.aio.acquire_token(graph.scopes, client_id=graph.client_id)
+            token = await customer.aio.acquire_token(graph.scopes, client_id=graph.client_id)
         except ConsentRequired as error:
             pytest.skip(f"{tenant} has not consented to {graph.client_id}: {error}")
         claims = token_claims(token.token)
-        assert claims["tid"] == sibling.tenant.id
+        assert claims["tid"] == customer.tenant.id
         assert home_tenant_of(claims) == user_auth.tenant.id
         assert claims.get("wids"), "the customer-tenant token carries no GDAP roles (wids)"
         scp = str(claims.get("scp", ""))
@@ -179,7 +180,7 @@ async def test_gdap_reads_a_customers_directory_without_prompting(
         print(f"GDAP Graph {tenant}: read {path} with {scope}, {len(answer['value'])} returned")
         assert isinstance(answer["value"], list)
         if path == "/organization":
-            assert answer["value"][0]["id"] == sibling.tenant.id
+            assert answer["value"][0]["id"] == customer.tenant.id
 
 
 @needs_user
@@ -188,7 +189,7 @@ async def test_gdap_reads_a_customers_directory_without_prompting(
 async def test_gdap_names_what_a_customer_has_not_granted(
     user_auth: AuthContext, tenant: str
 ) -> None:
-    """A sibling asking for a scope the customer has not granted is told what is missing.
+    """A customer tenant's context asking for a scope not granted there is told what is missing.
 
     Read-only: the client asks silently for ``.default``, compares, and raises
     ``ConsentRequired`` without asking Entra for the missing scope. The scope is the first of
@@ -196,9 +197,9 @@ async def test_gdap_names_what_a_customer_has_not_granted(
     """
     async with GraphClient(user_auth, scopes=GDAP_SCOPES) as home:
         ensure_sign_in(home)
-    sibling = user_auth.for_tenant(tenant)
+    customer = user_auth.get_tenant_context(tenant)
 
-    async with GraphClient(sibling) as default:
+    async with GraphClient(customer) as default:
         granted = await default.granted_scopes()
     held = {scope.lower() for scope in granted}
     candidates = ["Sites.Read.All", "Agreement.Read.All", "PeopleSettings.Read.All"]
@@ -207,13 +208,13 @@ async def test_gdap_names_what_a_customer_has_not_granted(
         pytest.skip(f"{tenant} has granted every candidate scope")
 
     with pytest.raises(ConsentRequired) as caught:
-        async with GraphClient(sibling, scopes=[scope]) as graph:
+        async with GraphClient(customer, scopes=[scope]) as graph:
             await graph.get("/organization", params={"$select": "id"})
 
     print(f"GDAP check {tenant}: {len(granted)} granted; refused {scope}: {caught.value}")
     assert caught.value.missing == (scope,)
     assert set(caught.value.granted) == set(granted)
-    assert caught.value.tenant_id == sibling.tenant.id
+    assert caught.value.tenant_id == customer.tenant.id
 
 
 @needs_user
@@ -239,13 +240,13 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     async with ExchangeClient(user_auth) as home:
         ensure_sign_in(home)
         home_token = await user_auth.aio.acquire_token(home.scopes, client_id=home.client_id)
-    sibling = user_auth.for_tenant(tenant)
-    assert sibling is not user_auth, f"{tenant} is the home tenant"
+    customer = user_auth.get_tenant_context(tenant)
+    assert customer is not user_auth, f"{tenant} is the home tenant"
 
     guard = ReadOnlyCmdlets()
-    async with ExchangeClient(sibling, transport=guard) as exchange:
+    async with ExchangeClient(customer, transport=guard) as exchange:
         try:
-            token = await sibling.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
+            token = await customer.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
         except (ConsentRequired, InteractionRequired) as error:
             pytest.fail(f"the home sign-in does not reach {tenant} silently: {error}")
         config = await exchange.run("Get-OrganizationConfig")
@@ -254,7 +255,7 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     print(
         f"GDAP Exchange {tenant}: roles in the customer tenant's token (wids): {claims.get('wids')}"
     )
-    assert claims["tid"] == sibling.tenant.id
+    assert claims["tid"] == customer.tenant.id
     assert claims["aud"] == user_auth.tenant.cloud.exchange
     # A customer-tenant token carries no upn and no oid, and its unique_name is the display
     # name. Measured 2026-10-15: its idp, the issuer that signed the user in, is the home
@@ -264,11 +265,11 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     assert claims["email"].lower().startswith(f"user_{home_id}@")
 
     request = guard.requests[0]
-    assert sibling.tenant.id in request.url.path
-    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{sibling.tenant.id}"
+    assert customer.tenant.id in request.url.path
+    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{customer.tenant.id}"
 
     assert len(config) == 1
-    assert user_auth.for_tenant(config[0]["Name"]) is sibling
+    assert user_auth.get_tenant_context(config[0]["Name"]) is customer
 
 
 @needs_user
@@ -286,10 +287,10 @@ async def test_gdap_reads_a_customers_mailboxes_without_prompting(
     """
     async with ExchangeClient(user_auth) as home:
         ensure_sign_in(home)
-    sibling = user_auth.for_tenant(tenant)
+    customer = user_auth.get_tenant_context(tenant)
 
     guard = ReadOnlyCmdlets()
-    async with ExchangeClient(sibling, transport=guard) as exchange:
+    async with ExchangeClient(customer, transport=guard) as exchange:
         mailboxes = await exchange.mailboxes(
             PropertySet="Audit",
             RecipientTypeDetails=[
@@ -303,12 +304,12 @@ async def test_gdap_reads_a_customers_mailboxes_without_prompting(
 
     request = guard.requests[0]
     assert request.method == "GET"
-    assert request.url.path.endswith(f"/{sibling.tenant.id}/Mailbox")
+    assert request.url.path.endswith(f"/{customer.tenant.id}/Mailbox")
     print(
         f"GDAP Exchange read {tenant}: {len(mailboxes)} mailboxes with"
         f" X-AnchorMailbox {request.headers['X-AnchorMailbox']}"
     )
-    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{sibling.tenant.id}"
+    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{customer.tenant.id}"
     # A customer with no mailboxes answers with an empty list; that is an answer, not a failure.
     assert all(isinstance(mailbox["DefaultAuditSet"], list) for mailbox in mailboxes)
     assert all(mailbox["UserPrincipalName"] for mailbox in mailboxes)
@@ -323,27 +324,27 @@ async def test_gdap_reads_a_customers_compliance_labels_without_prompting(
     """Security & Compliance answers a read in a customer tenant with the home sign-in's token.
 
     The same application signs in to Exchange and to Security & Compliance, so the home
-    Exchange sign-in is enough; the sibling's token is for the compliance resource. Whether
-    the service accepts the GDAP route at all, and the system-mailbox routing header the
-    client sends for a sibling (named by tenant id, which the app flow's measurement of
-    2026-10-10 says the service refuses), is what a run settles. The header is printed with
-    the result.
+    Exchange sign-in is enough; the customer tenant's token is for the compliance resource.
+    Whether the service accepts the GDAP route at all, and the system-mailbox routing header
+    the client sends for a customer tenant's context (named by tenant id, which the app flow's
+    measurement of 2026-10-10 says the service refuses), is what a run settles. The header is
+    printed with the result.
     """
     async with ExchangeClient(user_auth) as home:
         ensure_sign_in(home)
-    sibling = user_auth.for_tenant(tenant)
-    assert sibling is not user_auth, f"{tenant} is the home tenant"
+    customer = user_auth.get_tenant_context(tenant)
+    assert customer is not user_auth, f"{tenant} is the home tenant"
 
     guard = ReadOnlyCmdlets()
-    async with IppsClient(sibling, transport=guard) as ipps:
+    async with IppsClient(customer, transport=guard) as ipps:
         try:
-            token = await sibling.aio.acquire_token(ipps.scopes, client_id=ipps.client_id)
+            token = await customer.aio.acquire_token(ipps.scopes, client_id=ipps.client_id)
         except (ConsentRequired, InteractionRequired) as error:
             pytest.fail(f"the home sign-in does not reach IPPS in {tenant} silently: {error}")
         labels = await ipps.run("Get-Label")
 
     claims = token_claims(token.token)
-    assert claims["tid"] == sibling.tenant.id
+    assert claims["tid"] == customer.tenant.id
     assert claims["aud"] == user_auth.tenant.cloud.ipps
     assert home_tenant_of(claims) == user_auth.tenant.id
     request = guard.requests[0]
@@ -367,22 +368,22 @@ async def test_gdap_gets_a_customers_arm_token_without_prompting(
     the token: the customer tenant issued it, for ARM, to the user the home tenant signed
     in. A refusal from ARM itself is reported, not failed; anything else that goes wrong is.
     """
-    async with AzureClient(user_auth) as home:
+    async with ArmClient(user_auth) as home:
         ensure_sign_in(home)
-    sibling = user_auth.for_tenant(tenant)
-    assert sibling is not user_auth, f"{tenant} is the home tenant"
+    customer = user_auth.get_tenant_context(tenant)
+    assert customer is not user_auth, f"{tenant} is the home tenant"
 
-    async with AzureClient(sibling) as arm:
+    async with ArmClient(customer) as arm:
         try:
-            token = await sibling.aio.acquire_token(arm.scopes, client_id=arm.client_id)
+            token = await customer.aio.acquire_token(arm.scopes, client_id=arm.client_id)
         except (ConsentRequired, InteractionRequired) as error:
             pytest.fail(f"the home sign-in does not reach ARM in {tenant} silently: {error}")
         claims = token_claims(token.token)
-        assert claims["tid"] == sibling.tenant.id
+        assert claims["tid"] == customer.tenant.id
         assert home_tenant_of(claims) == user_auth.tenant.id
         try:
             subscriptions = await arm.get_all("/subscriptions", api_version="2022-12-01")
-        except AzureError as error:
+        except ArmError as error:
             print(f"GDAP ARM {tenant}: /subscriptions refused: {error}")
         else:
             print(f"GDAP ARM {tenant}: {len(subscriptions)} subscriptions visible")
@@ -394,8 +395,8 @@ async def test_gdap_gets_a_customers_arm_token_without_prompting(
 def test_the_blocking_exchange_client_reads_a_customers_exchange(cache_path: Path) -> None:
     """The generated blocking Exchange client reaches a customer through GDAP too."""
     home = live_user_auth(cache_path)
-    sibling = home.for_tenant(GDAP_TENANTS[0])
-    with BlockingExchangeClient(sibling, transport=ReadOnlyCmdlets()) as exchange:
+    customer = home.get_tenant_context(GDAP_TENANTS[0])
+    with BlockingExchangeClient(customer, transport=ReadOnlyCmdlets()) as exchange:
         ensure_token(home, exchange.scopes, exchange.client_id)
         config = exchange.run("Get-OrganizationConfig")
     assert len(config) == 1
@@ -416,13 +417,13 @@ def test_the_disk_cache_reaches_customer_tenants_without_prompting(cache_path: P
     home = cached_user_auth(cache_path)
     reached: list[str] = []
     for tenant in GDAP_TENANTS:
-        sibling = home.for_tenant(tenant)
-        with BlockingGraphClient(sibling) as graph:
+        customer = home.get_tenant_context(tenant)
+        with BlockingGraphClient(customer) as graph:
             try:
                 organization = graph.get_all("/organization", params={"$select": "id"})
             except ConsentRequired:
                 continue
-        assert organization[0]["id"] == sibling.tenant.id
+        assert organization[0]["id"] == customer.tenant.id
         reached.append(tenant)
     print(f"GDAP from the disk cache: {len(reached)} of {len(GDAP_TENANTS)} customers reached")
     assert reached, "no customer tenant could be reached from the cache"
@@ -484,10 +485,10 @@ async def test_grant_when_possible_adds_a_scope_in_a_customer_tenant(
         ensure_sign_in(home)
 
     for tenant in GDAP_TENANTS:
-        sibling = user_auth.for_tenant(tenant)
-        async with GraphClient(sibling) as default:
+        customer = user_auth.get_tenant_context(tenant)
+        async with GraphClient(customer) as default:
             try:
-                held = await sibling.aio.acquire_token(default.scopes, client_id=default.client_id)
+                held = await customer.aio.acquire_token(default.scopes, client_id=default.client_id)
             except ConsentRequired:
                 continue
             scp = {scope.lower() for scope in str(token_claims(held.token).get("scp", "")).split()}
@@ -509,15 +510,15 @@ async def test_grant_when_possible_adds_a_scope_in_a_customer_tenant(
     started = time.monotonic()
     try:
         async with GraphClient(
-            sibling, scopes=[GRANT_TEST_SCOPE], grant_when_possible=True
+            customer, scopes=[GRANT_TEST_SCOPE], grant_when_possible=True
         ) as graph:
             await graph.login()
-            token = await sibling.aio.acquire_token(graph.scopes, client_id=graph.client_id)
+            token = await customer.aio.acquire_token(graph.scopes, client_id=graph.client_id)
         claims = token_claims(token.token)
         print(f"GDAP grant {tenant}: token carries it after {time.monotonic() - started:.0f}s")
-        assert claims["tid"] == sibling.tenant.id
+        assert claims["tid"] == customer.tenant.id
         assert GRANT_TEST_SCOPE.lower() in {scope.lower() for scope in str(claims["scp"]).split()}
     finally:
-        async with GraphClient(sibling) as default:
+        async with GraphClient(customer) as default:
             await default.patch(f"/oauth2PermissionGrants/{grant['id']}", {"scope": before})
         print(f"GDAP grant {tenant}: grant restored to {len(before.split())} scopes")

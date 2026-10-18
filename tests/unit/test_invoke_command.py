@@ -89,12 +89,12 @@ async def test_app_flow_routes_through_the_system_mailbox(auth: AuthContext) -> 
     assert anchor == f"APP:{SYSTEM_MAILBOX}@{TENANT_GUID}"
 
 
-async def test_gdap_sibling_routes_through_the_customer_tenants_system_mailbox(
+async def test_gdap_customer_routes_through_the_customer_tenants_system_mailbox(
     auth: AuthContext,
 ) -> None:
     recorder = Recorder([ok({"value": []})])
     exchange = ExchangeClient(
-        auth.for_tenant("managed.onmicrosoft.com"), transport=recorder.transport
+        auth.get_tenant_context("managed.onmicrosoft.com"), transport=recorder.transport
     )
 
     await exchange.run("Get-Mailbox")

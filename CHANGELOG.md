@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A context can sign in with a browser other than the system default, with its own
   arguments, such as an Edge profile. Other contexts keep the default browser.
 - A Graph client that names scopes, in a user flow, checks what the tenant has granted before
-  asking for them, with a silent `.default` request. A sibling context that lacks some raises
-  `ConsentRequired` at once, without asking Entra for them; a context that may prompt goes on
-  to the sign-in and its consent screen, as before.
+  asking for them, with a silent `.default` request. A context from `get_tenant_context()`
+  that lacks some raises `ConsentRequired` at once, without asking Entra for them; a context
+  that may prompt goes on to the sign-in and its consent screen, as before.
 - `ConsentRequired.granted` and `ConsentRequired.missing`: the short names of the scopes the
   tenant has granted and of the requested ones it has not, when that was checked.
 - `GraphClient.granted_scopes()`: the Graph scopes the tenant has granted the client's
@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in that tenant, and wait for a token that carries it (`wait_for_grant=False` skips the wait).
   Otherwise the refusal is raised as before. Off by default. Built for GDAP customer tenants,
   where a partner cannot consent.
+
+### Changed
+
+- **Breaking:** `AuthContext.for_tenant()` is renamed
+  `AuthContext.get_tenant_context()`.
+- **Breaking:** `AuthContext.is_sibling` is replaced by `AuthContext.home`; test
+  `auth.home is not auth`.
+- **Breaking:** `login(force=True)` is now `login(pick_account=True)`, on the context and on
+  every client.
+- **Breaking:** `AzureClient` and `AzureError` are renamed `ArmClient` and `ArmError`.
+- **Breaking:** the `AuthContext` argument `interactive_timeout` is renamed `browser_timeout`.
+  It only ever applied to the browser.
 
 ## [0.4.1] - 2026-10-16 - Broker fix for GDAP customers
 
