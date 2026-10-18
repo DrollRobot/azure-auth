@@ -63,6 +63,9 @@ from tests.live.support import (
 # caches hold. It runs before the other interactive tests, whose forced sign-ins refill them.
 REVOKES_SESSIONS = "test_token_revocation.py"
 
+# This folder, whose tests are the live ones. The collection hook sees every test in the run.
+LIVE_TESTS = Path(__file__).parent
+
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Put the ``interactive`` tests first, and the ``cached_credential`` tests last.
@@ -70,7 +73,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     The prompts come in one stretch, and the tests of signing in from the cache find it full.
     The session revocation (``REVOKES_SESSIONS``) leads the ``interactive`` tests. A stable
     sort: within each group the collection order stands.
+
+    Every live test also ignores the warning a chosen browser leaves behind
+    (``AZURE_AUTH_TEST_BROWSER``): ``webbrowser`` launches it and lets go of it, because a
+    browser outlives the launch, and Python warns when it lets go of a process that is still
+    running. The warning comes whenever the process is collected, which may be in a later test
+    than the sign-in, so no single test can ignore it for itself.
     """
+    for item in items:
+        if item.path.is_relative_to(LIVE_TESTS):
+            item.add_marker(
+                pytest.mark.filterwarnings(
+                    r"ignore:subprocess \d+ is still running:ResourceWarning"
+                )
+            )
 
     def group(item: pytest.Item) -> int:
         if "interactive" in item.keywords:

@@ -12,6 +12,7 @@ from azure_auth import AuthContext, AuthError, ConsentRequired, GraphClient
 from tests import consent_reset
 from tests.live.support import (
     NONADMIN,
+    SIGN_IN_BROWSER,
     SIGN_IN_TIMEOUT_SECONDS,
     TENANT,
     USERNAME,
@@ -71,7 +72,9 @@ async def consent_revoked(cache_path: Path) -> str:
     Returns:
         The signed-in administrator's object id, for the test to report on.
     """
-    admin = AuthContext(TENANT, username=USERNAME, cache="disk", cache_path=cache_path)
+    admin = AuthContext(
+        TENANT, username=USERNAME, cache="disk", cache_path=cache_path, browser=SIGN_IN_BROWSER
+    )
     async with GraphClient(admin, scopes=REVOKE_SCOPES) as graph:
         me = await graph.get("/me", params={"$select": "id"})
         principal = await consent_reset.service_principal(graph, consent_reset.GRAPH_CLI_CLIENT_ID)
@@ -139,7 +142,12 @@ async def test_a_user_who_may_not_consent_is_refused_with_a_useful_error(
     instead leaves MSAL waiting for a redirect that never comes. Then the administrator's
     sign-in and consent screen in the fixture's teardown, which restores the baseline.
     """
-    auth = AuthContext(TENANT, username=NONADMIN, browser_timeout=SIGN_IN_TIMEOUT_SECONDS)
+    auth = AuthContext(
+        TENANT,
+        username=NONADMIN,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
+    )
     async with GraphClient(auth, scopes=[NONADMIN_SCOPE]) as graph:
         with pytest.raises(AuthError) as caught:
             await graph.get("/users", params={"$top": "1"})

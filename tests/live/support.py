@@ -45,8 +45,8 @@ Environment variables:
   the program and its arguments, such as
   ``'["C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   "--profile-directory=Profile 1"]'``, single-quoted in ``.env`` so that the double quotes
-  survive. Naming one runs the chosen-browser sign-in test; give at least one argument, so it
-  covers passing them.
+  survive. Every browser sign-in opens in it (:data:`SIGN_IN_BROWSER`), and naming one runs
+  the chosen-browser sign-in test; give at least one argument, so it covers passing them.
 * ``AZURE_AUTH_TEST_CACHE_REMINDER_PATH``: a folder in plain sight, such as the Desktop. Every
   live run puts ``AZURE-AUTH_MSAL_CACHE_DELETEME`` there, pointing at the folder that holds
   the encrypted token cache the tests leave behind (``tests/cache_reminder.py``): a ``.url``
@@ -180,6 +180,9 @@ GDAP_TENANTS = [
 ]
 GDAP_TENANT = GDAP_TENANTS[0] if GDAP_TENANTS else ""
 BROWSER: list[str] = json.loads(os.environ.get("AZURE_AUTH_TEST_BROWSER") or "[]")
+# The ``browser`` every user-flow context that can prompt is given: the chosen browser, or None
+# for the system default.
+SIGN_IN_BROWSER: list[str] | None = BROWSER or None
 
 needs_user = pytest.mark.skipif(
     not (TENANT and USERNAME),
@@ -315,6 +318,7 @@ def live_user_auth(cache_path: Path, *, tenant: str = TENANT) -> AuthContext:
         cache="disk",
         cache_path=cache_path,
         browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
     )
 
 
@@ -591,13 +595,15 @@ def sign_in_step(window: Literal["WAM", "browser"], user: str = USERNAME) -> str
     """The walkthrough step for a sign-in.
 
     Args:
-        window: Where the sign-in appears: the broker's window or the browser.
+        window: Where the sign-in appears: the broker's window or the browser, named after
+            the chosen browser's program when there is one.
         user: The account to sign in with.
 
     Returns:
         The step.
     """
-    return f"In the {window} window, sign in with {user}."
+    name = Path(BROWSER[0]).stem if window == "browser" and BROWSER else window
+    return f"In the {name} window, sign in with {user}."
 
 
 def walkthrough(*steps: str) -> None:
@@ -843,6 +849,7 @@ def _consent_to_baseline(cache_path: Path, *, force: bool) -> None:
         cache="disk",
         cache_path=cache_path,
         browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
     )
     scopes = graph_scopes(BASELINE_SCOPES)
     with walkthrough_if_waiting(

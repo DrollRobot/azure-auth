@@ -49,6 +49,7 @@ from tests.consent_reset import GRAPH_APP_ID
 from tests.live.support import (
     APP_CLIENT_ID,
     BASELINE_SCOPES,
+    SIGN_IN_BROWSER,
     SIGN_IN_TIMEOUT_SECONDS,
     TENANT,
     THUMBPRINT,
@@ -363,6 +364,7 @@ def discovered_auth(cache_path: Path) -> AuthContext:
         cache="disk",
         cache_path=cache_path,
         browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
     )
 
 
@@ -382,6 +384,7 @@ async def test_a_cloud_of_the_callers_own_is_used_as_given(cache_path: Path) -> 
         cache="disk",
         cache_path=cache_path,
         browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
     )
     async with GraphClient(auth, scopes=BASELINE_SCOPES) as graph:
         ensure_sign_in(graph)
@@ -409,6 +412,7 @@ async def test_a_user_given_the_wrong_cloud_is_refused() -> None:
         Tenant(live_tenant().id, wrong),
         username=USERNAME,
         browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
     )
     async with GraphClient(auth, scopes=["User.Read"]) as graph:
         await graph.login(pick_account=True)

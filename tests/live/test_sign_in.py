@@ -25,6 +25,7 @@ from azure_auth.clients import ResourceClient
 from tests.live.support import (
     BASELINE_SCOPES,
     BROWSER,
+    SIGN_IN_BROWSER,
     SIGN_IN_TIMEOUT_SECONDS,
     TENANT,
     USERNAME,
@@ -71,6 +72,7 @@ async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
         cache="disk",
         cache_path=cache_path,
         browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
     )
     async with GraphClient(auth, scopes=BASELINE_SCOPES) as graph:
         await graph.login(pick_account=True)
@@ -110,6 +112,7 @@ async def test_interactive_login_to_another_first_party_client(
         cache="disk",
         cache_path=cache_path,
         browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
     )
     async with make_client(auth) as client:
         await client.login(pick_account=True)
@@ -124,9 +127,6 @@ async def test_interactive_login_to_another_first_party_client(
 @needs_user
 @needs_browser
 @pytest.mark.interactive
-# webbrowser launches the browser and lets go of it, because a browser outlives the launch.
-# Python warns when it lets go of a process that is still running.
-@pytest.mark.filterwarnings(r"ignore:subprocess \d+ is still running:ResourceWarning")
 async def test_interactive_login_in_a_chosen_browser() -> None:
     """A forced sign-in opens the browser named by ``AZURE_AUTH_TEST_BROWSER``, not the default.
 
@@ -140,7 +140,7 @@ async def test_interactive_login_in_a_chosen_browser() -> None:
     access to anything to sign in. The context has its own memory cache, so nothing here
     touches the cache the other live tests share.
     """
-    walkthrough(f"In the {Path(BROWSER[0]).stem} window, sign in with {USERNAME}.")
+    walkthrough(sign_in_step("browser"))
     auth = AuthContext(
         TENANT, username=USERNAME, browser=BROWSER, browser_timeout=SIGN_IN_TIMEOUT_SECONDS
     )
@@ -188,6 +188,7 @@ async def test_signing_in_as_somebody_else_is_refused(broker: bool) -> None:
         broker=broker,
         broker_fallback=False,
         browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
     )
     async with ArmClient(auth) as client:
         with pytest.raises(AuthError) as caught:
@@ -259,7 +260,12 @@ async def test_a_cancelled_sign_in_is_reported_and_not_retried() -> None:
     tests share.
     """
     walkthrough(sign_in_step("browser"), "Consent screen: click CANCEL.")
-    auth = AuthContext(TENANT, username=USERNAME, browser_timeout=SIGN_IN_TIMEOUT_SECONDS)
+    auth = AuthContext(
+        TENANT,
+        username=USERNAME,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
+    )
     async with GraphClient(auth, scopes=[CANCEL_SCOPE]) as graph:
         try:
             await graph.login(pick_account=True)
@@ -302,7 +308,9 @@ async def test_an_unanswered_sign_in_times_out() -> None:
     It leaves a browser tab open, but nobody has to act, so it is not ``interactive``. Azure
     PowerShell is the application because it exists in every tenant and nothing is granted.
     """
-    auth = AuthContext(TENANT, username=USERNAME, browser_timeout=TIMEOUT_SECONDS)
+    auth = AuthContext(
+        TENANT, username=USERNAME, browser_timeout=TIMEOUT_SECONDS, browser=SIGN_IN_BROWSER
+    )
     async with ArmClient(auth) as client:
         started = time.monotonic()
         with pytest.raises(

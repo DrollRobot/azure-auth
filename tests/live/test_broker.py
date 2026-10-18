@@ -40,6 +40,7 @@ from tests.live.support import (
     GDAP_TENANT,
     KEYVAULT_SECRET_NAME,
     KEYVAULT_URL,
+    SIGN_IN_BROWSER,
     TENANT,
     USERNAME,
     _flag,
@@ -383,7 +384,11 @@ async def test_a_cancelled_broker_sign_in_opens_no_browser() -> None:
     """
     walkthrough("Close the WAM window with the X in its title bar.")
     auth = AuthContext(
-        TENANT, username=USERNAME, broker=True, browser_timeout=FALLBACK_TIMEOUT_SECONDS
+        TENANT,
+        username=USERNAME,
+        broker=True,
+        browser_timeout=FALLBACK_TIMEOUT_SECONDS,
+        browser=SIGN_IN_BROWSER,
     )
     async with ArmClient(auth) as client:
         try:
