@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
+import webbrowser
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -26,6 +29,7 @@ from tests.fakes import (
     Call,
     FakeLookup,
     FakeMsal,
+    FakeReceiver,
     Result,
     error_result,
     tenant_guid,
@@ -856,3 +860,188 @@ def test_a_sibling_first_made_by_guid_learns_its_domain_later(fake_lookup: FakeL
     assert auth.for_tenant(CUSTOMER) is by_guid
     assert by_guid.tenant.domain == CUSTOMER
     assert by_guid.tenant.oidc is not None
+
+
+# ---------------------------------------------------------------------------- chosen browser
+
+
+@pytest.fixture
+def fake_receiver(monkeypatch: pytest.MonkeyPatch) -> FakeReceiver:
+    """Answer browser sign-ins in the chosen browser without opening one."""
+    fake = FakeReceiver()
+    monkeypatch.setattr("azure_auth.auth.context.AuthCodeReceiver", fake)
+    return fake
+
+
+def _unique_program() -> str:
+    """A program nobody else registered, so each test sees its own registration."""
+    return rf"C:\Browsers\{uuid.uuid4().hex}.exe"
+
+
+def _registered(receiver: FakeReceiver) -> webbrowser.BackgroundBrowser:
+    """The browser registered under the name the sign-in gave MSAL."""
+    browser = webbrowser.get(receiver.requests[0]["browser_name"])
+    assert isinstance(browser, webbrowser.BackgroundBrowser)
+    return browser
+
+
+def test_without_a_browser_the_default_browser_signs_in(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    user_context().acquire_token([ARM_SCOPE])
+
+    assert fake_msal.methods() == ["interactive"]
+    assert fake_receiver.requests == []
+
+
+def test_a_chosen_browser_signs_in_through_the_auth_code_flow(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    info = user_context(browser="msedge").acquire_token([ARM_SCOPE])
+
+    assert info.token == "interactive"
+    assert fake_msal.methods() == ["initiate_auth_code_flow", "auth_code_flow"]
+    initiate, redeem = fake_msal.calls
+    assert initiate.app.broker is False
+    assert initiate.scopes == [ARM_SCOPE]
+    assert initiate.kwargs == {
+        "redirect_uri": "http://localhost:51234",
+        "prompt": None,
+        "login_hint": USER,
+        "claims_challenge": None,
+        "response_mode": "form_post",
+    }
+    assert fake_receiver.ports == [0]
+    assert fake_receiver.requests == [
+        {
+            "auth_uri": "https://login.example/authorize",
+            "state": "the-state",
+            "timeout": 120,
+            "browser_name": fake_receiver.requests[0]["browser_name"],
+        }
+    ]
+    assert fake_receiver.closed
+    assert redeem.scopes == [ARM_SCOPE]
+    assert redeem.kwargs["auth_code_flow"]["state"] == "the-state"
+    assert redeem.kwargs["auth_response"] == {"code": "the-code", "state": "the-state"}
+
+
+def test_a_chosen_browser_is_registered_with_the_address_as_its_last_argument(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    user_context(browser="msedge").acquire_token([ARM_SCOPE])
+
+    browser = _registered(fake_receiver)
+    assert (browser.name, browser.args) == ("msedge", ["%s"])
+    assert "%s" not in fake_receiver.requests[0]["browser_name"]
+
+
+def test_a_chosen_browser_may_be_given_arguments(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    program = _unique_program()
+    user_context(browser=[program, "--profile-directory=Profile 2"]).acquire_token([ARM_SCOPE])
+
+    browser = _registered(fake_receiver)
+    assert (browser.name, browser.args) == (program, ["--profile-directory=Profile 2", "%s"])
+
+
+def test_a_chosen_browser_may_be_given_as_a_path(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    program = Path(_unique_program())
+    user_context(browser=program).acquire_token([ARM_SCOPE])
+
+    assert _registered(fake_receiver).name == str(program)
+
+
+def test_a_chosen_browser_is_registered_once(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every registration lengthens webbrowser's try order, so repeated sign-ins must not add
+    # one each.
+    registered: list[str] = []
+    monkeypatch.setattr(webbrowser, "register", lambda name, *args: registered.append(name))
+    auth = user_context(browser=_unique_program())
+
+    auth.login(client_id="app", scopes=[ARM_SCOPE], force=True)
+    auth.login(client_id="app", scopes=[ARM_SCOPE], force=True)
+
+    assert len(fake_receiver.requests) == 2
+    assert registered == [fake_receiver.requests[0]["browser_name"]]
+
+
+def test_a_chosen_browser_is_given_the_claims_and_the_forced_prompt(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    auth = user_context(browser="msedge", interactive_timeout=5)
+
+    auth.acquire_token([ARM_SCOPE], claims='{"access_token": {}}')
+    auth.login(client_id="app", scopes=[ARM_SCOPE], force=True)
+
+    claimed, forced = (call for call in fake_msal.calls if call.method == "initiate_auth_code_flow")
+    assert claimed.kwargs["claims_challenge"] == '{"access_token": {}}'
+    assert forced.kwargs["prompt"] == "select_account"
+    assert [request["timeout"] for request in fake_receiver.requests] == [5, 5]
+
+
+def test_an_unanswered_sign_in_in_a_chosen_browser_is_reported_not_hung(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    fake_receiver.response = None
+
+    with pytest.raises(AuthError, match="not completed within 120 seconds") as caught:
+        user_context(browser="msedge").acquire_token([ARM_SCOPE])
+
+    assert not isinstance(caught.value, (InteractionRequired, ConsentRequired))
+    assert fake_msal.methods() == ["initiate_auth_code_flow"]
+
+
+def test_a_failed_sign_in_in_a_chosen_browser_is_raised_as_auth_error(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    fake_msal.interactive = lambda call: error_result("access_denied", "user cancelled")
+
+    with pytest.raises(AuthError, match="access_denied: user cancelled"):
+        user_context(browser="msedge").acquire_token([ARM_SCOPE])
+
+
+def test_somebody_else_signing_in_in_a_chosen_browser_is_refused(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    fake_msal.interactive = lambda call: token_result(
+        id_token_claims={"preferred_username": "someone@else.com"}
+    )
+
+    with pytest.raises(AuthError, match=r"Signed in as 'someone@else\.com'"):
+        user_context(browser="msedge").acquire_token([ARM_SCOPE])
+
+
+def test_a_broker_falling_back_uses_the_chosen_browser(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver, broker_installed: None
+) -> None:
+    fake_msal.interactive = lambda call: (
+        error_result("broker_error") if call.app.broker else token_result("browser")
+    )
+
+    token = user_context(broker=True, browser="msedge").acquire_token([ARM_SCOPE])
+
+    assert token.token == "browser"
+    assert fake_msal.methods() == ["interactive", "initiate_auth_code_flow", "auth_code_flow"]
+
+
+def test_a_sibling_keeps_the_chosen_browser() -> None:
+    auth = user_context(browser=["msedge", "--inprivate"])
+
+    assert auth.for_tenant(CUSTOMER)._browser == ("msedge", "--inprivate")
+
+
+def test_browser_is_rejected_for_app_flows() -> None:
+    with pytest.raises(ValueError, match="browser is only available"):
+        AuthContext("tenant", client_id="app", client_secret="s3cret", browser="msedge")
+
+
+@pytest.mark.parametrize("browser", ["", [], [""]])
+def test_browser_must_name_a_program(browser: str | list[str]) -> None:
+    with pytest.raises(ValueError, match="browser must name a program"):
+        user_context(browser=browser)

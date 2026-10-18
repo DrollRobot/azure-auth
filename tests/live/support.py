@@ -40,6 +40,12 @@ Environment variables:
   configured, may read (Key Vault Secrets User, or an access policy allowing Get). Naming
   both runs the Key Vault tests. They read the value but never print it, so it should be a
   throwaway made for them.
+* ``AZURE_AUTH_TEST_BROWSER``: a browser other than the system default, as a JSON array of
+  the program and its arguments, such as
+  ``'["C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  "--profile-directory=Profile 1"]'``, single-quoted in ``.env`` so that the double quotes
+  survive. Naming one runs the chosen-browser sign-in test; give at least one argument, so it
+  covers passing them.
 * ``AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS``: how long :func:`restore_baseline` waits for
   Entra to catch up with a grant change: a new grant to show up, or a removed scope to stop
   being issued (default 300).
@@ -152,6 +158,7 @@ KEYVAULT_URL = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_URL", "")
 KEYVAULT_SECRET_NAME = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME", "")
 GDAP = os.environ.get("AZURE_AUTH_TEST_GDAP") == "1"
 GDAP_TENANT = os.environ.get("AZURE_AUTH_TEST_GDAP_TENANT_ID", "")
+BROWSER: list[str] = json.loads(os.environ.get("AZURE_AUTH_TEST_BROWSER") or "[]")
 
 needs_user = pytest.mark.skipif(
     not (TENANT and USERNAME),
@@ -184,6 +191,7 @@ needs_gdap_tenant = pytest.mark.skipif(
     not (GDAP and GDAP_TENANT),
     reason="set AZURE_AUTH_TEST_GDAP=1 and AZURE_AUTH_TEST_GDAP_TENANT_ID",
 )
+needs_browser = pytest.mark.skipif(not BROWSER, reason="set AZURE_AUTH_TEST_BROWSER")
 
 
 def _flag(name: str) -> pytest.MarkDecorator:

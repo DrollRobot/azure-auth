@@ -24,11 +24,13 @@ from azure_auth import (
 from azure_auth.clients import ResourceClient
 from tests.live.support import (
     BASELINE_SCOPES,
+    BROWSER,
     SIGN_IN_TIMEOUT_SECONDS,
     TENANT,
     USERNAME,
     cached_user_auth,
     needs_arm_or_keyvault,
+    needs_browser,
     needs_exchange_sign_in,
     needs_graph,
     needs_user,
@@ -111,6 +113,37 @@ async def test_interactive_login_to_another_first_party_client(
     cached = cached_user_auth(cache_path)
     token = await cached.aio.acquire_token(client.scopes, client_id=client.client_id)
     assert token.token
+    assert (token_user(token.token) or "").lower() == USERNAME.lower()
+    assert token_claims(token.token)["aud"] == client.resource
+
+
+@needs_user
+@needs_browser
+@pytest.mark.interactive
+# webbrowser launches the browser and lets go of it, because a browser outlives the launch.
+# Python warns when it lets go of a process that is still running.
+@pytest.mark.filterwarnings(r"ignore:subprocess \d+ is still running:ResourceWarning")
+async def test_interactive_login_in_a_chosen_browser() -> None:
+    """A forced sign-in opens the browser named by ``AZURE_AUTH_TEST_BROWSER``, not the default.
+
+    The package runs this sign-in itself, with MSAL's own pieces, rather than through
+    ``acquire_token_interactive``, so this checks the whole of it against Entra: the address
+    opens in the chosen browser, Entra's answer reaches the listener, and the code is redeemed
+    for a token for the configured user. That the window is the chosen browser is for the
+    person to see; the test can only check what comes back.
+
+    Azure PowerShell is the application because it exists in every tenant and needs no
+    access to anything to sign in. The context has its own memory cache, so nothing here
+    touches the cache the other live tests share.
+    """
+    walkthrough(f"In the {Path(BROWSER[0]).stem} window, sign in with {USERNAME}.")
+    auth = AuthContext(
+        TENANT, username=USERNAME, browser=BROWSER, interactive_timeout=SIGN_IN_TIMEOUT_SECONDS
+    )
+    async with AzureClient(auth) as client:
+        await client.login(force=True)
+        token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
+
     assert (token_user(token.token) or "").lower() == USERNAME.lower()
     assert token_claims(token.token)["aud"] == client.resource
 

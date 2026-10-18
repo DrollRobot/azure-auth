@@ -116,6 +116,22 @@ class FakeApp:
         """Run the scripted interactive behaviour."""
         return self.module.interactive(self._record("interactive", scopes, kwargs))
 
+    def initiate_auth_code_flow(self, scopes: list[str], **kwargs: Any) -> dict[str, Any]:
+        """Record the start of an auth code flow and return a flow for it."""
+        self._record("initiate_auth_code_flow", scopes, kwargs)
+        return {"auth_uri": "https://login.example/authorize", "state": "the-state"}
+
+    def acquire_token_by_auth_code_flow(
+        self, auth_code_flow: dict[str, Any], auth_response: dict[str, Any], **kwargs: Any
+    ) -> Result:
+        """Run the scripted interactive behaviour for the code a browser sign-in returned."""
+        call = self._record(
+            "auth_code_flow",
+            kwargs.pop("scopes", []),
+            {"auth_code_flow": auth_code_flow, "auth_response": auth_response, **kwargs},
+        )
+        return self.module.interactive(call)
+
     def acquire_token_for_client(self, scopes: list[str], **kwargs: Any) -> Result:
         """Run the scripted client credentials behaviour."""
         return self.module.for_client(self._record("for_client", scopes, kwargs))
@@ -123,6 +139,44 @@ class FakeApp:
     def remove_tokens_for_client(self) -> None:
         """Count cache purges."""
         self.removed_tokens += 1
+
+
+@dataclass
+class FakeReceiver:
+    """Replacement for MSAL's ``AuthCodeReceiver``: answers a browser sign-in without a browser.
+
+    Install it in place of the class; each construction returns this one object.
+    """
+
+    response: dict[str, Any] | None = field(
+        default_factory=lambda: {"code": "the-code", "state": "the-state"}
+    )
+    port: int = 51234
+    ports: list[int] = field(default_factory=list)
+    requests: list[dict[str, Any]] = field(default_factory=list)
+    closed: bool = False
+
+    def __call__(self, port: int) -> FakeReceiver:
+        """Stand in for constructing a receiver on ``port``."""
+        self.ports.append(port)
+        return self
+
+    def __enter__(self) -> FakeReceiver:
+        """Enter the ``with`` block."""
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Record that the receiver was closed."""
+        self.closed = True
+
+    def get_port(self) -> int:
+        """Return the port the receiver listens on."""
+        return self.port
+
+    def get_auth_response(self, **kwargs: Any) -> dict[str, Any] | None:
+        """Record the request and return the scripted answer; ``None`` is a timeout."""
+        self.requests.append(kwargs)
+        return self.response
 
 
 def tenant_guid(tenant: str) -> str:

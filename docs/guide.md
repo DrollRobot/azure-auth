@@ -41,6 +41,21 @@ A browser sign-in that is never completed -- the window closed or left alone, or
 error page such as a Conditional Access block, which never returns to the application -- fails
 with `AuthError` after `interactive_timeout` seconds (default 120) rather than waiting for ever.
 
+Browser sign-ins open the system default browser. To use another one for a context, pass
+`browser=`: a program, or a list of the program followed by its arguments. A name on `PATH`
+works, but an absolute path is recommended. The sign-in address is added as the last
+argument. Other contexts in the same process keep the default.
+
+```python
+EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+auth = AuthContext("contoso.com", username="admin@contoso.com", browser=EDGE)
+auth = AuthContext(
+    "contoso.com",
+    username="admin@contoso.com",
+    browser=[EDGE, "--profile-directory=Profile 2"],
+)
+```
+
 ### The Windows broker
 
 `broker=True` signs in through the Windows Web Account Manager. It needs the `broker` extra.
