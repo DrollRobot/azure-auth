@@ -28,7 +28,7 @@ from tests.fakes import FakeMsal
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register the --run-destructive-local/--run-destructive-remote opt-ins."""
+    """Register the opt-in flags: the two destructive categories and the customer grant test."""
     parser.addoption(
         "--run-destructive-local",
         action="store_true",
@@ -44,23 +44,42 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "(still requires tests/verify_remote_disposable.py to exit 0)"
         ),
     )
+    parser.addoption(
+        "--grant-when-possible",
+        action="store_true",
+        default=False,
+        help=(
+            "collect the one live GDAP test that writes to a customer tenant: it adds a scope "
+            "to the application's consent grant there and removes it again"
+        ),
+    )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip each destructive category unless its own flag was passed."""
+    """Skip each destructive category unless its own flag was passed.
+
+    The flags are the only way in: no environment variable or setting stands in for them, so
+    every run that can change something outside this host asks for it on the command line.
+    """
     skip_local = pytest.mark.skip(
         reason="destructive_local: needs --run-destructive-local (disposable host only)"
     )
     skip_remote = pytest.mark.skip(
         reason="destructive_remote: needs --run-destructive-remote (disposable remote target only)"
     )
+    skip_grant = pytest.mark.skip(
+        reason="grant_when_possible: needs --grant-when-possible (writes to a customer tenant)"
+    )
     run_local = config.getoption("--run-destructive-local")
     run_remote = config.getoption("--run-destructive-remote")
+    run_grant = config.getoption("--grant-when-possible")
     for item in items:
         if "destructive_local" in item.keywords and not run_local:
             item.add_marker(skip_local)
         if "destructive_remote" in item.keywords and not run_remote:
             item.add_marker(skip_remote)
+        if item.get_closest_marker("grant_when_possible") and not run_grant:
+            item.add_marker(skip_grant)
 
 
 @pytest.fixture(autouse=True)

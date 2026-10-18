@@ -86,6 +86,7 @@ markers = [
     "cached_credential: tests signing in from the cache; runs after the other live tests",
     "destructive_local: mutates the host/device; guarded to prevent accidental execution",
     "destructive_remote: mutates a remote/external system; guarded to prevent accidental execution",
+    "grant_when_possible: changes a GDAP customer tenant's consent grant; needs --grant-when-possible",
     "slow: long-running",
 ]
 

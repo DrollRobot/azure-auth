@@ -45,8 +45,8 @@
 
 - Use the following bash command for your commits: (errors quickly if no
    ssh key passphrase)
-```bash
-SSH_ASKPASS=/bin/false SSH_ASKPASS_REQUIRE=force DISPLAY= git commit
+```
+ssh-add -T "$(git config user.signingkey)" && git commit
 ```
 
 - After committing, push to origin.

@@ -23,6 +23,7 @@
 | `cached_credential` | Dependency | Tests signing in from the cache, so it must not prompt. Runs after the other live tests. |
 | `destructive_local` | Dependency | Mutates the host/device running pytest. Skipped by default. |
 | `destructive_remote` | Dependency | Mutates a remote/external system. Skipped by default. |
+| `grant_when_possible` | Dependency | Changes a GDAP customer tenant's consent grant, and restores it. Skipped unless `--grant-when-possible` is passed; no setting stands in for the flag. |
 | `slow` | Performance | Long-running: anything that would push the pre-push run past 60 seconds. See below. |
 
 ## Running tests
@@ -62,6 +63,12 @@ categories, each needing BOTH its own layers (flag + gate).
 | Mutates | This host/device | A remote/external system (cloud resource, database, API tenant, ...) |
 | Collection gate | `--run-destructive-local` | `--run-destructive-remote` |
 | Execution gate | `DISPOSABLE_ENVIRONMENT=1` (env var) | `tests/verify_remote_disposable.py` exits 0 |
+
+A third, narrower category: `grant_when_possible` marks the one live test that writes to a
+GDAP **customer** tenant (it adds a scope to the application's consent grant and removes it
+again). A customer tenant is never disposable, so it has no execution gate; its collection gate
+is `--grant-when-possible`, which has to be passed on every run that should include it. There is
+deliberately no environment variable or settings entry for it.
 
 ### Local destructive tests
 `DISPOSABLE_ENVIRONMENT` values:

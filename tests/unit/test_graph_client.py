@@ -5,18 +5,21 @@ from __future__ import annotations
 import base64
 import datetime
 import email.utils
+import json
+import logging
 from typing import Any
 
 import httpx
 import pytest
 
-from azure_auth import AuthContext
+from azure_auth import AuthContext, AuthError, ConsentRequired, InteractionRequired
 from azure_auth.clients import GraphClient, GraphError
 from azure_auth.clients.base import claims_from_challenge, retry_delay
+from azure_auth.clients.graph import _scopes_in
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
-from azure_auth.constants import GRAPH_CLI_CLIENT_ID
-from tests.fakes import FakeLookup, FakeMsal, token_result
-from tests.http import Recorder, ok
+from azure_auth.constants import GRAPH_APP_ID, GRAPH_CLI_CLIENT_ID
+from tests.fakes import Call, FakeLookup, FakeMsal, error_result, token_result
+from tests.http import Recorder, fake_jwt, ok
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
@@ -411,3 +414,542 @@ async def test_a_body_the_service_mislabels_is_reported_with_its_status(
     assert (caught.value.status, caught.value.request_id) == (502, "req-9")
     assert caught.value.body is None
     assert caught.value.code is None
+
+
+# ---------------------------------------------------------------------------- grant when possible
+
+CUSTOMER = "customer.example"
+SITES = "https://graph.microsoft.com/Sites.Read.All"
+DEFAULT = "https://graph.microsoft.com/.default"
+ACCOUNT = {"username": USER, "home_account_id": "uid.utid"}
+GRANT_BEFORE = "User.Read openid profile"
+GRAPH_PRINCIPAL = {"id": "graph-sp"}
+APP_PRINCIPAL = {"id": "app-sp"}
+TENANT_WIDE_GRANT = {
+    "id": "grant-1",
+    "consentType": "AllPrincipals",
+    "resourceId": "graph-sp",
+    "scope": GRANT_BEFORE,
+}
+
+
+def consent_error() -> dict[str, Any]:
+    """Build the MSAL result Entra returns when the tenant has not consented to the scopes."""
+    return error_result("invalid_grant", "AADSTS65001", error_codes=[65001])
+
+
+def holding(*scopes: str) -> dict[str, Any]:
+    """Build a successful ``.default`` result whose token names ``scopes`` in ``scp``."""
+    return token_result(fake_jwt(scp=" ".join(scopes)))
+
+
+class GrantTenant:
+    """A customer tenant as Entra and Graph present it to ``grant_when_possible``.
+
+    Entra refuses ``Sites.Read.All`` until the grant has been patched, and then
+    ``refusals_after_patch`` more times, so the poll is exercised. Graph answers the service
+    principal lookups, the grant list, the PATCH, and then the request the test makes.
+    """
+
+    def __init__(
+        self,
+        fake_msal: FakeMsal,
+        *,
+        held: tuple[str, ...] = ("User.Read", "DelegatedPermissionGrant.ReadWrite.All"),
+        default_fails: bool = False,
+        grants: list[dict[str, Any]] | None = None,
+        lookup_status: int = 200,
+        refusals_after_patch: int = 1,
+    ) -> None:
+        """Script the tenant.
+
+        Args:
+            fake_msal: The fake MSAL to script.
+            held: Scopes the application's ``.default`` token carries in this tenant.
+            default_fails: Refuse the ``.default`` request itself: no consent at all.
+            grants: The application's grants in the tenant; the tenant-wide Graph grant by
+                default.
+            lookup_status: Status of the service principal lookups.
+            refusals_after_patch: Refusals of the named scope after the grant was patched.
+        """
+        self.patched = False
+        self._held = held
+        self._default_fails = default_fails
+        self._grants = [TENANT_WIDE_GRANT] if grants is None else grants
+        self._lookup_status = lookup_status
+        self._refusals_left = refusals_after_patch
+        self.recorder = Recorder(self.handle)
+        fake_msal.accounts = [ACCOUNT]
+        fake_msal.silent = self.silent
+
+    def silent(self, call: Call) -> dict[str, Any]:
+        """Answer a silent token request the way Entra would."""
+        if call.scopes == [DEFAULT]:
+            return consent_error() if self._default_fails else holding(*self._held)
+        if call.scopes == [SITES]:
+            if self.patched and self._refusals_left == 0:
+                return token_result("granted")
+            if self.patched:
+                self._refusals_left -= 1
+            return consent_error()
+        raise AssertionError(f"unexpected scopes {call.scopes}")
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        """Answer a Graph request the way the tenant would."""
+        path = request.url.path
+        if path.endswith("/servicePrincipals"):
+            if self._lookup_status != 200:
+                error = {"error": {"code": "Authorization_RequestDenied", "message": "no"}}
+                return ok(error, status=self._lookup_status)
+            graphs_own = GRAPH_APP_ID in request.url.params["$filter"]
+            return ok({"value": [GRAPH_PRINCIPAL if graphs_own else APP_PRINCIPAL]})
+        if path.endswith("/oauth2PermissionGrants") and request.method == "GET":
+            return ok({"value": self._grants})
+        if path.endswith("/oauth2PermissionGrants/grant-1") and request.method == "PATCH":
+            self.patched = True
+            return ok(status=204)
+        if path.endswith("/sites/root"):
+            return ok({"id": "root-site"})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    @property
+    def patches(self) -> list[httpx.Request]:
+        """The PATCH requests sent so far."""
+        return [request for request in self.recorder.requests if request.method == "PATCH"]
+
+
+@pytest.fixture
+def grant_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Make the grant poll instant and record how long each wait would have been."""
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("azure_auth.clients.graph.asyncio.sleep", fake_sleep)
+    return delays
+
+
+def customer_graph(tenant: GrantTenant, **kwargs: Any) -> GraphClient:
+    """Build a Graph client on a context from get_tenant_context() for the customer tenant."""
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+    return GraphClient(
+        customer, scopes=["Sites.Read.All"], transport=tenant.recorder.transport, **kwargs
+    )
+
+
+async def test_grant_when_possible_adds_the_missing_scopes_then_uses_the_token(
+    fake_msal: FakeMsal, grant_sleeps: list[float], caplog: pytest.LogCaptureFixture
+) -> None:
+    tenant = GrantTenant(fake_msal)
+    caplog.set_level(logging.INFO, logger="azure_auth.clients.graph")
+    async with customer_graph(tenant, grant_when_possible=True) as graph:
+        site = await graph.get("/sites/root")
+
+    assert site == {"id": "root-site"}
+    (patch,) = tenant.patches
+    assert patch.url.path.endswith("/oauth2PermissionGrants/grant-1")
+    assert json.loads(patch.content) == {"scope": f"{GRANT_BEFORE} Sites.Read.All"}
+    # The request that followed carried the token Entra issued after the grant.
+    assert tenant.recorder.requests[-1].headers["Authorization"] == "Bearer granted"
+    # One refusal after the patch, one wait, then the token.
+    assert grant_sleeps == [10.0]
+    assert "Added Sites.Read.All to the tenant-wide grant" in caplog.text
+
+
+async def test_without_grant_when_possible_the_refusal_is_raised_unchanged(
+    fake_msal: FakeMsal,
+) -> None:
+    tenant = GrantTenant(fake_msal)
+    graph = customer_graph(tenant)
+    assert graph.grant_when_possible is False
+
+    with pytest.raises(ConsentRequired) as caught:
+        await graph.get("/sites/root")
+
+    assert caught.value.scopes == (SITES,)
+    assert tenant.recorder.requests == []
+
+
+async def test_grant_when_possible_needs_the_grant_permission(fake_msal: FakeMsal) -> None:
+    tenant = GrantTenant(fake_msal, held=("User.Read",))
+
+    with pytest.raises(ConsentRequired) as caught:
+        await customer_graph(tenant, grant_when_possible=True).get("/sites/root")
+
+    # The refusal says what is missing and why no grant was tried; Graph was never asked.
+    assert caught.value.missing == ("Sites.Read.All",)
+    assert "grant_when_possible needs DelegatedPermissionGrant.ReadWrite.All" in str(caught.value)
+    assert caught.value.scopes == (SITES,)
+    assert tenant.recorder.requests == []
+
+
+async def test_grant_when_possible_with_no_consent_at_all_raises_the_refusal(
+    fake_msal: FakeMsal,
+) -> None:
+    tenant = GrantTenant(fake_msal, default_fails=True)
+
+    with pytest.raises(ConsentRequired) as caught:
+        await customer_graph(tenant, grant_when_possible=True).get("/sites/root")
+
+    assert caught.value.scopes == (SITES,)
+    assert tenant.recorder.requests == []
+
+
+async def test_grant_when_possible_gives_up_when_the_grant_cannot_be_read(
+    fake_msal: FakeMsal,
+) -> None:
+    tenant = GrantTenant(fake_msal, lookup_status=403)
+
+    with pytest.raises(ConsentRequired) as caught:
+        await customer_graph(tenant, grant_when_possible=True).get("/sites/root")
+
+    # The error the caller would have had with the flag off.
+    assert caught.value.missing == ("Sites.Read.All",)
+    assert tenant.patches == []
+
+
+async def test_grant_when_possible_gives_up_without_a_tenant_wide_grant(
+    fake_msal: FakeMsal,
+) -> None:
+    per_user = {"id": "g", "consentType": "Principal", "resourceId": "graph-sp", "scope": "x"}
+    tenant = GrantTenant(fake_msal, grants=[per_user])
+
+    with pytest.raises(ConsentRequired) as caught:
+        await customer_graph(tenant, grant_when_possible=True).get("/sites/root")
+
+    assert caught.value.missing == ("Sites.Read.All",)
+    assert tenant.patches == []
+
+
+async def test_grant_when_possible_reports_when_no_token_carries_the_scopes_in_time(
+    fake_msal: FakeMsal, grant_sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("azure_auth.clients.graph.GRANT_SETTLE_SECONDS", 0.0)
+    tenant = GrantTenant(fake_msal, refusals_after_patch=5)
+
+    with pytest.raises(ConsentRequired) as caught:
+        await customer_graph(tenant, grant_when_possible=True).get("/sites/root")
+
+    assert "no token carried them" in str(caught.value)
+    assert "Sites.Read.All" in str(caught.value)
+    assert isinstance(caught.value.__cause__, ConsentRequired)
+    assert len(tenant.patches) == 1
+    assert grant_sleeps == []
+
+
+async def test_without_the_wait_the_refusal_after_the_grant_is_raised_at_once(
+    fake_msal: FakeMsal, grant_sleeps: list[float]
+) -> None:
+    tenant = GrantTenant(fake_msal)
+    graph = customer_graph(tenant, grant_when_possible=True, wait_for_grant=False)
+
+    with pytest.raises(ConsentRequired) as caught:
+        await graph.get("/sites/root")
+
+    # The grant was made; the one request after it was refused, and nobody waited.
+    assert len(tenant.patches) == 1
+    assert "wait_for_grant=False" in str(caught.value)
+    assert isinstance(caught.value.__cause__, ConsentRequired)
+    assert grant_sleeps == []
+
+
+async def test_login_grants_too(fake_msal: FakeMsal, grant_sleeps: list[float]) -> None:
+    tenant = GrantTenant(fake_msal, refusals_after_patch=0)
+    async with customer_graph(tenant, grant_when_possible=True, wait_for_grant=False) as graph:
+        await graph.login()
+    # Entra answered at once, so skipping the wait lost nothing.
+    assert len(tenant.patches) == 1
+    assert grant_sleeps == []
+
+
+def test_scopes_in_reads_the_scp_claim_and_tolerates_garbage() -> None:
+    assert _scopes_in(fake_jwt(scp="User.Read Sites.Read.All")) == frozenset(
+        {"User.Read", "Sites.Read.All"}
+    )
+    # No scp claim, or no readable token: nobody can tell, which is not "nothing granted".
+    assert _scopes_in(fake_jwt(aud="graph")) is None
+    assert _scopes_in("not-a-token") is None
+    assert _scopes_in("a.b.c") is None
+
+
+# ---------------------------------------------------------------- checking what is granted
+
+DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
+USERS = "https://graph.microsoft.com/User.Read.All"
+
+
+def scripted(
+    fake_msal: FakeMsal,
+    *,
+    held: tuple[str, ...] | None = ("User.Read",),
+    default_error: dict[str, Any] | None = None,
+    accounts: bool = True,
+) -> None:
+    """Script Entra: ``.default`` carries ``held``; a named request gets a token named after it.
+
+    Args:
+        fake_msal: The fake MSAL to script.
+        held: Scopes in the ``.default`` token's ``scp``; ``None`` for an unreadable token.
+        default_error: MSAL's answer to ``.default`` instead of a token.
+        accounts: Whether the user has signed in before.
+    """
+    fake_msal.accounts = [ACCOUNT] if accounts else []
+
+    def silent(call: Call) -> dict[str, Any]:
+        if call.scopes == [DEFAULT_SCOPE]:
+            if default_error is not None:
+                return default_error
+            return token_result(
+                "opaque" if held is None else fake_jwt(scp=" ".join(held)), scope=""
+            )
+        return token_result("named")
+
+    fake_msal.silent = silent
+
+
+@pytest.fixture
+def recorder() -> Recorder:
+    """A Graph that answers every request with an empty list and records it."""
+    return Recorder(lambda request: ok({"value": []}))
+
+
+def named_requests(fake_msal: FakeMsal) -> list[str]:
+    """The kinds of MSAL call made for anything but ``.default``, in order."""
+    return [call.method for call in fake_msal.calls if call.scopes != [DEFAULT_SCOPE]]
+
+
+async def test_a_customer_missing_a_scope_is_told_what_is_granted_without_asking_for_it(
+    fake_msal: FakeMsal,
+) -> None:
+    scripted(fake_msal, held=("User.Read", "Group.Read.All", "openid"))
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    with pytest.raises(ConsentRequired) as caught:
+        await GraphClient(customer, scopes=["User.Read.All"]).get("/users")
+
+    assert caught.value.missing == ("User.Read.All",)
+    assert caught.value.granted == ("Group.Read.All", "User.Read")
+    assert caught.value.tenant_id == customer.tenant.id
+    assert "has not granted User.Read.All" in str(caught.value)
+    assert "get_tenant_context()" in str(caught.value)
+    # .default was asked; the named scope never was.
+    assert named_requests(fake_msal) == []
+
+
+async def test_a_customer_with_no_consent_at_all_says_so(fake_msal: FakeMsal) -> None:
+    scripted(fake_msal, default_error=consent_error())
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    with pytest.raises(ConsentRequired) as caught:
+        await GraphClient(customer, scopes=["User.Read.All"]).get("/users")
+
+    assert caught.value.granted == ()
+    assert caught.value.missing == ("User.Read.All",)
+    assert "no consent in tenant" in str(caught.value)
+    assert named_requests(fake_msal) == []
+
+
+async def test_a_customer_with_everything_granted_goes_on_with_the_named_request(
+    fake_msal: FakeMsal, recorder: Recorder
+) -> None:
+    scripted(fake_msal, held=("User.Read", "user.read.all"))
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    async with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
+        await g.get("/users")
+
+    assert recorder.requests[0].headers["Authorization"] == "Bearer named"
+    assert [call.scopes for call in fake_msal.calls] == [[DEFAULT_SCOPE], [USERS]]
+
+
+async def test_the_refusal_says_when_the_application_could_grant_itself_the_scopes(
+    fake_msal: FakeMsal,
+) -> None:
+    scripted(fake_msal, held=("User.Read", "DelegatedPermissionGrant.ReadWrite.All"))
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    with pytest.raises(ConsentRequired) as caught:
+        await GraphClient(customer, scopes=["User.Read.All"]).get("/users")
+
+    assert "could grant itself the requested scopes" in str(caught.value)
+    assert "grant_when_possible" not in str(caught.value)
+
+
+async def test_a_context_that_may_prompt_goes_on_to_the_consent_screen(
+    fake_msal: FakeMsal, recorder: Recorder
+) -> None:
+    scripted(fake_msal, held=("User.Read",))
+
+    def refuse_named(call: Call) -> dict[str, Any]:
+        if call.scopes == [DEFAULT_SCOPE]:
+            return token_result(fake_jwt(scp="User.Read"))
+        return consent_error()
+
+    fake_msal.silent = refuse_named
+    root = AuthContext("tenant", username=USER)
+
+    async with GraphClient(root, scopes=["User.Read.All"], transport=recorder.transport) as g:
+        await g.get("/users")
+
+    # The named sign-in, where Entra shows its consent screen.
+    assert named_requests(fake_msal) == ["silent", "interactive"]
+    assert recorder.requests[0].headers["Authorization"] == "Bearer interactive"
+
+
+async def test_a_context_that_has_not_signed_in_signs_in_as_before(
+    fake_msal: FakeMsal, recorder: Recorder
+) -> None:
+    scripted(fake_msal, accounts=False)
+    root = AuthContext("tenant", username=USER)
+
+    async with GraphClient(root, scopes=["User.Read.All"], transport=recorder.transport) as g:
+        await g.get("/users")
+
+    # The silent .default look found nobody signed in and never prompted for it.
+    assert [(c.method, c.scopes) for c in fake_msal.calls] == [("interactive", [USERS])]
+
+
+async def test_a_customer_whose_home_has_not_signed_in_is_told_to_sign_in(
+    fake_msal: FakeMsal,
+) -> None:
+    scripted(fake_msal, accounts=False)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    with pytest.raises(InteractionRequired):
+        await GraphClient(customer, scopes=["User.Read.All"]).get("/users")
+    assert fake_msal.methods() == []
+
+
+async def test_an_unreadable_default_token_skips_the_check(
+    fake_msal: FakeMsal, recorder: Recorder
+) -> None:
+    scripted(fake_msal, held=None)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    async with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
+        await g.get("/users")
+
+    assert recorder.requests[0].headers["Authorization"] == "Bearer named"
+
+
+def default_requests(fake_msal: FakeMsal) -> list[bool]:
+    """Whether each ``.default`` request asked for a fresh token, in order."""
+    return [
+        bool(call.kwargs.get("force_refresh"))
+        for call in fake_msal.calls
+        if call.scopes == [DEFAULT_SCOPE]
+    ]
+
+
+async def test_a_cached_token_holding_every_scope_saves_the_request_to_entra(
+    fake_msal: FakeMsal, recorder: Recorder
+) -> None:
+    scripted(fake_msal, held=("User.Read.All",))
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    async with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
+        await g.get("/users")
+
+    # One .default request, answered as MSAL likes: no fresh one was needed.
+    assert default_requests(fake_msal) == [False]
+
+
+async def test_a_scope_the_cached_token_lacks_is_checked_with_entra_before_refusing(
+    fake_msal: FakeMsal, recorder: Recorder
+) -> None:
+    """A cached ``.default`` token can predate a grant; the fresh answer decides."""
+    fake_msal.accounts = [ACCOUNT]
+
+    def silent(call: Call) -> dict[str, Any]:
+        if call.scopes == [DEFAULT_SCOPE]:
+            # The cache's token is from before the grant; Entra's own answer is after it.
+            fresh = call.kwargs.get("force_refresh")
+            return token_result(fake_jwt(scp="User.Read User.Read.All" if fresh else "User.Read"))
+        return token_result("named")
+
+    fake_msal.silent = silent
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    async with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
+        await g.get("/users")
+
+    assert default_requests(fake_msal) == [False, True]
+    assert recorder.requests[0].headers["Authorization"] == "Bearer named"
+
+
+async def test_a_scope_missing_from_the_fresh_token_too_is_refused(fake_msal: FakeMsal) -> None:
+    scripted(fake_msal, held=("User.Read",))
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    with pytest.raises(ConsentRequired) as caught:
+        await GraphClient(customer, scopes=["User.Read.All"]).get("/users")
+
+    assert caught.value.missing == ("User.Read.All",)
+    assert default_requests(fake_msal) == [False, True]
+
+
+async def test_granted_scopes_always_asks_entra(fake_msal: FakeMsal) -> None:
+    scripted(fake_msal, held=("User.Read",))
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    await GraphClient(customer).granted_scopes()
+
+    assert default_requests(fake_msal) == [True]
+
+
+async def test_the_check_runs_once_while_the_named_token_is_cached(
+    fake_msal: FakeMsal, recorder: Recorder
+) -> None:
+    scripted(fake_msal, held=("User.Read.All",))
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    async with GraphClient(customer, scopes=["User.Read.All"], transport=recorder.transport) as g:
+        await g.get("/users")
+        await g.get("/users")
+
+    assert [call.scopes for call in fake_msal.calls] == [[DEFAULT_SCOPE], [USERS]]
+
+
+async def test_default_and_app_flow_clients_are_not_checked(fake_msal: FakeMsal) -> None:
+    scripted(fake_msal)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    await GraphClient(customer).login()
+
+    assert [call.scopes for call in fake_msal.calls] == [[DEFAULT_SCOPE]]
+
+
+async def test_granted_scopes_reports_what_the_tenant_granted(fake_msal: FakeMsal) -> None:
+    scripted(fake_msal, held=("User.Read", "Group.Read.All", "profile"))
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    assert await GraphClient(customer).granted_scopes() == {"User.Read", "Group.Read.All"}
+
+
+async def test_granted_scopes_never_prompts(fake_msal: FakeMsal) -> None:
+    scripted(fake_msal, accounts=False)
+
+    with pytest.raises(InteractionRequired):
+        await GraphClient(AuthContext("tenant", username=USER)).granted_scopes()
+    assert "interactive" not in fake_msal.methods()
+
+
+async def test_granted_scopes_is_empty_without_any_consent(fake_msal: FakeMsal) -> None:
+    scripted(fake_msal, default_error=consent_error())
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    assert await GraphClient(customer).granted_scopes() == frozenset()
+
+
+async def test_granted_scopes_refuses_an_unreadable_token_and_app_flows(
+    fake_msal: FakeMsal,
+) -> None:
+    scripted(fake_msal, held=None)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    with pytest.raises(AuthError, match="cannot be read"):
+        await GraphClient(customer).granted_scopes()
+    app = AuthContext("tenant", client_id="app", client_secret="s3cret")
+    with pytest.raises(ValueError, match="roles"):
+        await GraphClient(app).granted_scopes()

@@ -39,13 +39,16 @@ refill the caches it empties.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from azure_auth import AuthContext
 from azure_auth.auth.cache import default_cache_path
+from tests import cache_reminder
 from tests.live.support import (
+    BROKER_CACHE_NAME,
     KEEPS_CERTIFICATES,
     KEEPS_CONSENT,
     TENANT,
@@ -75,15 +78,64 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     items.sort(key=group)
 
 
-@pytest.fixture(scope="session")
-def _live_cache_path() -> Path:
-    """The encrypted disk cache the sign-ins fill and the live tests read.
+def live_cache_file() -> Path:
+    """Return the encrypted disk cache the sign-ins fill and the live tests read.
 
     It outlives the run, so one sign-in serves the live tests of later, unattended runs until
     the refresh token lapses. It sits beside the package's default cache, in the per-user
     cache directory, but in a file of its own, so test tokens and real ones never mix.
+
+    Returns:
+        The cache file's path; the first sign-in creates it.
     """
     return default_cache_path().with_name("live_tests_token_cache.bin")
+
+
+@pytest.fixture(scope="session")
+def _live_cache_path() -> Path:
+    """The live tests' disk cache (:func:`live_cache_file`), with its reminder in place.
+
+    A credential store nobody sees is a credential store nobody deletes. So before the first
+    test touches the cache, when ``AZURE_AUTH_TEST_CACHE_REMINDER_PATH`` names a folder, a
+    reminder pointing at the cache's folder is put there (``tests/cache_reminder.py``). The
+    end-of-run summary names the cache files either way (:func:`pytest_terminal_summary`).
+    """
+    path = live_cache_file()
+    folder = cache_reminder.configured_folder()
+    if folder is not None:
+        cache_reminder.place_reminder(path, folder)
+    return path
+
+
+def pytest_terminal_summary(
+    terminalreporter: pytest.TerminalReporter, exitstatus: int, config: pytest.Config
+) -> None:
+    """Say where the token caches are, at the end of every run, whatever its outcome.
+
+    Lists the live tests' cache files that exist after the run, the browser's and the
+    broker's, with their size and age, and the reminder when one is configured. It is written
+    by the terminal reporter, so output capturing does not hide it.
+    """
+    cache = live_cache_file()
+    files = [path for path in (cache, cache.with_name(BROKER_CACHE_NAME)) if path.exists()]
+    if not files:
+        return
+    terminalreporter.section("token caches on disk", sep="=")
+    for path in files:
+        stat = path.stat()
+        modified = datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="minutes")
+        terminalreporter.line(f"{path}  ({stat.st_size} bytes, modified {modified})")
+    terminalreporter.line(
+        "Encrypted, but they hold the live tests' sign-in, refresh token included."
+        " Delete them when testing ends."
+    )
+    folder = cache_reminder.configured_folder()
+    if folder is None:
+        terminalreporter.line(
+            f"No reminder on your desk: set {cache_reminder.ENV_VAR} to a folder you look at."
+        )
+    else:
+        terminalreporter.line(f"Reminder: {cache_reminder.reminder_path(folder)}")
 
 
 @pytest.fixture(scope="session", autouse=True)

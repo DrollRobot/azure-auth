@@ -41,6 +41,21 @@ A browser sign-in that is never completed -- the window closed or left alone, or
 error page such as a Conditional Access block, which never returns to the application -- fails
 with `AuthError` after `browser_timeout` seconds (default 120) rather than waiting for ever.
 
+Browser sign-ins open the system default browser. To use another one for a context, pass
+`browser=`: a program, or a list of the program followed by its arguments. A name on `PATH`
+works, but an absolute path is recommended. The sign-in address is added as the last
+argument. Other contexts in the same process keep the default.
+
+```python
+EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+auth = AuthContext("contoso.com", username="admin@contoso.com", browser=EDGE)
+auth = AuthContext(
+    "contoso.com",
+    username="admin@contoso.com",
+    browser=[EDGE, "--profile-directory=Profile 2"],
+)
+```
+
 ### The Windows broker
 
 `broker=True` signs in through the Windows Web Account Manager. It needs the `broker` extra.
@@ -175,9 +190,11 @@ The screen decides what is granted, not this package:
   permission that requires admin consent there is no other form: Entra grants those to the
   whole tenant or not at all, so every user in the tenant gets them through that client id.
 
-**This package never grants consent on its own and offers no way to do so without that
-click.** Granting consent is a tenant-wide security change, not something a token request
-should do as a side effect.
+**This package never grants consent unless you ask it to.** Granting consent is a tenant-wide
+security change, so it never happens as a side effect of a token request. The one way to ask
+is `GraphClient(..., grant_when_possible=True)`, described under multi-tenant access below: it
+engages only where no consent screen can appear, and only where the application already holds
+`DelegatedPermissionGrant.ReadWrite.All` in that tenant.
 
 When a sign-in ends without a token, the error says which of three things happened:
 
@@ -194,8 +211,13 @@ When a sign-in ends without a token, the error says which of three things happen
 The library does not reopen the browser on any of them: the first cannot be fixed by asking
 again, the second is the user's decision, and the third means nobody is there.
 
-Contexts from `get_tenant_context()` never prompt at all, so they report `ConsentRequired` and
-stop. Consent for a customer tenant has to be granted in that tenant.
+A Graph client that names scopes checks what the tenant has granted before asking for them
+(see "Checking what a tenant has granted" below). A context that may prompt goes on to the
+sign-in, and the consent screen, as described here. Contexts from `get_tenant_context()` never
+prompt at all, so they raise `ConsentRequired` naming what is granted and what is missing, and
+stop. Consent for a customer tenant has to be granted in that tenant, by an account of that
+tenant, or by the application itself where it holds `DelegatedPermissionGrant.ReadWrite.All`
+there (`grant_when_possible`, below).
 
 ## Token cache
 
@@ -241,8 +263,87 @@ for customer in await home.list_customers():
   object Graph returns, whole (`tenantId`, `displayName`, and whatever Graph adds), listed
   once however many relationships reach it.
 - The application must be consented to in each customer tenant for the scopes you request.
-- In app flows each customer tenant's context builds its own client assertion, because the assertion audience
-  is the tenant's token endpoint.
+  A partner cannot consent there: Entra refuses a GDAP partner's interactive sign-in at a
+  customer tenant (AADSTS90099), and a partner has no user object in it to hold a per-user
+  grant. What a customer has granted differs from one to the next.
+- In app flows each customer tenant's context builds its own client assertion, because the
+  assertion audience is the tenant's token endpoint.
+
+### Checking what a tenant has granted
+
+A Graph client that names scopes, in a user flow, first asks silently for `.default`. Entra
+answers that with exactly the scopes the application holds in the tenant, and the client
+compares them with the ones it was given:
+
+- **All granted:** it asks for the named scopes, and MSAL answers from the token it just got.
+- **Some missing, and the context may prompt:** the named sign-in, as before, where Entra shows
+  its consent screen to someone who can consent.
+- **Some missing, in a customer tenant's context:** `ConsentRequired` at once, with no request
+  for the missing scopes. Its `granted` and `missing` attributes list the short scope names,
+  and the message names the application and the tenant. With nothing granted at all, it says
+  so.
+- **Not signed in yet:** as before. A context that may prompt signs in; a customer tenant's
+  context raises `InteractionRequired`.
+
+The check runs once while the named token is cached, never for `.default` clients or app flows,
+and never prompts on its own. It reads the scopes from the token's `scp` claim; should a token
+ever be unreadable, the client goes on as it would without the check.
+
+A cached `.default` token answers first, at no cost. A token carries the scopes granted when it
+was issued, for up to its lifetime of about 75 minutes, so when the cached one lacks a requested
+scope the client asks Entra for a fresh one before refusing, granting or prompting. Through the
+Windows broker that fresh request is answered from the broker's own cache, which can still miss
+a scope granted within the last hour.
+
+`await graph.granted_scopes()` asks Entra for a fresh `.default` token every time and returns
+the granted short names, so a loop over customers can see what each one allows now, before any
+work starts:
+
+```python
+for customer in await home.list_customers():
+    graph = GraphClient(auth.get_tenant_context(customer["tenantId"]))
+    print(customer["displayName"], sorted(await graph.granted_scopes()))
+```
+
+### Granting a missing scope yourself
+
+Where a customer has granted the application `DelegatedPermissionGrant.ReadWrite.All`, the
+application can change its own tenant-wide grant there. `grant_when_possible=True` asks the
+Graph client to do that when the check above finds a scope missing in a customer tenant's
+context:
+
+```python
+graph = GraphClient(
+    auth.get_tenant_context(customer["tenantId"]),
+    scopes=["Sites.Read.All"],
+    grant_when_possible=True,
+)
+sites = await graph.get_all("/sites")
+```
+
+With `DelegatedPermissionGrant.ReadWrite.All` among the granted scopes, the client adds the
+missing ones to the application's tenant-wide grant and asks for the token again every ten
+seconds until it carries them, which takes about a minute, or three minutes pass. Without that
+permission, or when the grant cannot be read or changed, the `ConsentRequired` is raised
+exactly as it would be with the flag off.
+
+The wait is for a new token, not for the grant. Entra honours the change only in tokens it
+issues afterwards, and Graph reads a token's scopes from the token itself, so a token issued
+before the change never gains the scope (measured 2026-10-17, five runs). The client needs a
+new token, and it gets one by itself: a request naming the scope reaches Entra every time
+until a token carries it. `wait_for_grant=False` skips the wait: the grant is made, the one
+request after it is refused with a `ConsentRequired` that says so, and the first request after
+Entra has caught up, a minute or so later, gets the new token automatically.
+
+Two things to weigh before turning it on:
+
+- **The grant is tenant-wide.** Every user of that application in the customer tenant gets
+  the scopes, each still bounded by their own roles. For a shared first-party application such
+  as Graph Command Line Tools, that is every user who runs Graph PowerShell there.
+- **It only reaches tenants that already trust the application that far.** A tenant that has
+  not granted `DelegatedPermissionGrant.ReadWrite.All` is left exactly as it was.
+
+It is off by default, and it never engages where a consent screen can be shown.
 
 ## Certificates in the Windows certificate store
 
