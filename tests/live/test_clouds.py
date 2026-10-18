@@ -451,7 +451,7 @@ async def test_a_discovered_context_reaches_graph_in_its_cloud(cache_path: Path)
     # The context holds the tenant the token is really for, and the domain it was given.
     assert auth.tenant.id == tenant_guid
     assert auth.tenant.domain == USERNAME.rsplit("@", 1)[-1].lower()
-    assert auth.for_tenant(tenant_guid) is auth
+    assert auth.get_tenant_context(tenant_guid) is auth
 
 
 @needs_user

@@ -177,9 +177,9 @@ def test_a_customers_exchange_token_does_not_hide_the_account(
     gdap_cache: msal.TokenCache,
 ) -> None:
     auth = AuthContext(Tenant(HOME, COMMERCIAL), username=USER)
-    sibling = auth.for_tenant(OTHER_CUSTOMER)
+    customer = auth.get_tenant_context(OTHER_CUSTOMER)
 
-    token = sibling.acquire_token([GRAPH_SCOPE], client_id=GRAPH_CLI_CLIENT_ID)
+    token = customer.acquire_token([GRAPH_SCOPE], client_id=GRAPH_CLI_CLIENT_ID)
 
     assert token.token == f"{GRAPH_CLI_CLIENT_ID}-token-for-{OTHER_CUSTOMER}"
 

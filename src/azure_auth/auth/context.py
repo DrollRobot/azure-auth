@@ -274,6 +274,7 @@ class AuthContext:
         self._broker_fallback = broker_fallback
         self._interactive_timeout = interactive_timeout
         self._interactive_allowed = True
+        self._home = self
         self._tenant = tenant if isinstance(tenant, Tenant) else Tenant.lookup(tenant)
         self._init_state()
 
@@ -282,7 +283,7 @@ class AuthContext:
         self._apps: dict[tuple[str, bool], Any] = {}
         self._locks: dict[_TokenKey, threading.Lock] = {}
         self._tokens: dict[_TokenKey, AccessTokenInfo] = {}
-        self._siblings: dict[str, AuthContext] = {}
+        self._tenant_contexts: dict[str, AuthContext] = {}
         self._lookups: dict[str, Tenant] = {}
         self._guard = threading.Lock()
         self._aio: AsyncAuthContext | None = None
@@ -319,9 +320,15 @@ class AuthContext:
         return self._credential is not None
 
     @property
-    def is_sibling(self) -> bool:
-        """Whether this context was created by :meth:`for_tenant` and so never prompts."""
-        return not self._interactive_allowed
+    def home(self) -> AuthContext:
+        """The context the user signed in on.
+
+        For a context you built yourself, this is the context itself. For one from
+        :meth:`get_tenant_context`, it points back to the context you built. Only that
+        context can prompt, so ``auth.home is not auth`` tells you ``auth`` cannot sign
+        anyone in, and that a sign-in has to happen on ``auth.home`` instead.
+        """
+        return self._home
 
     @property
     def authority(self) -> str:
@@ -342,22 +349,22 @@ class AuthContext:
 
     # ------------------------------------------------------------------ tenants
 
-    def for_tenant(self, tenant: str) -> AuthContext:
-        """Return a sibling context for another tenant.
+    def get_tenant_context(self, tenant: str) -> AuthContext:
+        """Return a context for another tenant that reuses this context's sign-in.
 
-        The sibling shares this context's credentials, cache, username and cloud, so a user
-        with GDAP access obtains managed-tenant tokens from the one home-tenant sign-in. A
-        GUID costs no network call; a domain name is looked up once, for its GUID, and
-        remembered. A sibling never opens a browser: when a token cannot be obtained silently
-        it raises :class:`InteractionRequired` or :class:`ConsentRequired` carrying the
-        tenant id.
+        The new context shares this context's credentials, cache, username and cloud, so a
+        user with GDAP access obtains customer-tenant tokens from the one home-tenant sign-in.
+        A GUID costs no network call; a domain name is looked up once, for its GUID, and
+        remembered. The new context never opens a browser: when a token cannot be obtained
+        silently it raises :class:`InteractionRequired` or :class:`ConsentRequired` carrying
+        the tenant id. Its :attr:`home` is this context's :attr:`home`.
 
         Args:
             tenant: Tenant id (GUID) or verified domain name of the other tenant.
 
         Returns:
-            The sibling context, or this context when the tenant is its own. Repeated calls
-            return the same object.
+            The context for that tenant, or this context when the tenant is its own. Repeated
+            calls return the same object.
 
         Raises:
             TenantNotFound, AuthError: From looking a domain name up, in this cloud.
@@ -372,24 +379,25 @@ class AuthContext:
         if guid == self._tenant.id:
             return self
         with self._guard:
-            sibling = self._siblings.get(guid)
-            if sibling is None:
-                sibling = AuthContext.__new__(AuthContext)
-                sibling._tenant = found or Tenant(guid, self._tenant.cloud)
-                sibling._client_id = self._client_id
-                sibling._username = self._username
-                sibling._credential = self._credential
-                sibling._cache = self._cache
-                sibling._broker = self._broker
-                sibling._broker_fallback = self._broker_fallback
-                sibling._interactive_timeout = self._interactive_timeout
-                sibling._interactive_allowed = False
-                sibling._init_state()
-                self._siblings[guid] = sibling
-            elif found is not None and sibling._tenant.oidc is None:
+            context = self._tenant_contexts.get(guid)
+            if context is None:
+                context = AuthContext.__new__(AuthContext)
+                context._tenant = found or Tenant(guid, self._tenant.cloud)
+                context._client_id = self._client_id
+                context._username = self._username
+                context._credential = self._credential
+                context._cache = self._cache
+                context._broker = self._broker
+                context._broker_fallback = self._broker_fallback
+                context._interactive_timeout = self._interactive_timeout
+                context._interactive_allowed = False
+                context._home = self._home
+                context._init_state()
+                self._tenant_contexts[guid] = context
+            elif found is not None and context._tenant.oidc is None:
                 # First addressed by GUID, now by name: keep what the name's lookup found.
-                sibling._tenant = found
-            return sibling
+                context._tenant = found
+            return context
 
     # ------------------------------------------------------------------ public token API
 
@@ -407,7 +415,7 @@ class AuthContext:
             *scopes: Scopes to request, normally one ``<resource>/.default`` value.
             claims: Claims challenge returned by a resource, as a JSON string.
             tenant_id: Tenant to request the token from. A tenant other than this context's
-                is served by :meth:`for_tenant`.
+                is served by :meth:`get_tenant_context`.
             enable_cae: Accepted for protocol compatibility. Every application declares
                 continuous access evaluation, so the token is CAE-capable either way.
             **kwargs: Ignored.
@@ -415,7 +423,7 @@ class AuthContext:
         Returns:
             The token and its expiry time.
         """
-        context = self.for_tenant(tenant_id or self._tenant.id)
+        context = self.get_tenant_context(tenant_id or self._tenant.id)
         info = context.acquire_token(scopes, claims=claims)
         return AccessToken(info.token, info.expires_on)
 
@@ -433,7 +441,7 @@ class AuthContext:
             The token with its expiry time and type.
         """
         options = options or {}
-        context = self.for_tenant(options.get("tenant_id") or self._tenant.id)
+        context = self.get_tenant_context(options.get("tenant_id") or self._tenant.id)
         return context.acquire_token(scopes, claims=options.get("claims"))
 
     def acquire_token(
@@ -480,7 +488,8 @@ class AuthContext:
                 configured user is refused. Ignored by app flows.
 
         Raises:
-            InteractionRequired: If this is a sibling context and the user must sign in.
+            InteractionRequired: If this context came from :meth:`get_tenant_context` and the user
+                must sign in.
         """
         self._acquire(scopes, client_id, None, force, force_interactive=force)
 
@@ -734,8 +743,8 @@ class AuthContext:
             error = error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
             if isinstance(error, InteractionRequired):
                 raise InteractionRequired(
-                    f"{error} Sibling contexts never prompt; call login() on a client of the "
-                    "root context first.",
+                    f"{error} Contexts from get_tenant_context() never prompt; call login() on a "
+                    "client of the home context (auth.home) first.",
                     tenant_id=self._tenant.id,
                     scopes=scopes,
                 )
@@ -866,16 +875,21 @@ class AsyncAuthContext:
         """The synchronous context behind this view."""
         return self._sync
 
-    def for_tenant(self, tenant: str) -> AsyncAuthContext:
-        """Return the asynchronous view of a sibling context.
+    @property
+    def home(self) -> AsyncAuthContext:
+        """The asynchronous view of :attr:`AuthContext.home`."""
+        return self._sync.home.aio
+
+    def get_tenant_context(self, tenant: str) -> AsyncAuthContext:
+        """Return the asynchronous view of :meth:`AuthContext.get_tenant_context`.
 
         Args:
             tenant: Tenant id (GUID) or verified domain name of the other tenant.
 
         Returns:
-            The sibling's asynchronous view.
+            The asynchronous view of the context for that tenant.
         """
-        return self._sync.for_tenant(tenant).aio
+        return self._sync.get_tenant_context(tenant).aio
 
     async def get_token(
         self,
@@ -898,7 +912,7 @@ class AsyncAuthContext:
         Returns:
             The token and its expiry time.
         """
-        view = self.for_tenant(tenant_id or self._sync.tenant.id)
+        view = self.get_tenant_context(tenant_id or self._sync.tenant.id)
         info = await view.acquire_token(scopes, claims=claims)
         return AccessToken(info.token, info.expires_on)
 
@@ -916,7 +930,7 @@ class AsyncAuthContext:
             The token with its expiry time and type.
         """
         options = options or {}
-        view = self.for_tenant(options.get("tenant_id") or self._sync.tenant.id)
+        view = self.get_tenant_context(options.get("tenant_id") or self._sync.tenant.id)
         return await view.acquire_token(scopes, claims=options.get("claims"))
 
     async def acquire_token(

@@ -143,7 +143,7 @@ class InvokeCommandClient(ResourceClient):
             scopes: Scopes to request. Defaults to the service's ``.default``.
             anchor_mailbox: Value of the ``X-AnchorMailbox`` routing header. Defaults to the
                 signed-in user for a user flow in its own tenant, and to the tenant's system
-                mailbox for app flows and for sibling (GDAP) contexts; see
+                mailbox for app flows and for GDAP customer tenants; see
                 :class:`~azure_auth._sync.ipps.IppsClient` for how it names the tenant.
             page_size: Preferred number of results per page.
             timeout: Timeout for each HTTP request, in seconds. Cmdlets can be slow.
@@ -214,7 +214,7 @@ class InvokeCommandClient(ResourceClient):
         """
         if self._anchor_mailbox:
             return self._anchor_mailbox
-        if self._auth.is_app_flow or self._auth.is_sibling:
+        if self._auth.is_app_flow or self._auth.home is not self._auth:
             return f"APP:{SYSTEM_MAILBOX}@{tenant}"
         return f"UPN:{self._auth.username}"
 

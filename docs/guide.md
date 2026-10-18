@@ -194,7 +194,7 @@ When a sign-in ends without a token, the error says which of three things happen
 The library does not reopen the browser on any of them: the first cannot be fixed by asking
 again, the second is the user's decision, and the third means nobody is there.
 
-Sibling contexts from `for_tenant()` never prompt at all, so they report `ConsentRequired` and
+Contexts from `get_tenant_context()` never prompt at all, so they report `ConsentRequired` and
 stop. Consent for a customer tenant has to be granted in that tenant.
 
 ## Token cache
@@ -212,31 +212,36 @@ plain text and never silently switches to the memory cache.
 
 ## Multi-tenant access (GDAP)
 
-`auth.for_tenant(tenant)` returns a sibling context for another tenant. It shares the
-credentials, the cache, the username and the cloud. A GUID costs no network call, so it is
-cheap to call in a loop; a domain name is looked up once, for its GUID, and remembered.
+`auth.get_tenant_context(tenant)` returns a context for another tenant that reuses the sign-in
+you already did. It shares the credentials, the cache, the username and the cloud. A GUID
+costs no network call, so it is cheap to call in a loop; a domain name is looked up once, for
+its GUID, and remembered. Calling it again for the same tenant returns the same context.
 
 ```python
 home = GraphClient(auth, scopes=["DelegatedAdminRelationship.Read.All"])
 await home.login()
 
 for customer in await home.list_customers():
-    graph = GraphClient(auth.for_tenant(customer["tenantId"]), scopes=["User.Read.All"])
+    customer_auth = auth.get_tenant_context(customer["tenantId"])
+    graph = GraphClient(customer_auth, scopes=["User.Read.All"])
     try:
         users = await graph.get_all("/users")
     except (ConsentRequired, InteractionRequired) as error:
         print(f"skipping {customer['displayName']}: {error}")
 ```
 
-- A sibling **never prompts.** When a token cannot be obtained silently it raises
-  `InteractionRequired` or `ConsentRequired`, and the error carries the tenant id. Sign in on
-  a client of the root context first.
+- A customer tenant's context **never prompts.** When a token cannot be obtained silently it
+  raises `InteractionRequired` or `ConsentRequired`, and the error carries the tenant id. Sign
+  in on a client of the home context first.
+- `auth.home` is the context you signed in on. For a context you built yourself it is the
+  context itself; for one from `get_tenant_context()` it points back to the one you built. So
+  `auth.home is not auth` tells you that `auth` came from `get_tenant_context()`.
 - `list_customers()` reads `GET /tenantRelationships/delegatedAdminCustomers` and needs
   `DelegatedAdminRelationship.Read.All` consented in the home tenant. Each customer is the
   object Graph returns, whole (`tenantId`, `displayName`, and whatever Graph adds), listed
   once however many relationships reach it.
 - The application must be consented to in each customer tenant for the scopes you request.
-- In app flows each sibling builds its own client assertion, because the assertion audience
+- In app flows each customer tenant's context builds its own client assertion, because the assertion audience
   is the tenant's token endpoint.
 
 ## Certificates in the Windows certificate store
@@ -373,7 +378,7 @@ from module version 3.10.1:
   `InvokeCommand`, and the reads above use it too; the module's `v1.0` base URI serves only
   its own setup calls at connect time.
 - Routing header `X-AnchorMailbox`: `UPN:<username>` for a user in their own tenant, and the
-  tenant's system mailbox for app flows and for sibling (GDAP) contexts. Override it with
+  tenant's system mailbox for app flows and for GDAP customer tenants. Override it with
   `anchor_mailbox=`.
 - Security & Compliance in an app flow finds the tenant only by its domain name, never its
   GUID, so the client uses `auth.tenant.domain`. When the tenant has none, it asks Exchange

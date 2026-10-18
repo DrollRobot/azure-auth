@@ -422,7 +422,7 @@ async def test_a_customers_exchange_token_leaves_the_account_findable(tmp_path: 
     auth = broker_auth(cache_path)
     async with ExchangeClient(auth) as home:
         ensure_sign_in(home)
-    customer = auth.for_tenant(GDAP_TENANT)
+    customer = auth.get_tenant_context(GDAP_TENANT)
     async with ExchangeClient(customer) as exchange:
         await customer.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
         names = [

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `AuthContext.for_tenant()` is renamed
+  `AuthContext.get_tenant_context()`.
+- **Breaking:** `AuthContext.is_sibling` is replaced by `AuthContext.home`; test
+  `auth.home is not auth`.
+
 ## [0.4.1] - 2026-10-16 - Broker fix for GDAP customers
 
 ### Fixed

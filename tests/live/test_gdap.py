@@ -1,10 +1,10 @@
-"""One home-tenant sign-in, then silent sibling contexts on GDAP customer tenants.
+"""One home-tenant sign-in, then silent contexts from get_tenant_context() on GDAP customer tenants.
 
 Every test here only reads, so it can run against any customer tenant. A sign-in window
-can open only in the home tenant: a sibling context, which is what reaches a customer tenant,
-never prompts, so no consent screen can come up there. The Exchange tests send every request
-through :class:`~tests.live.support.ReadOnlyCmdlets`, which fails the test, without sending,
-any request that is not one of its read-only cmdlets.
+can open only in the home tenant: a context from get_tenant_context(), which is what reaches a
+customer tenant, never prompts, so no consent screen can come up there. The Exchange tests
+send every request through :class:`~tests.live.support.ReadOnlyCmdlets`, which fails the
+test, without sending, any request that is not one of its read-only cmdlets.
 """
 
 from __future__ import annotations
@@ -58,8 +58,8 @@ async def test_gdap_loop_reaches_customer_tenants_without_prompting(
     reached = 0
     skipped: list[str] = []
     for tenant_id in tenant_ids[:5]:
-        sibling = user_auth.for_tenant(tenant_id)
-        async with GraphClient(sibling, scopes=GDAP_SCOPES[1:]) as graph:
+        customer = user_auth.get_tenant_context(tenant_id)
+        async with GraphClient(customer, scopes=GDAP_SCOPES[1:]) as graph:
             try:
                 organization = await graph.get_all("/organization")
             except (ConsentRequired, InteractionRequired) as error:
@@ -94,20 +94,20 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     async with ExchangeClient(user_auth) as home:
         ensure_sign_in(home)
         home_token = await user_auth.aio.acquire_token(home.scopes, client_id=home.client_id)
-    sibling = user_auth.for_tenant(GDAP_TENANT)
-    assert sibling is not user_auth, "AZURE_AUTH_TEST_GDAP_TENANT_ID names the home tenant"
+    customer = user_auth.get_tenant_context(GDAP_TENANT)
+    assert customer is not user_auth, "AZURE_AUTH_TEST_GDAP_TENANT_ID names the home tenant"
 
     guard = ReadOnlyCmdlets()
-    async with ExchangeClient(sibling, transport=guard) as exchange:
+    async with ExchangeClient(customer, transport=guard) as exchange:
         try:
-            token = await sibling.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
+            token = await customer.aio.acquire_token(exchange.scopes, client_id=exchange.client_id)
         except (ConsentRequired, InteractionRequired) as error:
             pytest.fail(f"the home sign-in does not reach {GDAP_TENANT} silently: {error}")
         config = await exchange.run("Get-OrganizationConfig")
 
     claims = token_claims(token.token)
     print(f"GDAP Exchange: roles in the customer tenant's token (wids): {claims.get('wids')}")
-    assert claims["tid"] == sibling.tenant.id
+    assert claims["tid"] == customer.tenant.id
     assert claims["aud"] == user_auth.tenant.cloud.exchange
     # A customer-tenant token carries no upn and no oid, and its unique_name is the display
     # name. Measured 2026-10-15: its idp, the issuer that signed the user in, is the home
@@ -117,11 +117,11 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     assert claims["email"].lower().startswith(f"user_{home_id}@")
 
     request = guard.requests[0]
-    assert sibling.tenant.id in request.url.path
-    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{sibling.tenant.id}"
+    assert customer.tenant.id in request.url.path
+    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{customer.tenant.id}"
 
     assert len(config) == 1
-    assert user_auth.for_tenant(config[0]["Name"]) is sibling
+    assert user_auth.get_tenant_context(config[0]["Name"]) is customer
 
 
 @needs_user
@@ -136,10 +136,10 @@ async def test_gdap_reads_a_customers_mailboxes_without_prompting(user_auth: Aut
     """
     async with ExchangeClient(user_auth) as home:
         ensure_sign_in(home)
-    sibling = user_auth.for_tenant(GDAP_TENANT)
+    customer = user_auth.get_tenant_context(GDAP_TENANT)
 
     guard = ReadOnlyCmdlets()
-    async with ExchangeClient(sibling, transport=guard) as exchange:
+    async with ExchangeClient(customer, transport=guard) as exchange:
         mailboxes = await exchange.mailboxes(
             PropertySet="Audit",
             RecipientTypeDetails=[
@@ -153,12 +153,12 @@ async def test_gdap_reads_a_customers_mailboxes_without_prompting(user_auth: Aut
 
     request = guard.requests[0]
     assert request.method == "GET"
-    assert request.url.path.endswith(f"/{sibling.tenant.id}/Mailbox")
+    assert request.url.path.endswith(f"/{customer.tenant.id}/Mailbox")
     print(
         f"GDAP Exchange read: {len(mailboxes)} mailboxes with"
         f" X-AnchorMailbox {request.headers['X-AnchorMailbox']}"
     )
-    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{sibling.tenant.id}"
+    assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{customer.tenant.id}"
     assert mailboxes, "the customer tenant has no mailboxes"
     assert all(isinstance(mailbox["DefaultAuditSet"], list) for mailbox in mailboxes)
     assert all(mailbox["UserPrincipalName"] for mailbox in mailboxes)
@@ -169,8 +169,8 @@ async def test_gdap_reads_a_customers_mailboxes_without_prompting(user_auth: Aut
 def test_the_blocking_exchange_client_reads_a_customers_exchange(cache_path: Path) -> None:
     """The generated blocking Exchange client reaches a customer through GDAP too."""
     home = live_user_auth(cache_path)
-    sibling = home.for_tenant(GDAP_TENANT)
-    with BlockingExchangeClient(sibling, transport=ReadOnlyCmdlets()) as exchange:
+    customer = home.get_tenant_context(GDAP_TENANT)
+    with BlockingExchangeClient(customer, transport=ReadOnlyCmdlets()) as exchange:
         ensure_token(home, exchange.scopes, exchange.client_id)
         config = exchange.run("Get-OrganizationConfig")
     assert len(config) == 1
