@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 
 from azure_auth import (
+    ArmClient,
     AuthContext,
     AuthError,
-    AzureClient,
     BrokerUnavailable,
     ConsentRequired,
     ExchangeClient,
@@ -64,10 +64,10 @@ async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
         username=USERNAME,
         cache="disk",
         cache_path=cache_path,
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
     async with GraphClient(auth, scopes=BASELINE_SCOPES) as graph:
-        await graph.login(force=True)
+        await graph.login(pick_account=True)
         me = await graph.get("/me", params={"$select": "userPrincipalName"})
     assert me["userPrincipalName"].lower() == USERNAME.lower()
 
@@ -83,7 +83,7 @@ async def test_interactive_login_then_graph_me(cache_path: Path) -> None:
             marks=needs_exchange_sign_in,
             id="exchange",
         ),
-        pytest.param(AzureClient, "Azure PowerShell", marks=needs_arm_or_keyvault, id="arm"),
+        pytest.param(ArmClient, "Azure PowerShell", marks=needs_arm_or_keyvault, id="arm"),
     ],
 )
 async def test_interactive_login_to_another_first_party_client(
@@ -103,10 +103,10 @@ async def test_interactive_login_to_another_first_party_client(
         username=USERNAME,
         cache="disk",
         cache_path=cache_path,
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
     async with make_client(auth) as client:
-        await client.login(force=True)
+        await client.login(pick_account=True)
 
     cached = cached_user_auth(cache_path)
     token = await cached.aio.acquire_token(client.scopes, client_id=client.client_id)
@@ -150,11 +150,11 @@ async def test_signing_in_as_somebody_else_is_refused(broker: bool) -> None:
         username=nobody,
         broker=broker,
         broker_fallback=False,
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
-    async with AzureClient(auth) as client:
+    async with ArmClient(auth) as client:
         with pytest.raises(AuthError) as caught:
-            await client.login(force=True)
+            await client.login(pick_account=True)
 
     message = str(caught.value)
     print(f"signed in as somebody else: {message}")
@@ -186,10 +186,10 @@ async def test_a_cancelled_sign_in_is_reported_and_not_retried() -> None:
     tests share.
     """
     walkthrough(sign_in_step("browser"), "Consent screen: click CANCEL.")
-    auth = AuthContext(TENANT, username=USERNAME, interactive_timeout=SIGN_IN_TIMEOUT_SECONDS)
+    auth = AuthContext(TENANT, username=USERNAME, browser_timeout=SIGN_IN_TIMEOUT_SECONDS)
     async with GraphClient(auth, scopes=[CANCEL_SCOPE]) as graph:
         try:
-            await graph.login(force=True)
+            await graph.login(pick_account=True)
         except AuthError as error:
             caught = error
         else:
@@ -219,7 +219,7 @@ TIMEOUT_SECONDS = 5
 
 @needs_user
 async def test_an_unanswered_sign_in_times_out() -> None:
-    """A browser sign-in that nobody completes fails after ``interactive_timeout`` seconds.
+    """A browser sign-in that nobody completes fails after ``browser_timeout`` seconds.
 
     A page that never returns to the application is the case this guards: a closed window,
     or a Conditional Access block, whose page returns to MSAL's listener with no parameters
@@ -229,13 +229,13 @@ async def test_an_unanswered_sign_in_times_out() -> None:
     It leaves a browser tab open, but nobody has to act, so it is not ``interactive``. Azure
     PowerShell is the application because it exists in every tenant and nothing is granted.
     """
-    auth = AuthContext(TENANT, username=USERNAME, interactive_timeout=TIMEOUT_SECONDS)
-    async with AzureClient(auth) as client:
+    auth = AuthContext(TENANT, username=USERNAME, browser_timeout=TIMEOUT_SECONDS)
+    async with ArmClient(auth) as client:
         started = time.monotonic()
         with pytest.raises(
             AuthError, match=f"not completed within {TIMEOUT_SECONDS} seconds"
         ) as caught:
-            await client.login(force=True)
+            await client.login(pick_account=True)
         elapsed = time.monotonic() - started
 
     assert not isinstance(caught.value, (ConsentRequired, InteractionRequired))

@@ -38,7 +38,7 @@ from azure_auth import (
     Tenant,
     TenantNotFound,
 )
-from azure_auth.clients import AzureClient, ResourceClient
+from azure_auth.clients import ArmClient, ResourceClient
 from azure_auth.clouds import CHINA, CLOUDS, COMMERCIAL, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import (
     AZURE_POWERSHELL_CLIENT_ID,
@@ -179,7 +179,7 @@ def test_every_service_in_the_table_trusts_its_clouds_sign_in(cloud: Cloud) -> N
     """
     tenant = reference_tenant(cloud)
     graph = unauthenticated_client(GraphClient, tenant)
-    arm = unauthenticated_client(AzureClient, tenant)
+    arm = unauthenticated_client(ArmClient, tenant)
     exchange = unauthenticated_client(ExchangeClient, tenant)
     ipps = unauthenticated_client(IppsClient, tenant)
     invoke = f"/adminapi/beta/{tenant.id}/InvokeCommand"
@@ -268,7 +268,7 @@ def test_the_sign_in_library_sets_up_in_every_cloud(domain: str, cloud: Cloud) -
     endpoints are asked.
     """
     auth = AuthContext(domain, username=f"nobody@{domain}")
-    auth._interactive_allowed = False
+    auth._can_prompt = False
 
     with pytest.raises(InteractionRequired):
         auth.acquire_token([f"{cloud.arm}/.default"])
@@ -361,7 +361,7 @@ def discovered_auth(cache_path: Path) -> AuthContext:
         username=USERNAME,
         cache="disk",
         cache_path=cache_path,
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
 
 
@@ -380,7 +380,7 @@ async def test_a_cloud_of_the_callers_own_is_used_as_given(cache_path: Path) -> 
         username=USERNAME,
         cache="disk",
         cache_path=cache_path,
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
     async with GraphClient(auth, scopes=BASELINE_SCOPES) as graph:
         ensure_sign_in(graph)
@@ -407,10 +407,10 @@ async def test_a_user_given_the_wrong_cloud_is_refused() -> None:
     auth = AuthContext(
         Tenant(live_tenant().id, wrong),
         username=USERNAME,
-        interactive_timeout=SIGN_IN_TIMEOUT_SECONDS,
+        browser_timeout=SIGN_IN_TIMEOUT_SECONDS,
     )
     async with GraphClient(auth, scopes=["User.Read"]) as graph:
-        await graph.login(force=True)
+        await graph.login(pick_account=True)
         token = await auth.aio.acquire_token(graph.scopes, client_id=graph.client_id)
         claims = token_claims(token.token)
         print(f"{TENANT} as {wrong.name}: token aud={claims.get('aud')} iss={claims.get('iss')}")

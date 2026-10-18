@@ -87,7 +87,7 @@ def test_construction_makes_no_msal_application(fake_msal: FakeMsal) -> None:
 def test_repr_does_not_reveal_the_secret() -> None:
     auth = AuthContext("tenant", client_id="app", client_secret="s3cret")
     assert "s3cret" not in repr(auth)
-    assert "s3cret" not in repr(auth._credential)
+    assert "s3cret" not in repr(auth._app_credential)
 
 
 # ---------------------------------------------------------------------------- resolution order
@@ -136,7 +136,7 @@ def test_browser_sign_in_is_given_a_timeout(fake_msal: FakeMsal) -> None:
 
 
 def test_the_browser_timeout_can_be_set(fake_msal: FakeMsal) -> None:
-    user_context(interactive_timeout=5).acquire_token([ARM_SCOPE])
+    user_context(browser_timeout=5).acquire_token([ARM_SCOPE])
 
     assert fake_msal.calls[0].kwargs["timeout"] == 5
 
@@ -265,7 +265,7 @@ def test_forced_login_always_prompts(fake_msal: FakeMsal) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: token_result()
 
-    user_context().login(client_id=GRAPH_CLI_CLIENT_ID, scopes=["User.Read"], force=True)
+    user_context().login(client_id=GRAPH_CLI_CLIENT_ID, scopes=["User.Read"], pick_account=True)
 
     assert fake_msal.methods() == ["interactive"]
     # A still signed-in browser would otherwise complete the page with nobody choosing.
@@ -381,8 +381,8 @@ def test_rejected_certificate_assertion_is_not_retried(fake_msal: FakeMsal) -> N
     with pytest.raises(AuthError, match="invalid_client"):
         auth.get_token(ARM_SCOPE)
 
-    assert isinstance(auth._credential, CertStoreCredential)
-    assert auth._credential.algorithm == "PS256"
+    assert isinstance(auth._app_credential, CertStoreCredential)
+    assert auth._app_credential.algorithm == "PS256"
     assert fake_msal.methods() == ["for_client"]
 
 
@@ -504,7 +504,7 @@ def test_a_customer_reports_missing_consent(fake_msal: FakeMsal) -> None:
 def test_forced_login_on_a_get_tenant_context_is_refused(fake_msal: FakeMsal) -> None:
     customer = user_context().get_tenant_context("customer")
     with pytest.raises(InteractionRequired):
-        customer.login(client_id="app", scopes=["a"], force=True)
+        customer.login(client_id="app", scopes=["a"], pick_account=True)
     assert fake_msal.methods() == []
 
 
@@ -538,8 +538,8 @@ def test_app_flow_get_tenant_gets_its_own_assertion_audience(fake_msal: FakeMsal
         seen.append(token_endpoint)
         return "assertion"
 
-    assert isinstance(auth._credential, CertStoreCredential)
-    auth._credential.build_assertion = record  # type: ignore[method-assign]
+    assert isinstance(auth._app_credential, CertStoreCredential)
+    auth._app_credential.build_assertion = record  # type: ignore[method-assign]
 
     auth.get_token(ARM_SCOPE)
     auth.get_tenant_context("customer").get_token(ARM_SCOPE)
@@ -655,7 +655,7 @@ def test_a_forced_broker_sign_in_shows_the_account_picker(
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: token_result()
 
-    user_context(broker=True).login(client_id="app", scopes=["a"], force=True)
+    user_context(broker=True).login(client_id="app", scopes=["a"], pick_account=True)
 
     # Without it the broker answers silently for an account it holds, and force does nothing.
     call = fake_msal.calls[0]

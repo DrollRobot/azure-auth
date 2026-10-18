@@ -32,8 +32,8 @@ from azure_auth.auth import (
     TenantNotFound,
 )
 from azure_auth.clients import (
-    AzureClient,
-    AzureError,
+    ArmClient,
+    ArmError,
     ExchangeClient,
     GraphClient,
     GraphError,
@@ -46,11 +46,11 @@ from azure_auth.clouds import Cloud
 __all__ = [
     "AccountSelectionRequired",
     "AmbiguousTenant",
+    "ArmClient",
+    "ArmError",
     "AsyncAuthContext",
     "AuthContext",
     "AuthError",
-    "AzureClient",
-    "AzureError",
     "BrokerUnavailable",
     "CacheEncryptionUnavailable",
     "CertificateUnavailable",

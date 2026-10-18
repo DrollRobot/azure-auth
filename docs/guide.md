@@ -31,15 +31,15 @@ from source or a plain-text file.
 ### Signing in
 
 Signing in is lazy: the first request prompts if it has to. To choose the moment, call
-`await client.login()`. Pass `force=True` to show the account picker even when a token is
-cached, or the broker or a still signed-in browser could sign in by itself.
+`await client.login()`. Pass `pick_account=True` to show the account picker even when a token
+is cached, or the broker or a still signed-in browser could sign in by itself.
 
 `username` selects the cached account and pre-fills the sign-in page. If somebody else signs
 in, the context raises `AuthError`, because their tokens would never be found again.
 
 A browser sign-in that is never completed -- the window closed or left alone, or stopped at an
 error page such as a Conditional Access block, which never returns to the application -- fails
-with `AuthError` after `interactive_timeout` seconds (default 120) rather than waiting for ever.
+with `AuthError` after `browser_timeout` seconds (default 120) rather than waiting for ever.
 
 ### The Windows broker
 
@@ -144,7 +144,7 @@ App flows never use a first-party id; without a client id they raise `ValueError
 | Client | Default client id (user flows) | Default scope (commercial cloud) |
 |---|---|---|
 | `GraphClient` | Microsoft Graph PowerShell | `scopes=` argument, else `https://graph.microsoft.com/.default` |
-| `AzureClient`, `KeyVaultClient`, Azure SDK clients | Azure PowerShell | `https://management.azure.com/.default`, `https://vault.azure.net/.default` |
+| `ArmClient`, `KeyVaultClient`, Azure SDK clients | Azure PowerShell | `https://management.azure.com/.default`, `https://vault.azure.net/.default` |
 | `ExchangeClient` | Exchange Online PowerShell | `https://outlook.office365.com/.default` |
 | `IppsClient` | Exchange Online PowerShell | `https://ps.compliance.protection.outlook.com/.default` |
 
@@ -188,7 +188,7 @@ When a sign-in ends without a token, the error says which of three things happen
   ("User declined to consent"), and the library raises `ConsentRequired` carrying the scopes
   and the tenant.
 - A browser window that is closed, or never answered, is given up with an `AuthError` saying
-  so after `interactive_timeout` seconds (default 120). Without that limit the wait would be
+  so after `browser_timeout` seconds (default 120). Without that limit the wait would be
   indefinite.
 
 The library does not reopen the browser on any of them: the first cannot be fixed by asking
@@ -288,7 +288,7 @@ AuthError
 └── AmbiguousTenant(tenant, candidates)
 ResourceError(status, code, request_id, body)
 ├── GraphError
-├── AzureError
+├── ArmError
 └── InvokeCommandError
 ```
 
@@ -313,7 +313,7 @@ their status; they are not raised.
 Every call needs the `api_version` of the resource provider.
 
 ```python
-async with AzureClient(auth) as arm:
+async with ArmClient(auth) as arm:
     groups = await arm.get_all(f"/subscriptions/{sub}/resourcegroups", api_version="2021-04-01")
     started = await arm.send("PUT", path, api_version="2021-04-01", json=body)
     resource = await arm.wait(started)  # polls Azure-AsyncOperation or Location

@@ -59,9 +59,9 @@ _REFRESH_MARGIN_SECONDS = 300
 _CLIENT_CAPABILITIES = ["CP1"]
 
 # How long a browser sign-in waits for the person before it is abandoned, unless the context
-# is given ``interactive_timeout``. Without a limit, a closed browser window leaves MSAL
+# is given ``browser_timeout``. Without a limit, a closed browser window leaves MSAL
 # waiting for a redirect that never arrives.
-_DEFAULT_INTERACTIVE_TIMEOUT_SECONDS = 120
+_DEFAULT_BROWSER_TIMEOUT_SECONDS = 120
 
 _TokenKey = tuple[str, frozenset[str]]
 
@@ -196,7 +196,7 @@ class AuthContext:
         cache_path: str | Path | None = None,
         broker: bool = False,
         broker_fallback: bool = True,
-        interactive_timeout: float = _DEFAULT_INTERACTIVE_TIMEOUT_SECONDS,
+        browser_timeout: float = _DEFAULT_BROWSER_TIMEOUT_SECONDS,
     ) -> None:
         """Configure the context, looking the tenant up when it is given as a string.
 
@@ -228,7 +228,7 @@ class AuthContext:
                 ``broker`` extra.
             broker_fallback: When the broker cannot be used, fall back to the browser
                 (default) instead of raising :class:`BrokerUnavailable`.
-            interactive_timeout: Seconds a browser sign-in waits for the person before it
+            browser_timeout: Seconds a browser sign-in waits for the person before it
                 fails with :class:`AuthError` (default 120). A closed window would otherwise
                 wait for ever.
 
@@ -268,12 +268,12 @@ class AuthContext:
 
         self._client_id = client_id
         self._username = username
-        self._credential = credential
+        self._app_credential = credential
         self._cache = build_cache(cache, cache_path)
         self._broker = broker
         self._broker_fallback = broker_fallback
-        self._interactive_timeout = interactive_timeout
-        self._interactive_allowed = True
+        self._browser_timeout = browser_timeout
+        self._can_prompt = True
         self._home = self
         self._tenant = tenant if isinstance(tenant, Tenant) else Tenant.lookup(tenant)
         self._init_state()
@@ -282,7 +282,7 @@ class AuthContext:
         """Create the per-context mutable state."""
         self._apps: dict[tuple[str, bool], Any] = {}
         self._locks: dict[_TokenKey, threading.Lock] = {}
-        self._tokens: dict[_TokenKey, AccessTokenInfo] = {}
+        self._recent_tokens: dict[_TokenKey, AccessTokenInfo] = {}
         self._tenant_contexts: dict[str, AuthContext] = {}
         self._lookups: dict[str, Tenant] = {}
         self._guard = threading.Lock()
@@ -317,7 +317,7 @@ class AuthContext:
     @property
     def is_app_flow(self) -> bool:
         """Whether this context authenticates as an application."""
-        return self._credential is not None
+        return self._app_credential is not None
 
     @property
     def home(self) -> AuthContext:
@@ -385,12 +385,12 @@ class AuthContext:
                 context._tenant = found or Tenant(guid, self._tenant.cloud)
                 context._client_id = self._client_id
                 context._username = self._username
-                context._credential = self._credential
+                context._app_credential = self._app_credential
                 context._cache = self._cache
                 context._broker = self._broker
                 context._broker_fallback = self._broker_fallback
-                context._interactive_timeout = self._interactive_timeout
-                context._interactive_allowed = False
+                context._browser_timeout = self._browser_timeout
+                context._can_prompt = False
                 context._home = self._home
                 context._init_state()
                 self._tenant_contexts[guid] = context
@@ -472,9 +472,9 @@ class AuthContext:
             ConsentRequired: If consent is missing in the tenant.
             AuthError: For any other failure.
         """
-        return self._acquire(scopes, client_id, claims, force_refresh, force_interactive=False)
+        return self._acquire(scopes, client_id, claims, force_refresh, pick_account=False)
 
-    def login(self, *, client_id: str, scopes: Iterable[str], force: bool = False) -> None:
+    def login(self, *, client_id: str, scopes: Iterable[str], pick_account: bool = False) -> None:
         """Sign in now instead of at the first request.
 
         Resource clients call this from their own ``login()`` with their client id and
@@ -483,15 +483,15 @@ class AuthContext:
         Args:
             client_id: Client id to sign in to.
             scopes: Scopes to request.
-            force: Show the account picker, even when a cached token or account exists or
-                the broker or browser could sign in by itself. Someone other than the
-                configured user is refused. Ignored by app flows.
+            pick_account: Show the account picker, even when a cached token or account
+                exists or the broker or browser could sign in by itself. Someone other than
+                the configured user is refused. Ignored by app flows.
 
         Raises:
-            InteractionRequired: If this context came from :meth:`get_tenant_context` and the user
-                must sign in.
+            InteractionRequired: If this context came from :meth:`get_tenant_context` and the
+                user must sign in.
         """
-        self._acquire(scopes, client_id, None, force, force_interactive=force)
+        self._acquire(scopes, client_id, None, pick_account, pick_account=pick_account)
 
     # ------------------------------------------------------------------ internals
 
@@ -515,8 +515,11 @@ class AuthContext:
             raise ValueError("App flows need a client_id; first-party client ids cannot be used")
         return AZURE_POWERSHELL_CLIENT_ID
 
-    def cached_token(self, scopes: Iterable[str], client_id: str | None) -> AccessTokenInfo | None:
-        """Return a still-fresh token from the in-process memo, without locking.
+    def _recent_token(self, scopes: Iterable[str], client_id: str | None) -> AccessTokenInfo | None:
+        """Return a still-fresh token this context fetched recently, without locking.
+
+        These tokens are kept in this context's memory, in front of the MSAL token cache,
+        so a fresh token is returned without asking MSAL.
 
         Args:
             scopes: Scopes the token was requested for.
@@ -526,7 +529,7 @@ class AuthContext:
             The token, or ``None`` when there is none or it is close to expiry.
         """
         key = (self.resolve_client_id(client_id), frozenset(scopes))
-        info = self._tokens.get(key)
+        info = self._recent_tokens.get(key)
         if info is not None and info.expires_on - time.time() > _REFRESH_MARGIN_SECONDS:
             return info
         return None
@@ -538,7 +541,7 @@ class AuthContext:
         claims: str | None,
         force_refresh: bool,
         *,
-        force_interactive: bool,
+        pick_account: bool,
     ) -> AccessTokenInfo:
         """Acquire a token under the single-flight lock for its key.
 
@@ -547,7 +550,7 @@ class AuthContext:
             client_id: Client id chosen by the caller, if any.
             claims: Claims challenge to satisfy.
             force_refresh: Skip cached access tokens.
-            force_interactive: Prompt even when a silent token is available.
+            pick_account: Show the account picker, even when a silent token is available.
 
         Returns:
             The token with its expiry time and type.
@@ -560,22 +563,22 @@ class AuthContext:
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
         with lock:
-            if not (claims or force_refresh or force_interactive):
-                cached = self.cached_token(scope_list, resolved)
-                if cached is not None:
-                    return cached
+            if not (claims or force_refresh or pick_account):
+                recent = self._recent_token(scope_list, resolved)
+                if recent is not None:
+                    return recent
             if self.is_app_flow:
                 result = self._acquire_for_app(resolved, scope_list, claims, force_refresh)
             else:
                 result = self._acquire_for_user(
-                    resolved, scope_list, claims, force_refresh, force_interactive
+                    resolved, scope_list, claims, force_refresh, pick_account
                 )
             info = AccessTokenInfo(
                 str(result["access_token"]),
                 int(time.time()) + int(result.get("expires_in", 0)),
                 token_type=str(result.get("token_type", "Bearer")),
             )
-            self._tokens[key] = info
+            self._recent_tokens[key] = info
             return info
 
     def _app(self, client_id: str, *, use_broker: bool = False) -> Any:
@@ -592,10 +595,10 @@ class AuthContext:
         key = (client_id, use_broker)
         app = self._apps.get(key)
         if app is None:
-            if self._credential is not None:
+            if self._app_credential is not None:
                 app = msal.ConfidentialClientApplication(
                     client_id,
-                    client_credential=self._credential.msal_client_credential(
+                    client_credential=self._app_credential.msal_client_credential(
                         client_id=client_id, token_endpoint=self.token_endpoint
                     ),
                     authority=self.authority,
@@ -706,7 +709,7 @@ class AuthContext:
         scopes: list[str],
         claims: str | None,
         force_refresh: bool,
-        force_interactive: bool,
+        pick_account: bool,
     ) -> dict[str, Any]:
         """Get a user token: silently if possible, interactively if allowed.
 
@@ -715,7 +718,7 @@ class AuthContext:
             scopes: Scopes to request.
             claims: Claims challenge to satisfy.
             force_refresh: Skip cached access tokens.
-            force_interactive: Prompt even when a silent token is available.
+            pick_account: Show the account picker, even when a silent token is available.
 
         Returns:
             The successful MSAL result.
@@ -723,7 +726,7 @@ class AuthContext:
         use_broker = self._broker_usable()
         app = self._app(client_id, use_broker=use_broker)
         result: dict[str, Any] | None = None
-        if not force_interactive:
+        if not pick_account:
             accounts = self._accounts(app)
             if len(accounts) > 1:
                 raise AccountSelectionRequired(
@@ -739,7 +742,7 @@ class AuthContext:
             if result and "access_token" in result:
                 return dict(result)
 
-        if not self._interactive_allowed:
+        if not self._can_prompt:
             error = error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
             if isinstance(error, InteractionRequired):
                 raise InteractionRequired(
@@ -760,7 +763,7 @@ class AuthContext:
         # browser on either would be wrong, and the retry could never fire in the case it was
         # written for.
         result = self._interactive(
-            client_id, scopes, claims, use_broker=use_broker, pick_account=force_interactive
+            client_id, scopes, claims, use_broker=use_broker, pick_account=pick_account
         )
         if "access_token" not in result:
             raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
@@ -827,11 +830,11 @@ class AuthContext:
                 prompt=prompt,
                 login_hint=self._username,
                 claims_challenge=claims,
-                timeout=self._interactive_timeout,
+                timeout=self._browser_timeout,
             )
         except BrowserInteractionTimeoutError as exc:
             raise AuthError(
-                f"The browser sign-in was not completed within {self._interactive_timeout:g} "
+                f"The browser sign-in was not completed within {self._browser_timeout:g} "
                 "seconds. The window was closed, nobody answered it, or the sign-in page stopped "
                 "at an error that never returns to the application, such as a Conditional "
                 "Access block."
@@ -912,8 +915,8 @@ class AsyncAuthContext:
         Returns:
             The token and its expiry time.
         """
-        view = self.get_tenant_context(tenant_id or self._sync.tenant.id)
-        info = await view.acquire_token(scopes, claims=claims)
+        context = self.get_tenant_context(tenant_id or self._sync.tenant.id)
+        info = await context.acquire_token(scopes, claims=claims)
         return AccessToken(info.token, info.expires_on)
 
     async def get_token_info(
@@ -930,8 +933,8 @@ class AsyncAuthContext:
             The token with its expiry time and type.
         """
         options = options or {}
-        view = self.get_tenant_context(options.get("tenant_id") or self._sync.tenant.id)
-        return await view.acquire_token(scopes, claims=options.get("claims"))
+        context = self.get_tenant_context(options.get("tenant_id") or self._sync.tenant.id)
+        return await context.acquire_token(scopes, claims=options.get("claims"))
 
     async def acquire_token(
         self,
@@ -953,9 +956,9 @@ class AsyncAuthContext:
             The token with its expiry time and type.
         """
         if not (claims or force_refresh):
-            cached = self._sync.cached_token(scopes, client_id)
-            if cached is not None:
-                return cached
+            recent = self._sync._recent_token(scopes, client_id)
+            if recent is not None:
+                return recent
         return await asyncio.to_thread(
             self._sync.acquire_token,
             scopes,
@@ -964,15 +967,19 @@ class AsyncAuthContext:
             force_refresh=force_refresh,
         )
 
-    async def login(self, *, client_id: str, scopes: Sequence[str], force: bool = False) -> None:
+    async def login(
+        self, *, client_id: str, scopes: Sequence[str], pick_account: bool = False
+    ) -> None:
         """Sign in now; see :meth:`AuthContext.login`.
 
         Args:
             client_id: Client id to sign in to.
             scopes: Scopes to request.
-            force: Show the account picker; see :meth:`AuthContext.login`.
+            pick_account: Show the account picker; see :meth:`AuthContext.login`.
         """
-        await asyncio.to_thread(self._sync.login, client_id=client_id, scopes=scopes, force=force)
+        await asyncio.to_thread(
+            self._sync.login, client_id=client_id, scopes=scopes, pick_account=pick_account
+        )
 
     async def close(self) -> None:
         """Do nothing; present for the ``AsyncTokenCredential`` protocol."""

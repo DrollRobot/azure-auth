@@ -13,8 +13,8 @@ import pytest
 from azure.mgmt.resource.subscriptions import SubscriptionClient
 from azure.mgmt.resource.subscriptions.aio import SubscriptionClient as AsyncSubscriptionClient
 
-from azure_auth import AuthContext, AzureClient
-from azure_auth.sync import AzureClient as BlockingAzureClient
+from azure_auth import ArmClient, AuthContext
+from azure_auth.sync import ArmClient as BlockingArmClient
 from tests.live.support import (
     _flag,
     ensure_sign_in,
@@ -43,7 +43,7 @@ EMPTY_TEMPLATE = {
 @needs_user
 @needs_arm
 async def test_arm_lists_subscriptions(user_auth: AuthContext) -> None:
-    async with AzureClient(user_auth) as arm:
+    async with ArmClient(user_auth) as arm:
         ensure_sign_in(arm)
         subscriptions = await arm.get_all("/subscriptions", api_version="2022-12-01")
     # An empty list would also come back from a tenant the user cannot reach at all, so it
@@ -66,7 +66,7 @@ async def test_an_azure_sdk_client_lists_subscriptions_with_the_context(
     """
     arm_url = user_auth.tenant.cloud.arm
     scopes = [f"{arm_url}/.default"]
-    async with AzureClient(user_auth) as arm:
+    async with ArmClient(user_auth) as arm:
         ensure_sign_in(arm)
         expected = {
             s["subscriptionId"]
@@ -88,7 +88,7 @@ async def test_an_azure_sdk_client_lists_subscriptions_with_the_context(
 @needs_arm
 async def test_arm_lists_subscriptions_as_an_app() -> None:
     """An app-only token lists the subscriptions the application holds a role on."""
-    async with AzureClient(live_app_auth()) as arm:
+    async with ArmClient(live_app_auth()) as arm:
         subscriptions = await arm.get_all("/subscriptions", api_version="2022-12-01")
     assert subscriptions, "the test application can see no subscriptions; give it Reader on one"
     assert all(s.get("subscriptionId") for s in subscriptions)
@@ -116,7 +116,7 @@ async def test_wait_follows_a_long_running_operation_to_its_result(
     poll brought the result.
     """
     name = f"azure-auth-live-test-{uuid.uuid4().hex[:8]}"
-    async with AzureClient(user_auth) as arm:
+    async with ArmClient(user_auth) as arm:
         ensure_sign_in(arm)
         subscriptions = await arm.get_all("/subscriptions", api_version="2022-12-01")
         assert subscriptions, "the user can see no subscriptions; AZURE_AUTH_TEST_ARM is wrong"
@@ -152,7 +152,7 @@ async def test_wait_follows_a_long_running_operation_to_its_result(
 @needs_arm
 def test_the_blocking_client_lists_subscriptions(cache_path: Path) -> None:
     """The generated blocking client works against the real service, not only its mirror tests."""
-    with BlockingAzureClient(live_user_auth(cache_path)) as arm:
+    with BlockingArmClient(live_user_auth(cache_path)) as arm:
         ensure_sign_in(arm)
         subscriptions = arm.get_all("/subscriptions", api_version="2022-12-01")
     assert subscriptions, "the user can see no subscriptions; AZURE_AUTH_TEST_ARM is wrong"

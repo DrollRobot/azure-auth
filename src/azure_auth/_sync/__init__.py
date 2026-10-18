@@ -8,17 +8,17 @@ because it needs the optional ``keyvault`` extra.
 
 from __future__ import annotations
 
-from azure_auth._sync.arm import AzureClient
+from azure_auth._sync.arm import ArmClient
 from azure_auth._sync.base import ResourceClient
 from azure_auth._sync.exchange import ExchangeClient
 from azure_auth._sync.graph import GraphClient
 from azure_auth._sync.invoke_command import InvokeCommandClient
 from azure_auth._sync.ipps import IppsClient
-from azure_auth.clients.errors import AzureError, GraphError, InvokeCommandError, ResourceError
+from azure_auth.clients.errors import ArmError, GraphError, InvokeCommandError, ResourceError
 
 __all__ = [
-    "AzureClient",
-    "AzureError",
+    "ArmClient",
+    "ArmError",
     "ExchangeClient",
     "GraphClient",
     "GraphError",

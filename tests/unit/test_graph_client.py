@@ -105,7 +105,7 @@ async def test_app_flow_rules(fake_msal: FakeMsal) -> None:
 async def test_login_uses_the_clients_id_and_scopes(auth: AuthContext, fake_msal: FakeMsal) -> None:
     graph = GraphClient(auth, scopes=["User.Read.All"])
     await graph.login()
-    await graph.login(force=True)
+    await graph.login(pick_account=True)
 
     assert fake_msal.methods() == ["interactive", "interactive"]
     assert fake_msal.apps[0].client_id == GRAPH_CLI_CLIENT_ID

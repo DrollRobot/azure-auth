@@ -196,7 +196,7 @@ class InvokeCommandClient(ResourceClient):
             The tenant GUID.
         """
         if self._tenant_guid is None:
-            token = await self._tokens.acquire_token(self._scopes, client_id=self._client_id)
+            token = await self._credential.acquire_token(self._scopes, client_id=self._client_id)
             self._tenant_guid = tenant_id_from_token(token.token) or self._auth.tenant.id
         return self._tenant_guid
 

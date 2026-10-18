@@ -44,7 +44,7 @@ class GraphError(ResourceError):
     """Microsoft Graph rejected a request."""
 
 
-class AzureError(ResourceError):
+class ArmError(ResourceError):
     """Azure Resource Manager rejected a request or a long-running operation failed."""
 
 

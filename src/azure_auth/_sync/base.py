@@ -126,7 +126,7 @@ class ResourceClient:
             ValueError: If an app flow has no client id, or is given delegated scopes.
         """
         self._auth = auth
-        self._tokens = auth
+        self._credential = auth
         self._resource = resource.rstrip("/")
         self._client_id = self._resolve_client_id(client_id)
         self._scopes = self._resolve_scopes(scopes)
@@ -215,15 +215,17 @@ class ResourceClient:
 
     # ------------------------------------------------------------------ lifecycle
 
-    def login(self, *, force: bool = False) -> None:
+    def login(self, *, pick_account: bool = False) -> None:
         """Sign in now instead of at the first request.
 
         Args:
-            force: Show the account picker, even when a cached token or account exists or
-                the broker or browser could sign in by itself. Someone other than the
-                configured user is refused.
+            pick_account: Show the account picker, even when a cached token or account
+                exists or the broker or browser could sign in by itself. Someone other than
+                the configured user is refused.
         """
-        self._tokens.login(client_id=self._client_id, scopes=self._scopes, force=force)
+        self._credential.login(
+            client_id=self._client_id, scopes=self._scopes, pick_account=pick_account
+        )
 
     def close(self) -> None:
         """Close the underlying HTTP connections."""
@@ -312,7 +314,7 @@ class ResourceClient:
         claims: str | None = None
         force_refresh = False
         while True:
-            token = self._tokens.acquire_token(
+            token = self._credential.acquire_token(
                 self._scopes, client_id=self._client_id, claims=claims, force_refresh=force_refresh
             )
             claims, force_refresh = None, False

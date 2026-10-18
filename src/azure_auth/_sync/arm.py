@@ -16,26 +16,26 @@ import httpx
 
 from azure_auth._sync.base import ResourceClient, retry_delay
 from azure_auth.auth.context import AuthContext
-from azure_auth.clients.errors import AzureError, ResourceError
+from azure_auth.clients.errors import ArmError, ResourceError
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
 
 _TERMINAL_FAILURES = frozenset({"failed", "canceled", "cancelled"})
 _DEFAULT_POLL_SECONDS = 5.0
 
 
-class AzureClient(ResourceClient):
+class ArmClient(ResourceClient):
     """Authenticated requests to Azure Resource Manager.
 
     Every call needs the ``api_version`` of the resource provider being addressed. Requests
     go to the Resource Manager of the context's cloud.
 
     Example:
-        >>> arm = AzureClient(auth)  # doctest: +SKIP
+        >>> arm = ArmClient(auth)  # doctest: +SKIP
         >>> subs = arm.get_all("/subscriptions", api_version="2022-12-01")  # doctest: +SKIP
     """
 
     DEFAULT_CLIENT_ID: ClassVar[str] = AZURE_POWERSHELL_CLIENT_ID
-    ERROR_CLASS: ClassVar[type[ResourceError]] = AzureError
+    ERROR_CLASS: ClassVar[type[ResourceError]] = ArmError
 
     def __init__(
         self,
@@ -225,7 +225,7 @@ class AzureClient(ResourceClient):
             body of ``response``.
 
         Raises:
-            AzureError: If the operation fails or is cancelled.
+            ArmError: If the operation fails or is cancelled.
             TimeoutError: If the operation does not finish in time.
         """
         deadline = time.monotonic() + timeout
@@ -269,7 +269,7 @@ class AzureClient(ResourceClient):
 
         return self._json(response)
 
-    def _operation_error(self, response: httpx.Response, status: Mapping[str, Any]) -> AzureError:
+    def _operation_error(self, response: httpx.Response, status: Mapping[str, Any]) -> ArmError:
         """Build the exception for a failed long-running operation.
 
         Args:
@@ -283,7 +283,7 @@ class AzureClient(ResourceClient):
         code = error.get("code") if isinstance(error, dict) else None
         message = error.get("message") if isinstance(error, dict) else None
         detail = ": ".join(str(part) for part in (code, message) if part)
-        return AzureError(
+        return ArmError(
             f"Operation {status.get('status')} {detail}".rstrip(),
             status=response.status_code,
             code=str(code) if code else None,

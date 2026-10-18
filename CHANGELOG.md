@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AuthContext.get_tenant_context()`.
 - **Breaking:** `AuthContext.is_sibling` is replaced by `AuthContext.home`; test
   `auth.home is not auth`.
+- **Breaking:** `login(force=True)` is now `login(pick_account=True)`, on the context and on
+  every client.
+- **Breaking:** `AzureClient` and `AzureError` are renamed `ArmClient` and `ArmError`.
+- **Breaking:** the `AuthContext` argument `interactive_timeout` is renamed `browser_timeout`.
+  It only ever applied to the browser.
 
 ## [0.4.1] - 2026-10-16 - Broker fix for GDAP customers
 
