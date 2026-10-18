@@ -31,18 +31,20 @@ The marker lives on the tenant rather than in a local file so that pointing a pr
 different tenant fails closed by itself, with nothing local left armed.
 
 Signing in needs ``Organization.ReadWrite.All``, which in practice means a Global
-Administrator. Usage::
+Administrator. The tenant and the account are given on the command line every time, and
+nothing is read from the environment or a ``.env`` file: marking a tenant is a deliberate act,
+so whoever runs this names the tenant themselves, and a configuration pointed somewhere else
+cannot choose it for them. Usage::
 
-    uv run --env-file .env python scripts/mark_remote_disposable.py           # mark
-    uv run --env-file .env python scripts/mark_remote_disposable.py --status  # just look
-    uv run --env-file .env python scripts/mark_remote_disposable.py --unmark  # remove it
+    uv run python scripts/mark_remote_disposable.py --tenant <id or domain> --username <admin>
+    uv run python scripts/mark_remote_disposable.py --tenant ... --username ... --status
+    uv run python scripts/mark_remote_disposable.py --tenant ... --username ... --unmark
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -55,7 +57,9 @@ import _cli
 from azure_auth import AuthContext, GraphClient
 from tests.verify_remote_disposable import SENTINEL
 
-__version__ = "1.0.0"
+# Bump on every change so scripts/compare_to_template.py can flag copies in other repos.
+# 1.1.0: the tenant and account come from --tenant and --username, never the environment.
+__version__ = "1.1.0"
 
 SCOPES = ["Organization.ReadWrite.All"]
 
@@ -69,6 +73,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--tenant", required=True, help="Tenant id (GUID) or verified domain to mark or check."
+    )
+    parser.add_argument(
+        "--username",
+        required=True,
+        help="Administrator who signs in (needs Organization.ReadWrite.All).",
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--status", action="store_true", help="Report the marker and stop.")
@@ -85,10 +97,10 @@ async def run(args: argparse.Namespace) -> int:
     Returns:
         Process exit code.
     """
-    tenant = os.environ.get("AZURE_AUTH_TEST_TENANT_ID", "")
-    username = os.environ.get("AZURE_AUTH_TEST_USERNAME", "")
+    tenant = args.tenant.strip()
+    username = args.username.strip()
     if not (tenant and username):
-        _cli.die("Set AZURE_AUTH_TEST_TENANT_ID and AZURE_AUTH_TEST_USERNAME.")
+        _cli.die("--tenant and --username must not be empty.")
 
     auth = AuthContext(tenant, username=username)
     async with GraphClient(auth, scopes=SCOPES) as graph:
