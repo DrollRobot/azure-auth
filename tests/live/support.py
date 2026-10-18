@@ -28,9 +28,10 @@ Environment variables:
   no Azure access still answers ``/subscriptions`` with an empty list, which is why this is a
   flag and not something the test can work out for itself.
 * ``AZURE_AUTH_TEST_GDAP=1``: the user's home tenant manages other tenants through GDAP.
-* ``AZURE_AUTH_TEST_GDAP_TENANT_ID``: a customer tenant the user reaches through GDAP, by
-  id or verified domain. Naming one runs the GDAP Exchange tests, which only read
-  (:class:`ReadOnlyCmdlets`).
+* ``AZURE_AUTH_TEST_GDAP_TENANT_IDS``: customer tenants the user reaches through GDAP, by id
+  or verified domain, separated by commas. Naming any runs the per-customer GDAP tests
+  (Graph, Exchange, IPPS, ARM) against each, and they only read: every cmdlet goes through
+  :class:`ReadOnlyCmdlets`.
 * ``AZURE_AUTH_TEST_EXCHANGE=1`` / ``AZURE_AUTH_TEST_IPPS=1``: the user may run Exchange /
   Security & Compliance cmdlets.
 * ``AZURE_AUTH_TEST_BROKER=1``: the user is signed in to the Windows broker on this device.
@@ -162,7 +163,14 @@ SECRET_USERNAME = os.environ.get("AZURE_AUTH_TEST_APP_SECRET_USERNAME", "")
 KEYVAULT_URL = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_URL", "")
 KEYVAULT_SECRET_NAME = os.environ.get("AZURE_AUTH_TEST_KEYVAULT_SECRET_NAME", "")
 GDAP = os.environ.get("AZURE_AUTH_TEST_GDAP") == "1"
-GDAP_TENANT = os.environ.get("AZURE_AUTH_TEST_GDAP_TENANT_ID", "")
+# The customer tenants the GDAP tests reach, in the order given. GDAP_TENANT is the first of
+# them, for the tests that need just one.
+GDAP_TENANTS = [
+    tenant.strip()
+    for tenant in os.environ.get("AZURE_AUTH_TEST_GDAP_TENANT_IDS", "").split(",")
+    if tenant.strip()
+]
+GDAP_TENANT = GDAP_TENANTS[0] if GDAP_TENANTS else ""
 BROWSER: list[str] = json.loads(os.environ.get("AZURE_AUTH_TEST_BROWSER") or "[]")
 
 needs_user = pytest.mark.skipif(
@@ -194,7 +202,7 @@ needs_keyvault = pytest.mark.skipif(
 # know which customer to reach.
 needs_gdap_tenant = pytest.mark.skipif(
     not (GDAP and GDAP_TENANT),
-    reason="set AZURE_AUTH_TEST_GDAP=1 and AZURE_AUTH_TEST_GDAP_TENANT_ID",
+    reason="set AZURE_AUTH_TEST_GDAP=1 and AZURE_AUTH_TEST_GDAP_TENANT_IDS",
 )
 needs_browser = pytest.mark.skipif(not BROWSER, reason="set AZURE_AUTH_TEST_BROWSER")
 
@@ -215,7 +223,7 @@ needs_exchange_sign_in = pytest.mark.skipif(
         "1" in (os.environ.get("AZURE_AUTH_TEST_EXCHANGE"), os.environ.get("AZURE_AUTH_TEST_IPPS"))
         or (GDAP and GDAP_TENANT)
     ),
-    reason="set AZURE_AUTH_TEST_EXCHANGE=1, _IPPS=1, or _GDAP=1 with _GDAP_TENANT_ID",
+    reason="set AZURE_AUTH_TEST_EXCHANGE=1, _IPPS=1, or _GDAP=1 with _GDAP_TENANT_IDS",
 )
 
 # The Azure PowerShell client id serves both the ARM and the Key Vault tests, so a sign-in to
@@ -472,10 +480,10 @@ class Recording(httpx.AsyncBaseTransport):
         await self._inner.aclose()
 
 
-# The only cmdlets the GDAP tests may run, and the only collections they may read, each of
-# which only reads, so the tests can run against any customer tenant. ReadOnlyCmdlets refuses
-# every other request.
-GDAP_CMDLETS = frozenset({"Get-OrganizationConfig"})
+# The only cmdlets the GDAP tests may run (Exchange and Security & Compliance), and the only
+# collections they may read, each of which only reads, so the tests can run against any
+# customer tenant. ReadOnlyCmdlets refuses every other request.
+GDAP_CMDLETS = frozenset({"Get-OrganizationConfig", "Get-Label"})
 GDAP_READS = frozenset({"Mailbox"})
 
 
