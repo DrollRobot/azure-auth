@@ -46,6 +46,11 @@ Environment variables:
   "--profile-directory=Profile 1"]'``, single-quoted in ``.env`` so that the double quotes
   survive. Naming one runs the chosen-browser sign-in test; give at least one argument, so it
   covers passing them.
+* ``AZURE_AUTH_TEST_CACHE_REMINDER_PATH``: a folder in plain sight, such as the Desktop. Every
+  live run puts ``AZURE-AUTH_MSAL_CACHE_DELETEME`` there, pointing at the folder that holds
+  the encrypted token cache the tests leave behind (``tests/cache_reminder.py``): a ``.url``
+  file on Windows, a symbolic link elsewhere. The end-of-run summary names the cache files
+  whether or not this is set.
 * ``AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS``: how long :func:`restore_baseline` waits for
   Entra to catch up with a grant change: a new grant to show up, or a removed scope to stop
   being issued (default 300).
