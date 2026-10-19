@@ -56,6 +56,19 @@ auth = AuthContext(
 )
 ```
 
+To do something right before a browser sign-in window opens, such as opening the page that
+holds the account's password, pass `before_browser_opens=`: a function that takes no
+arguments. It runs once per window, and not at all when the cache or the broker answers. An
+exception it raises fails the sign-in, and no window opens.
+
+```python
+auth = AuthContext(
+    "contoso.com",
+    username="admin@contoso.com",
+    before_browser_opens=lambda: webbrowser.open(PASSWORD_PAGE),
+)
+```
+
 ### The Windows broker
 
 `broker=True` signs in through the Windows Web Account Manager. It needs the `broker` extra.

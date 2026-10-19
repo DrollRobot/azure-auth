@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A context can run a function of yours right before each browser sign-in window opens, such
+  as one that opens the page holding the account's password. It does not run when the cache
+  or the broker answers.
+
 ## [0.5.1] - 2026-10-18 - Broker error reasons
 
 ### Fixed

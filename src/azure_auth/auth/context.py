@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -248,6 +248,7 @@ class AuthContext:
         broker_fallback: bool = True,
         browser_timeout: float = _DEFAULT_BROWSER_TIMEOUT_SECONDS,
         browser: str | Path | Sequence[str] | None = None,
+        before_browser_opens: Callable[[], object] | None = None,
     ) -> None:
         """Configure the context, looking the tenant up when it is given as a string.
 
@@ -290,10 +291,15 @@ class AuthContext:
                 path, or a list of the program followed by its arguments, such as
                 ``[edge_path, "--profile-directory=Profile 2"]``. The sign-in
                 address is added as the last argument. Other contexts keep the default.
+            before_browser_opens: A function, taking no arguments, called right before each
+                browser sign-in window opens, on the thread signing in. It is not called when
+                the cache or the broker answers. Its return value is ignored; an exception it
+                raises fails the sign-in, and no window opens.
 
         Raises:
-            ValueError: If the arguments do not describe exactly one flow, ``browser`` names
-                no program, or ``tenant`` is a multi-tenant authority such as
+            ValueError: If the arguments do not describe exactly one flow, ``browser`` or
+                ``before_browser_opens`` is given for an app flow, ``browser`` names no
+                program, or ``tenant`` is a multi-tenant authority such as
                 ``organizations``, which has nothing to look up: build its :class:`Tenant` by
                 hand.
             CacheEncryptionUnavailable: If ``cache='disk'`` cannot be encrypted here.
@@ -327,6 +333,8 @@ class AuthContext:
                 raise ValueError("broker is only available for user flows")
             if browser is not None:
                 raise ValueError("browser is only available for user flows")
+            if before_browser_opens is not None:
+                raise ValueError("before_browser_opens is only available for user flows")
 
         self._client_id = client_id
         self._username = username
@@ -336,6 +344,7 @@ class AuthContext:
         self._broker_fallback = broker_fallback
         self._browser_timeout = browser_timeout
         self._browser = None if browser is None else _browser_command(browser)
+        self._before_browser_opens = before_browser_opens
         self._can_prompt = True
         self._home = self
         self._tenant = tenant if isinstance(tenant, Tenant) else Tenant.lookup(tenant)
@@ -454,6 +463,7 @@ class AuthContext:
                 context._broker_fallback = self._broker_fallback
                 context._browser_timeout = self._browser_timeout
                 context._browser = self._browser
+                context._before_browser_opens = self._before_browser_opens
                 context._can_prompt = False
                 context._home = self._home
                 context._init_state()
@@ -938,6 +948,8 @@ class AuthContext:
                 _LOGGER.warning("Authentication broker failed; using the browser")
 
         app = self._app(client_id, use_broker=False)
+        if self._before_browser_opens is not None:
+            self._before_browser_opens()
         if self._browser is not None:
             return self._browser_sign_in(app, scopes, claims, prompt, self._browser)
         try:

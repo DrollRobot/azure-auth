@@ -1153,3 +1153,116 @@ def test_browser_is_rejected_for_app_flows() -> None:
 def test_browser_must_name_a_program(browser: str | list[str]) -> None:
     with pytest.raises(ValueError, match="browser must name a program"):
         user_context(browser=browser)
+
+
+# ---------------------------------------------------------------------------- before the browser
+
+
+def test_before_browser_opens_is_called_right_before_the_default_browser(
+    fake_msal: FakeMsal,
+) -> None:
+    events: list[str] = []
+
+    def interactive(call: Call) -> Result:
+        events.append("window")
+        return token_result()
+
+    fake_msal.interactive = interactive
+
+    user_context(before_browser_opens=lambda: events.append("before")).acquire_token([ARM_SCOPE])
+
+    assert events == ["before", "window"]
+
+
+def test_before_browser_opens_is_called_right_before_a_chosen_browser(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    # The chosen browser opens when the receiver is asked for the answer.
+    requests_seen: list[int] = []
+
+    def before() -> None:
+        requests_seen.append(len(fake_receiver.requests))
+
+    user_context(browser="msedge", before_browser_opens=before).acquire_token([ARM_SCOPE])
+
+    assert requests_seen == [0]
+    assert len(fake_receiver.requests) == 1
+
+
+def test_before_browser_opens_is_called_for_every_window(fake_msal: FakeMsal) -> None:
+    calls: list[None] = []
+    auth = user_context(before_browser_opens=lambda: calls.append(None))
+
+    auth.login(client_id="app", scopes=[ARM_SCOPE], pick_account=True)
+    auth.login(client_id="app", scopes=[ARM_SCOPE], pick_account=True)
+
+    assert (len(calls), fake_msal.methods()) == (2, ["interactive", "interactive"])
+
+
+def test_before_browser_opens_is_not_called_when_the_cache_answers(fake_msal: FakeMsal) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: token_result("silent")
+    calls: list[None] = []
+
+    user_context(before_browser_opens=lambda: calls.append(None)).acquire_token([ARM_SCOPE])
+
+    assert (calls, fake_msal.methods()) == ([], ["silent"])
+
+
+def test_before_browser_opens_is_not_called_when_the_broker_answers(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    calls: list[None] = []
+
+    user_context(broker=True, before_browser_opens=lambda: calls.append(None)).acquire_token(
+        [ARM_SCOPE]
+    )
+
+    assert calls == []
+    assert [call.app.broker for call in fake_msal.calls] == [True]
+
+
+def test_before_browser_opens_is_called_when_the_broker_falls_back_to_the_browser(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    events: list[str] = []
+
+    def interactive(call: Call) -> Result:
+        events.append("broker" if call.app.broker else "browser")
+        return error_result("broker_error") if call.app.broker else token_result()
+
+    fake_msal.interactive = interactive
+
+    user_context(broker=True, before_browser_opens=lambda: events.append("before")).acquire_token(
+        [ARM_SCOPE]
+    )
+
+    assert events == ["broker", "before", "browser"]
+
+
+def test_an_error_before_the_browser_opens_fails_the_sign_in_without_a_window(
+    fake_msal: FakeMsal,
+) -> None:
+    def fail() -> None:
+        raise RuntimeError("could not get ready")
+
+    with pytest.raises(RuntimeError, match="could not get ready"):
+        user_context(before_browser_opens=fail).acquire_token([ARM_SCOPE])
+
+    assert fake_msal.methods() == []
+
+
+def test_a_customer_keeps_before_browser_opens() -> None:
+    def before() -> None:
+        pass
+
+    auth = user_context(before_browser_opens=before)
+
+    assert auth.get_tenant_context(CUSTOMER)._before_browser_opens is before
+
+
+def test_before_browser_opens_is_rejected_for_app_flows() -> None:
+    with pytest.raises(ValueError, match="before_browser_opens is only available"):
+        AuthContext(
+            "tenant", client_id="app", client_secret="s3cret", before_browser_opens=lambda: None
+        )
