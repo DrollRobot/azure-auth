@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-19 - Callback before browser sign-in
+
 ### Added
 
 - A context can run a function of yours right before each browser sign-in window opens, such
