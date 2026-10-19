@@ -63,6 +63,11 @@ When the broker is missing or fails, the context falls back to the browser. Pass
 `broker_fallback=False` to get `BrokerUnavailable` instead. A user who cancels the broker
 prompt is not sent to the browser.
 
+The broker's errors give Entra's reason, such as `AADSTS65001` for missing consent, because the
+context turns on the broker's PII logging. That switch is for the whole Python process: the
+broker's DEBUG log records (logger `msal.broker`) then name the user and the account. Tokens
+stay masked.
+
 ## Clouds
 
 A context works in whichever Microsoft cloud its tenant lives in, without being told which.

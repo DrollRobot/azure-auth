@@ -7,13 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [0.5.1] - 2026-10-18 - Broker error reasons
 
-- Errors from the Windows broker now give Entra's reason for the failure, and missing consent
-  through the broker is reported as a consent error, as it is for the browser. GDAP customer
-  contexts no longer advise signing in again when Entra gave a reason.
-- The broker's debug log now names the user and the account, for the whole process. Tokens
-  stay hidden.
+### Fixed
+
+- Windows broker errors now say why Entra refused the sign-in. As a result, the broker's debug
+  log now includes the user's name.
 
 ## [0.5.0] - 2026-10-18 - Graph consent check, choice of browser
 
