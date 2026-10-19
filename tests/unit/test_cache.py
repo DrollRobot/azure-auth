@@ -3,17 +3,22 @@
 The disk cache's real behaviour -- surviving a restart, and never holding a token in clear
 text -- is proved against the platform's own encryption in
 ``tests/integration/test_disk_cache.py``. What is checked here is the choosing: that a memory
-cache really is process-local and touches no file, that an unknown kind is refused, and that
+cache really is process-local and touches no file, that an unknown kind is refused, that
 a disk cache which cannot be encrypted raises rather than quietly falling back to something
-weaker.
+weaker, and that threads sharing a disk cache file take turns instead of fighting over it.
 """
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import msal
+import msal_extensions
 import pytest
 
 from azure_auth import CacheEncryptionUnavailable
@@ -22,6 +27,16 @@ from azure_auth.auth.cache import build_cache, default_cache_path
 pytestmark = pytest.mark.unit
 
 _TOKEN = "token-that-must-stay-in-memory"
+
+
+@pytest.fixture(autouse=True)
+def _no_open_disk_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start each test as a new process would, with no disk cache open yet.
+
+    Args:
+        monkeypatch: Restores the real list of open caches afterwards.
+    """
+    monkeypatch.setattr("azure_auth.auth.cache._disk_caches", {})
 
 
 def _entry(token: str = _TOKEN) -> dict[str, Any]:
@@ -156,9 +171,127 @@ def test_a_disk_cache_creates_the_directory_it_needs(
         "msal_extensions.build_encrypted_persistence", lambda location: Persistence()
     )
     monkeypatch.setattr(
-        "msal_extensions.PersistedTokenCache", lambda persistence: msal.TokenCache()
+        "azure_auth.auth.cache._ThreadSafePersistedTokenCache",
+        lambda persistence: msal.TokenCache(),
     )
 
     build_cache("disk", tmp_path / "deeply" / "nested" / "cache.bin")
 
     assert (tmp_path / "deeply" / "nested").is_dir()
+
+
+# ---------------------------------------------------------------------- sharing a disk cache
+
+
+# msal-extensions ships no types, so mypy sees its class as Any.
+class _SlowPlainPersistence(msal_extensions.FilePersistence):  # type: ignore[misc]
+    """A plain file standing in for the encrypted one, slow to save so that writers overlap."""
+
+    is_encrypted = True
+
+    def save(self, content: str) -> None:
+        """Wait a little, then write the file.
+
+        Args:
+            content: The serialized cache.
+        """
+        time.sleep(0.01)
+        super().save(content)
+
+
+def _file_lock_that_fails_when_busy() -> type:
+    """Build a stand-in for msal-extensions' file lock that fails at once when it is held.
+
+    The real lock fails after five seconds of waiting; failing at once shows any overlap
+    without the wait.
+
+    Returns:
+        A lock class taking the lock file's path, as the real one does.
+    """
+    busy = threading.Lock()
+
+    class FileLock:
+        """The lock on one cache file, shared by every instance."""
+
+        def __init__(self, lockfile_path: str) -> None:
+            """Name the lock file.
+
+            Args:
+                lockfile_path: The lock file, named in the error.
+            """
+            self.path = lockfile_path
+
+        def __enter__(self) -> None:
+            """Take the lock.
+
+            Raises:
+                RuntimeError: If another holder has it.
+            """
+            if not busy.acquire(blocking=False):
+                raise RuntimeError(f"{self.path} is locked")
+
+        def __exit__(self, *exc_info: object) -> None:
+            """Release the lock.
+
+            Args:
+                *exc_info: The exception leaving the block, if any.
+            """
+            busy.release()
+
+    return FileLock
+
+
+@pytest.fixture
+def plain_disk(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path], Any]:
+    """Make disk caches plain, slow-saving files whose lock fails when held.
+
+    Args:
+        monkeypatch: Restores msal-extensions afterwards.
+
+    Returns:
+        A function opening a cache on a file as a new process would, skipping the caches
+        this process has open.
+    """
+    monkeypatch.setattr("msal_extensions.build_encrypted_persistence", _SlowPlainPersistence)
+    monkeypatch.setattr(
+        "msal_extensions.token_cache.CrossPlatLock", _file_lock_that_fails_when_busy()
+    )
+    return lambda path: msal_extensions.PersistedTokenCache(_SlowPlainPersistence(str(path)))
+
+
+def test_contexts_naming_one_file_share_one_disk_cache(
+    tmp_path: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    # Each context holding its own copy of the file is what let one context's save drop
+    # another's tokens.
+    path = tmp_path / "cache.bin"
+
+    first = build_cache("disk", path)
+
+    assert build_cache("disk", str(path)) is first
+    assert build_cache("disk", tmp_path / "elsewhere" / ".." / "cache.bin") is first
+    assert build_cache("disk", tmp_path / "other.bin") is not first
+
+
+@pytest.mark.regression
+def test_threads_writing_one_disk_cache_take_turns(
+    tmp_path: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    # Measured 2026-10-19 in a GDAP run of 274 tenants, several at a time: threads waiting on
+    # the file lock failed with LockError after five seconds, and a direct sign-in's tokens
+    # vanished from the file. Each thread here opens the cache as its own context would.
+    path = tmp_path / "cache.bin"
+    threads = 8
+    start = threading.Barrier(threads)
+
+    def write(number: int) -> None:
+        cache = build_cache("disk", path)
+        start.wait()
+        # A scope of its own, so no thread's token replaces another's.
+        cache.add({**_entry(f"token-{number}"), "scope": [f"Scope{number}.Read"]})
+
+    with ThreadPoolExecutor(max_workers=threads) as pool:
+        for future in [pool.submit(write, number) for number in range(threads)]:
+            future.result()
+
+    assert sorted(_tokens(plain_disk(path))) == sorted(f"token-{n}" for n in range(threads))

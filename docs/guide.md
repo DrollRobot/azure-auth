@@ -244,7 +244,8 @@ there (`grant_when_possible`, below).
 | `"memory"` (default) | Tokens live as long as the process. |
 | `"disk"` | Tokens are kept in an encrypted file: DPAPI on Windows, Keychain on macOS, libsecret on Linux. |
 
-`cache_path=` sets the file. The default is a file in the per-user cache directory.
+`cache_path=` sets the file. The default is a file in the per-user cache directory. Contexts
+in one process that name the same file share one cache, which their threads can use at once.
 
 There is no unencrypted disk cache. Where the platform cannot encrypt, for example Linux
 without libsecret, `cache="disk"` raises `CacheEncryptionUnavailable`. It never falls back to

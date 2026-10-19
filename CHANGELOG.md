@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Threads sharing a disk cache no longer fail with `LockError` after waiting five seconds for
+  its file, and no longer lose each other's tokens. Every context in a process that names the
+  same cache file now shares one cache, and its threads take turns.
+
 ## [0.6.0] - 2026-10-19 - Callback before browser sign-in
 
 ### Added
