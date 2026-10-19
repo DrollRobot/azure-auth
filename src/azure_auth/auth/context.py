@@ -46,6 +46,7 @@ from azure_auth.auth.errors import (
     BrokerUnavailable,
     InteractionRequired,
     broker_status,
+    entra_error_codes,
     error_from_msal_result,
 )
 from azure_auth.auth.tenant import MULTI_TENANT_AUTHORITIES, Tenant, as_guid
@@ -275,7 +276,10 @@ class AuthContext:
             cache: ``memory`` (default) or ``disk`` for an encrypted cache file.
             cache_path: Location of the disk cache. Defaults to the per-user cache directory.
             broker: Use the Windows authentication broker (WAM) for user sign-in. Needs the
-                ``broker`` extra.
+                ``broker`` extra. Turns on the broker's PII logging, for the whole process, so
+                its errors carry Entra's reason. The broker's DEBUG log records (logger
+                ``msal.broker``) then carry usernames, account ids and the account record;
+                tokens stay masked. Error messages carry Entra's text, which may name the user.
             broker_fallback: When the broker cannot be used, fall back to the browser
                 (default) instead of raising :class:`BrokerUnavailable`.
             browser_timeout: Seconds a browser sign-in waits for the person before it
@@ -706,12 +710,15 @@ class AuthContext:
                     client_capabilities=_CLIENT_CAPABILITIES,
                 )
             elif use_broker:
+                # Without PII logging the broker hides Entra's reason for a failure: one broker
+                # error covers missing consent, Conditional Access and more (errors.py).
                 app = msal.PublicClientApplication(
                     client_id,
                     authority=self.authority,
                     token_cache=self._cache,
                     client_capabilities=_CLIENT_CAPABILITIES,
                     enable_broker_on_windows=True,
+                    enable_pii_log=True,
                 )
             else:
                 app = msal.PublicClientApplication(
@@ -849,7 +856,9 @@ class AuthContext:
             raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
         if not self._can_prompt:
             error = error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
-            if isinstance(error, InteractionRequired):
+            # When Entra gave a reason, the reason is the message. For Conditional Access or a
+            # user not assigned to the application, the advice to sign in at home was wrong.
+            if isinstance(error, InteractionRequired) and not entra_error_codes(result):
                 raise InteractionRequired(
                     f"{error} Contexts from get_tenant_context() never prompt; call login() on a "
                     "client of the home context (auth.home) first.",

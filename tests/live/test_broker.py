@@ -28,6 +28,7 @@ from azure_auth import (
     AuthContext,
     AuthError,
     BrokerUnavailable,
+    ConsentRequired,
     ExchangeClient,
     GraphClient,
     IppsClient,
@@ -42,6 +43,7 @@ from tests.live.support import (
     KEYVAULT_URL,
     SIGN_IN_BROWSER,
     TENANT,
+    UNGRANTED_SCOPE,
     USERNAME,
     _flag,
     ensure_sign_in,
@@ -259,6 +261,31 @@ async def test_the_broker_renews_a_token_without_prompting(
     assert is_test_user(token_user(token.token))
     assert token_claims(token.token)["aud"] == client.resource
     assert_the_broker_holds_the_sign_in(broker_cache_path)
+
+
+@needs_user
+@needs_graph
+async def test_the_broker_reports_missing_consent_in_entras_words(broker_cache_path: Path) -> None:
+    """A scope the tenant never granted is refused as missing consent, with Entra's reason.
+
+    The broker gives Entra's reason only with its PII logging on, which the context turns on;
+    without it the refusal reads ``(pii)`` and only says somebody must sign in. The request
+    goes through a context that may not prompt, so Entra's refusal comes back instead of a
+    consent screen.
+    """
+    async with GraphClient(broker_auth(broker_cache_path)) as signed_in:
+        ensure_sign_in(signed_in)
+
+    quiet = broker_auth(broker_cache_path)
+    quiet._can_prompt = False
+    async with GraphClient(quiet, scopes=[UNGRANTED_SCOPE]) as graph:
+        with pytest.raises(ConsentRequired) as caught:
+            await quiet.aio.acquire_token(graph.scopes, client_id=graph.client_id)
+    print(f"broker refusal: {caught.value}")
+    assert str(caught.value).startswith("AADSTS65001: ")
+    assert str(caught.value).endswith(
+        "(broker: Status_InteractionRequired, SubError: consent_required)"
+    )
 
 
 @needs_user

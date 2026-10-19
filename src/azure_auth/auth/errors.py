@@ -35,6 +35,18 @@ _BROKER_STATUS = re.compile(r"Status: (?:Response_Status\.)?(Status_\w+)")
 # 2026-09-29, for an application the broker held no sign-in for.
 _BROKER_INTERACTION_STATUSES = frozenset({"Status_InteractionRequired", "Status_AccountUnusable"})
 
+# MSAL writes a broker failure's description as "<broker text>. Status: <status>, Error code:
+# <n>, Tag: <n>" (msal 1.39 ``broker.py``). With the broker's PII logging on (context.py), the
+# broker text is Entra's answer, such as "SubError: consent_required V2Error: invalid_grant
+# AADSTS65001: The user or administrator has not consented ..."; with it off, "(pii)" (seen
+# live 2026-10-17). The broker's error code and tag name a place in the broker's code, not a
+# reason: one error code covered four different Entra errors in one run. The sub-error is kept
+# in the message: it can say what Entra wants, such as ``user_password_expired``.
+_BROKER_TEXT_END = ". Status: "
+_BROKER_MARKERS = re.compile(r"(?:SubError|V2Error): (\w+)")
+_BROKER_SUBERROR = re.compile(r"SubError: (\w+)")
+_ENTRA_CODE = re.compile(r"AADSTS(\d+)")
+
 
 class AuthError(Exception):
     """Base class for every authentication failure raised by this package."""
@@ -173,6 +185,55 @@ def broker_status(result: Mapping[str, Any] | None) -> str | None:
     return match.group(1) if match else None
 
 
+def _broker_text(result: Mapping[str, Any] | None) -> str:
+    """Read the broker's own text out of a failed MSAL result.
+
+    Args:
+        result: The dictionary MSAL returned, or ``None``.
+
+    Returns:
+        The description without MSAL's status, error code and tag, or an empty string when
+        the result is not a broker failure.
+    """
+    if not result or result.get("error") != "broker_error":
+        return ""
+    return str(result.get("error_description", "")).rpartition(_BROKER_TEXT_END)[0]
+
+
+def _entra_reason(result: Mapping[str, Any] | None) -> str:
+    """Read Entra's own error out of a broker failure: ``AADSTS<code>: <message>``.
+
+    Args:
+        result: The dictionary MSAL returned, or ``None``.
+
+    Returns:
+        Entra's error, or an empty string when the result is not a broker failure or the
+        broker gave no AADSTS text, as with its PII logging off.
+    """
+    text = _broker_text(result)
+    start = text.find("AADSTS")
+    return text[start:].strip() if start >= 0 else ""
+
+
+def entra_error_codes(result: Mapping[str, Any] | None) -> frozenset[int]:
+    """Read the AADSTS codes Entra gave for a failed MSAL result.
+
+    A browser sign-in's result lists them in ``error_codes``. The broker's has them only in its
+    description, and only with the broker's PII logging on.
+
+    Args:
+        result: The dictionary MSAL returned, or ``None``.
+
+    Returns:
+        The codes; empty when Entra gave none, or there was no result.
+    """
+    if not result:
+        return frozenset()
+    codes = {int(code) for code in result.get("error_codes", ()) if str(code).isdigit()}
+    codes.update(int(code) for code in _ENTRA_CODE.findall(_entra_reason(result)))
+    return frozenset(codes)
+
+
 def error_from_msal_result(
     result: Mapping[str, Any] | None,
     *,
@@ -200,8 +261,16 @@ def error_from_msal_result(
     error = str(result.get("error", "unknown_error"))
     description = str(result.get("error_description", "")).strip()
     markers = {error, str(result.get("suberror", "")), str(result.get("classification", ""))}
-    codes = {int(code) for code in result.get("error_codes", ()) if str(code).isdigit()}
+    markers.update(_BROKER_MARKERS.findall(_broker_text(result)))
+    codes = entra_error_codes(result)
     message = f"{error}: {description}" if description else error
+    reason = _entra_reason(result)
+    if reason:
+        broker = f"broker: {broker_status(result)}"
+        suberror = _BROKER_SUBERROR.search(_broker_text(result))
+        if suberror:
+            broker += f", SubError: {suberror.group(1)}"
+        message = f"{reason} ({broker})"
 
     if markers & _CONSENT_MARKERS or codes & _CONSENT_ERROR_CODES:
         return ConsentRequired(message, tenant_id=tenant_id, scopes=scopes)

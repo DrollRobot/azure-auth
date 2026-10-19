@@ -113,7 +113,7 @@ GDAP_SCOPES = ["DelegatedAdminRelationship.Read.All", "Organization.Read.All"]
 # A live test that needs a new Graph scope adds it here, or it only ever skips. A scope a test
 # needs *not* granted must never appear here, and needs nothing else: the baseline leaves it
 # out. Those are NONADMIN_SCOPE (test_consent.py), CANCEL_SCOPE (test_sign_in.py) and
-# UNGRANTED_SCOPE (test_graph_client.py).
+# UNGRANTED_SCOPE (below).
 BASELINE_SCOPES = [
     "User.Read",
     "Application.Read.All",
@@ -128,6 +128,12 @@ BASELINE_SCOPES = [
     "User.DeleteRestore.All",
     *(GDAP_SCOPES if os.environ.get("AZURE_AUTH_TEST_GDAP") == "1" else []),
 ]
+
+# A delegated scope the baseline does not grant the Graph command-line application. The
+# .default test (test_graph_client.py) asserts it is missing from a .default token and cannot
+# be had without a prompt; a broker test asserts the broker reports it as missing consent.
+# Being outside BASELINE_SCOPES is enough: every test starts from exactly the baseline.
+UNGRANTED_SCOPE = "Mail.ReadWrite"
 
 # What reading and rewriting the application's grants needs. Both are in BASELINE_SCOPES, so a
 # sign-in for them is silent.

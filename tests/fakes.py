@@ -90,6 +90,7 @@ class FakeApp:
         self.token_cache: object = kwargs["token_cache"]
         self.client_credential: Any = kwargs.get("client_credential")
         self.broker: bool = bool(kwargs.get("enable_broker_on_windows"))
+        self.pii_log: bool = bool(kwargs.get("enable_pii_log"))
         self.capabilities: list[str] = list(kwargs.get("client_capabilities") or [])
         self.removed_tokens = 0
 

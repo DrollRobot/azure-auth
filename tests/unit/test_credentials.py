@@ -36,8 +36,9 @@ from azure_auth.auth.credentials import (
     SecretCredential,
     build_client_assertion,
 )
-from azure_auth.auth.errors import error_from_msal_result
+from azure_auth.auth.errors import entra_error_codes, error_from_msal_result
 from azure_auth.clouds import COMMERCIAL
+from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from tests.certs import TestCertificate, decode_jwt, make_certificate, verify_signature
 
 pytestmark = pytest.mark.unit
@@ -386,6 +387,82 @@ def test_broker_statuses_that_need_a_sign_in_are_interaction_required(status: st
 def test_other_broker_statuses_are_plain_errors(status: str) -> None:
     error = error_from_msal_result(broker_error(status), tenant=TENANT, scopes=["a"])
     assert type(error) is AuthError
+
+
+# Entra's answer to a silent broker request for a scope the tenant never granted, and what MSAL
+# made of it with the broker's PII logging on and off (measured 2026-10-17).
+ENTRA_CONSENT_TEXT = (
+    "AADSTS65001: The user or administrator has not consented to use the application with ID "
+    f"'{GRAPH_CLI_CLIENT_ID}' named 'Microsoft Graph Command Line Tools'. Send an interactive "
+    "authorization request for this user and resource. Trace ID: <guid> Correlation ID: <guid> "
+    "Timestamp: 2026-10-17 06:49:06Z"
+)
+BROKER_ENDING = (
+    ". Status: Response_Status.Status_InteractionRequired, Error code: 3399614476, Tag: 557973645"
+)
+BROKER_CONSENT_PII_ON = {
+    "error": "broker_error",
+    "error_description": (
+        f"SubError: consent_required V2Error: invalid_grant {ENTRA_CONSENT_TEXT}{BROKER_ENDING}"
+    ),
+}
+BROKER_CONSENT_PII_OFF = {"error": "broker_error", "error_description": f"(pii){BROKER_ENDING}"}
+
+
+def test_missing_consent_through_the_broker_is_consent_required_in_entras_words() -> None:
+    error = error_from_msal_result(BROKER_CONSENT_PII_ON, tenant=TENANT, scopes=["User.Read.All"])
+    assert isinstance(error, ConsentRequired)
+    assert str(error) == (
+        f"{ENTRA_CONSENT_TEXT} (broker: Status_InteractionRequired, SubError: consent_required)"
+    )
+
+
+def test_a_broker_error_without_a_sub_error_names_only_the_status() -> None:
+    result = {
+        "error": "broker_error",
+        "error_description": f"AADSTS50105: The user is not assigned{BROKER_ENDING}",
+    }
+    error = error_from_msal_result(result, tenant=TENANT, scopes=["a"])
+    assert str(error) == (
+        "AADSTS50105: The user is not assigned (broker: Status_InteractionRequired)"
+    )
+
+
+def test_a_broker_error_without_entras_text_keeps_the_brokers_description() -> None:
+    error = error_from_msal_result(BROKER_CONSENT_PII_OFF, tenant=TENANT, scopes=["a"])
+    assert type(error) is InteractionRequired
+    assert str(error) == f"broker_error: (pii){BROKER_ENDING}"
+
+
+def test_the_broker_and_the_browser_give_entras_words_for_the_same_error() -> None:
+    browser = {
+        "error": "invalid_grant",
+        "error_description": ENTRA_CONSENT_TEXT,
+        "error_codes": [65001],
+        "suberror": "consent_required",
+    }
+    errors = [
+        error_from_msal_result(result, tenant=TENANT, scopes=["a"])
+        for result in (browser, BROKER_CONSENT_PII_ON)
+    ]
+    assert [type(error) for error in errors] == [ConsentRequired, ConsentRequired]
+    assert str(errors[0]) == f"invalid_grant: {ENTRA_CONSENT_TEXT}"
+    assert str(errors[1]).startswith(ENTRA_CONSENT_TEXT)
+
+
+@pytest.mark.parametrize(
+    ("result", "codes"),
+    [
+        (None, set()),
+        ({"error": "invalid_grant", "error_codes": [50076, "x"]}, {50076}),
+        (BROKER_CONSENT_PII_ON, {65001}),
+        (BROKER_CONSENT_PII_OFF, set()),
+    ],
+)
+def test_entras_codes_are_read_from_the_browser_and_the_broker(
+    result: dict[str, Any] | None, codes: set[int]
+) -> None:
+    assert entra_error_codes(result) == codes
 
 
 def test_other_errors_keep_their_description_but_not_the_dictionary() -> None:

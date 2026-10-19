@@ -16,9 +16,10 @@ from typing import Any
 import httpx
 import pytest
 
-from azure_auth import AuthContext, ConsentRequired, GraphClient, GraphError, InteractionRequired
+from azure_auth import AuthContext, ConsentRequired, GraphClient, GraphError
 from azure_auth.sync import GraphClient as BlockingGraphClient
 from tests.live.support import (
+    UNGRANTED_SCOPE,
     cached_user_auth,
     ensure_sign_in,
     is_test_user,
@@ -30,11 +31,6 @@ from tests.live.support import (
 )
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.anyio, needs_graph]
-
-# A delegated scope the baseline does not grant the Graph command-line application. The
-# .default test asserts it is missing from a .default token and cannot be had without a
-# prompt. Being outside BASELINE_SCOPES is enough: every test starts from exactly the baseline.
-UNGRANTED_SCOPE = "Mail.ReadWrite"
 
 # What the grant test adds to the application's grant. Read-only, and outside BASELINE_SCOPES:
 # the test is destructive_remote, so restore_baseline takes it back out afterwards.
@@ -204,7 +200,7 @@ async def test_default_scope_carries_only_what_the_tenant_already_granted(
 
     ungranted = cached_user_auth(cache_path)
     async with GraphClient(ungranted, scopes=[UNGRANTED_SCOPE]) as graph:
-        with pytest.raises((ConsentRequired, InteractionRequired)):
+        with pytest.raises(ConsentRequired):
             await ungranted.aio.acquire_token(
                 graph.scopes, client_id=graph.client_id, force_refresh=True
             )

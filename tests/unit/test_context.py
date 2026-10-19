@@ -489,6 +489,7 @@ def test_get_tenant_without_an_account_asks_for_a_home_login(fake_msal: FakeMsal
     with pytest.raises(InteractionRequired) as caught:
         user_context().get_tenant_context("customer").acquire_token([ARM_SCOPE])
     assert caught.value.tenant_id == CUSTOMER_GUID
+    assert "client of the home context (auth.home)" in str(caught.value)
     assert fake_msal.methods() == []
 
 
@@ -651,6 +652,79 @@ def test_a_customer_the_broker_cannot_serve_silently_asks_for_a_sign_in(
         user_context(broker=True).get_tenant_context("customer").acquire_token([ARM_SCOPE])
     assert caught.value.tenant_id == CUSTOMER_GUID
     assert fake_msal.methods() == ["silent"]
+
+
+def test_broker_applications_turn_on_the_brokers_pii_logging(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    fake_msal.interactive = lambda call: (
+        error_result("broker_error") if call.app.broker else token_result("browser")
+    )
+
+    user_context(broker=True).acquire_token([ARM_SCOPE])
+
+    # Without it the broker hides Entra's reason for every failure.
+    assert [(app.broker, app.pii_log) for app in fake_msal.apps] == [(True, True), (False, False)]
+
+
+# A broker failure in the shape MSAL gives it with PII logging on (measured 2026-10-17 for
+# AADSTS65001), here for Conditional Access, and a browser failure Entra gave a code for.
+ENTRA_REFUSALS = [
+    pytest.param(
+        True,
+        error_result(
+            "broker_error",
+            "SubError: message_only V2Error: invalid_grant AADSTS53003: Access has been blocked "
+            "by Conditional Access policies. Status: Response_Status.Status_InteractionRequired, "
+            "Error code: 3399614476, Tag: 557973645",
+        ),
+        "AADSTS53003: Access has been blocked by Conditional Access policies "
+        "(broker: Status_InteractionRequired, SubError: message_only)",
+        id="broker",
+    ),
+    pytest.param(
+        False,
+        error_result(
+            "invalid_grant", "AADSTS50105: The user is not assigned.", error_codes=[50105]
+        ),
+        "invalid_grant: AADSTS50105: The user is not assigned.",
+        id="browser",
+    ),
+]
+
+
+@pytest.mark.parametrize(("broker", "result", "message"), ENTRA_REFUSALS)
+def test_a_customer_entra_refused_for_a_reason_gives_only_the_reason(
+    fake_msal: FakeMsal, broker_installed: None, broker: bool, result: Result, message: str
+) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: result
+
+    with pytest.raises(InteractionRequired) as caught:
+        user_context(broker=broker).get_tenant_context("customer").acquire_token([ARM_SCOPE])
+
+    # A home sign-in would not change Entra's answer, so the message does not suggest one.
+    assert str(caught.value) == message
+    assert caught.value.tenant_id == CUSTOMER_GUID
+
+
+def test_a_customer_missing_consent_through_the_broker_is_consent_required(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: error_result(
+        "broker_error",
+        "SubError: consent_required V2Error: invalid_grant AADSTS65001: The user or "
+        "administrator has not consented to use the application. "
+        "Status: Response_Status.Status_InteractionRequired, Error code: 3399614476, "
+        "Tag: 557973645",
+    )
+
+    with pytest.raises(ConsentRequired, match=r"^AADSTS65001: ") as caught:
+        user_context(broker=True).get_tenant_context("customer").acquire_token(["User.Read.All"])
+
+    assert caught.value.tenant_id == CUSTOMER_GUID
+    assert "login()" not in str(caught.value)
 
 
 def test_a_forced_broker_sign_in_shows_the_account_picker(
