@@ -7,11 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-19 - Thread-safe disk cache
+
 ### Fixed
 
-- Threads sharing a disk cache no longer fail with `LockError` after waiting five seconds for
-  its file, and no longer lose each other's tokens. Every context in a process that names the
-  same cache file now shares one cache, and its threads take turns.
+- Threads sharing a disk cache no longer time out waiting for the cache file, or lose each
+  other's tokens.
 
 ## [0.6.0] - 2026-10-19 - Callback before browser sign-in
 
@@ -136,7 +137,10 @@ Also included, but not yet verified: application sign-in with a secret or certif
 Windows broker, clients for Azure Resource Manager, Exchange Online, Security & Compliance
 and Key Vault, blocking versions of every client, and GDAP access to managed tenants.
 
-[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/DrollRobot/azure-auth/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/DrollRobot/azure-auth/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/DrollRobot/azure-auth/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/DrollRobot/azure-auth/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/DrollRobot/azure-auth/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/DrollRobot/azure-auth/compare/v0.3.0...v0.4.0
