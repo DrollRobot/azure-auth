@@ -161,21 +161,27 @@ class GraphClient(ResourceClient):
         """Whether refused scopes are added to the application's grant where that is possible."""
         return self._grant_when_possible
 
-    async def login(self, *, pick_account: bool = False, fresh: bool = False) -> None:
+    async def login(
+        self, *, pick_account: bool = False, reauthenticate: bool = False, fresh: bool = False
+    ) -> None:
         """Sign in now instead of at the first request.
 
-        Without ``pick_account`` this is the first request's token, so the check of what the tenant
-        has granted (see :meth:`granted_scopes`) runs here too.
+        Without ``pick_account`` or ``reauthenticate`` this is the first request's token, so
+        the check of what the tenant has granted (see :meth:`granted_scopes`) runs here too.
 
         Args:
             pick_account: Show the account picker, even when a cached token or account
                 exists or the broker or browser could sign in by itself. Someone other than
                 the configured user is refused.
+            reauthenticate: Have Entra ask for the password again; see
+                :meth:`ResourceClient.login`.
             fresh: After the sign-in and the check, ask Entra for a new token even when a
                 usable one is cached; see :meth:`ResourceClient.login`.
         """
-        if pick_account:
-            await super().login(pick_account=True, fresh=fresh)
+        if pick_account or reauthenticate:
+            await super().login(
+                pick_account=pick_account, reauthenticate=reauthenticate, fresh=fresh
+            )
             return
         await self._token()
         if fresh:

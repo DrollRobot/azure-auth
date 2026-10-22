@@ -233,3 +233,16 @@ def test_fresh_login_asks_entra_even_with_a_cached_token(
     # The sign-in as before, then the token again, from Entra rather than the cache.
     assert fake_msal.methods() == ["silent", "silent"]
     assert [bool(call.kwargs.get("force_refresh")) for call in fake_msal.calls] == [False, True]
+
+
+def test_reauthenticating_asks_for_the_password_even_with_a_cached_token(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    fake_msal.accounts = [{"username": "admin@contoso.com", "home_account_id": "uid.utid"}]
+    fake_msal.silent = lambda call: token_result()
+
+    ArmClient(auth).login(reauthenticate=True)
+
+    assert [(c.method, c.kwargs.get("prompt")) for c in fake_msal.calls] == [
+        ("interactive", "login")
+    ]

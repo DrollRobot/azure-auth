@@ -276,6 +276,33 @@ def test_forced_login_always_prompts(fake_msal: FakeMsal) -> None:
     assert fake_msal.calls[0].kwargs["prompt"] == "select_account"
 
 
+def test_reauthenticating_always_asks_for_the_password_again(fake_msal: FakeMsal) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: token_result()
+
+    user_context().login(client_id=GRAPH_CLI_CLIENT_ID, scopes=["User.Read"], reauthenticate=True)
+
+    assert fake_msal.methods() == ["interactive"]
+    # A still signed-in browser would otherwise finish the page with the old sign-in's time.
+    assert fake_msal.calls[0].kwargs["prompt"] == "login"
+
+
+def test_pick_account_and_reauthenticate_cannot_both_be_set(fake_msal: FakeMsal) -> None:
+    with pytest.raises(ValueError, match="cannot both be set"):
+        user_context().login(client_id="app", scopes=["a"], pick_account=True, reauthenticate=True)
+
+    assert fake_msal.calls == []
+
+
+def test_a_customer_context_never_prompts_even_to_reauthenticate(fake_msal: FakeMsal) -> None:
+    customer = user_context().get_tenant_context("customer")
+
+    with pytest.raises(InteractionRequired):
+        customer.login(client_id="app", scopes=["a"], reauthenticate=True)
+
+    assert "interactive" not in fake_msal.methods()
+
+
 def test_a_sign_in_that_is_not_forced_shows_no_account_picker(fake_msal: FakeMsal) -> None:
     user_context().acquire_token([ARM_SCOPE])
 
@@ -755,6 +782,20 @@ def test_a_forced_broker_sign_in_shows_the_account_picker(
     )
 
 
+def test_reauthenticating_with_the_broker_signs_in_in_the_browser(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: token_result()
+
+    user_context(broker=True).login(client_id="app", scopes=["a"], reauthenticate=True)
+
+    # The broker cannot be told to ask again, and would answer for the account it holds.
+    assert [(c.method, c.app.broker, c.kwargs["prompt"]) for c in fake_msal.calls] == [
+        ("interactive", False, "login")
+    ]
+
+
 def test_signing_in_as_someone_else_through_the_broker_is_rejected(
     fake_msal: FakeMsal, broker_installed: None
 ) -> None:
@@ -1102,6 +1143,15 @@ def test_a_chosen_browser_is_given_the_claims_and_the_forced_prompt(
     assert claimed.kwargs["claims_challenge"] == '{"access_token": {}}'
     assert forced.kwargs["prompt"] == "select_account"
     assert [request["timeout"] for request in fake_receiver.requests] == [5, 5]
+
+
+def test_a_chosen_browser_is_told_to_ask_for_the_password_again(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    user_context(browser="msedge").login(client_id="app", scopes=[ARM_SCOPE], reauthenticate=True)
+
+    (flow,) = (call for call in fake_msal.calls if call.method == "initiate_auth_code_flow")
+    assert flow.kwargs["prompt"] == "login"
 
 
 def test_an_unanswered_sign_in_in_a_chosen_browser_is_reported_not_hung(

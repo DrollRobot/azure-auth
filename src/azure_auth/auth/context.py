@@ -549,7 +549,14 @@ class AuthContext:
         """
         return self._acquire(scopes, client_id, claims, force_refresh, pick_account=False)
 
-    def login(self, *, client_id: str, scopes: Iterable[str], pick_account: bool = False) -> None:
+    def login(
+        self,
+        *,
+        client_id: str,
+        scopes: Iterable[str],
+        pick_account: bool = False,
+        reauthenticate: bool = False,
+    ) -> None:
         """Sign in now instead of at the first request.
 
         Resource clients call this from their own ``login()`` with their client id and
@@ -561,12 +568,30 @@ class AuthContext:
             pick_account: Show the account picker, even when a cached token or account
                 exists or the broker or browser could sign in by itself. Someone other than
                 the configured user is refused. Ignored by app flows.
+            reauthenticate: Open the sign-in window and have Entra ask for the password again,
+                and for multi-factor authentication where the tenant wants it, even when a
+                cached token exists or a still signed-in browser could sign in by itself
+                (OpenID Connect ``prompt=login``). Tokens from :meth:`get_tenant_context`
+                contexts then carry the new sign-in's time, for a customer whose Conditional
+                Access policy found the old one too old. Signs in in the browser even with
+                ``broker``, which cannot be told to ask again (msal 1.39). Someone other than
+                the configured user is refused. Ignored by app flows.
 
         Raises:
+            ValueError: If both ``pick_account`` and ``reauthenticate`` are set.
             InteractionRequired: If this context came from :meth:`get_tenant_context` and the
                 user must sign in.
         """
-        self._acquire(scopes, client_id, None, pick_account, pick_account=pick_account)
+        if pick_account and reauthenticate:
+            raise ValueError("pick_account and reauthenticate cannot both be set")
+        self._acquire(
+            scopes,
+            client_id,
+            None,
+            pick_account or reauthenticate,
+            pick_account=pick_account,
+            reauthenticate=reauthenticate,
+        )
 
     def acquire_token_silently(
         self,
@@ -650,6 +675,7 @@ class AuthContext:
         force_refresh: bool,
         *,
         pick_account: bool,
+        reauthenticate: bool = False,
         silent_only: bool = False,
     ) -> AccessTokenInfo:
         """Acquire a token under the single-flight lock for its key.
@@ -660,6 +686,8 @@ class AuthContext:
             claims: Claims challenge to satisfy.
             force_refresh: Skip cached access tokens.
             pick_account: Show the account picker, even when a silent token is available.
+            reauthenticate: Have Entra ask for the password again, even when a silent token
+                is available.
             silent_only: Never prompt, even where this context may: fail instead.
 
         Returns:
@@ -673,7 +701,7 @@ class AuthContext:
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
         with lock:
-            if not (claims or force_refresh or pick_account):
+            if not (claims or force_refresh or pick_account or reauthenticate):
                 recent = self._recent_token(scope_list, resolved)
                 if recent is not None:
                     return recent
@@ -686,6 +714,7 @@ class AuthContext:
                     claims,
                     force_refresh,
                     pick_account,
+                    reauthenticate=reauthenticate,
                     silent_only=silent_only,
                 )
             info = AccessTokenInfo(
@@ -829,6 +858,7 @@ class AuthContext:
         force_refresh: bool,
         pick_account: bool,
         *,
+        reauthenticate: bool = False,
         silent_only: bool = False,
     ) -> dict[str, Any]:
         """Get a user token: silently if possible, interactively if allowed.
@@ -839,15 +869,18 @@ class AuthContext:
             claims: Claims challenge to satisfy.
             force_refresh: Skip cached access tokens.
             pick_account: Show the account picker, even when a silent token is available.
+            reauthenticate: Have Entra ask for the password again, in the browser, even when
+                a silent token is available.
             silent_only: Never prompt, even where this context may: fail instead.
 
         Returns:
             The successful MSAL result.
         """
-        use_broker = self._broker_usable()
+        # The broker cannot be told to ask for the password again (msal 1.39 broker.py).
+        use_broker = not reauthenticate and self._broker_usable()
         app = self._app(client_id, use_broker=use_broker)
         result: dict[str, Any] | None = None
-        if not pick_account:
+        if not (pick_account or reauthenticate):
             accounts = self._accounts(app)
             if len(accounts) > 1:
                 raise AccountSelectionRequired(
@@ -889,7 +922,12 @@ class AuthContext:
         # browser on either would be wrong, and the retry could never fire in the case it was
         # written for.
         result = self._interactive(
-            client_id, scopes, claims, use_broker=use_broker, pick_account=pick_account
+            client_id,
+            scopes,
+            claims,
+            use_broker=use_broker,
+            pick_account=pick_account,
+            reauthenticate=reauthenticate,
         )
         if "access_token" not in result:
             raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
@@ -904,12 +942,13 @@ class AuthContext:
         *,
         use_broker: bool,
         pick_account: bool = False,
+        reauthenticate: bool = False,
     ) -> dict[str, Any]:
         """Prompt the user, through the broker when enabled, else in the browser.
 
-        Without ``pick_account`` the sign-in may still finish with nobody acting: the broker
-        answers silently for an account it holds, and a browser that is still signed in
-        completes the page by itself.
+        Without ``pick_account`` or ``reauthenticate`` the sign-in may still finish with nobody
+        acting: the broker answers silently for an account it holds, and a browser that is
+        still signed in completes the page by itself.
 
         Args:
             client_id: Client id of the public client application.
@@ -917,6 +956,8 @@ class AuthContext:
             claims: Claims challenge to satisfy.
             use_broker: Whether to try the Windows broker first.
             pick_account: Show the account picker, so a person always chooses the account.
+            reauthenticate: Have Entra ask for the password again, and for multi-factor
+                authentication where the tenant wants it.
 
         Returns:
             The MSAL result, successful or not.
@@ -924,8 +965,9 @@ class AuthContext:
         Raises:
             BrokerUnavailable: If the broker fails and ``broker_fallback`` is off.
         """
-        # The broker then skips its silent attempts and drops the login hint (msal 1.39).
-        prompt = "select_account" if pick_account else None
+        # With select_account the broker skips its silent attempts and drops the login hint
+        # (msal 1.39).
+        prompt = "login" if reauthenticate else "select_account" if pick_account else None
         if use_broker:
             broker_app = self._app(client_id, use_broker=True)
             try:
@@ -1182,7 +1224,12 @@ class AsyncAuthContext:
         )
 
     async def login(
-        self, *, client_id: str, scopes: Sequence[str], pick_account: bool = False
+        self,
+        *,
+        client_id: str,
+        scopes: Sequence[str],
+        pick_account: bool = False,
+        reauthenticate: bool = False,
     ) -> None:
         """Sign in now; see :meth:`AuthContext.login`.
 
@@ -1190,9 +1237,15 @@ class AsyncAuthContext:
             client_id: Client id to sign in to.
             scopes: Scopes to request.
             pick_account: Show the account picker; see :meth:`AuthContext.login`.
+            reauthenticate: Have Entra ask for the password again; see
+                :meth:`AuthContext.login`.
         """
         await asyncio.to_thread(
-            self._sync.login, client_id=client_id, scopes=scopes, pick_account=pick_account
+            self._sync.login,
+            client_id=client_id,
+            scopes=scopes,
+            pick_account=pick_account,
+            reauthenticate=reauthenticate,
         )
 
     async def close(self) -> None:

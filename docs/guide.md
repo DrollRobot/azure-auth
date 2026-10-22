@@ -34,6 +34,13 @@ Signing in is lazy: the first request prompts if it has to. To choose the moment
 `await client.login()`. Pass `pick_account=True` to show the account picker even when a token
 is cached, or the broker or a still signed-in browser could sign in by itself.
 
+Pass `reauthenticate=True` to have Entra ask for the password again, and for multi-factor
+authentication where the tenant wants it, even when a token is cached or the browser is still
+signed in. Customer tenants reached through `get_tenant_context()` then see the new sign-in,
+for a customer whose Conditional Access policy finds the old one too old (AADSTS50078,
+AADSTS70043). It signs in in the browser even with `broker=True`, because the broker cannot
+be told to ask again.
+
 Pass `fresh=True` to ask Entra for a new token even when a usable one is cached. That proves
 the sign-in works now, not when the cached token was issued: a Conditional Access policy may
 have started refusing the refresh token since. A context that may prompt opens the window if

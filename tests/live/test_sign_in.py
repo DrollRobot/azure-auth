@@ -152,6 +152,29 @@ async def test_interactive_login_in_a_chosen_browser() -> None:
     assert token_claims(token.token)["aud"] == client.resource
 
 
+@needs_user
+@pytest.mark.interactive
+async def test_reauthenticating_asks_for_the_password_again() -> None:
+    """``login(reauthenticate=True)`` opens the window even where the browser could finish it.
+
+    The browser is still signed in from the earlier tests, so without ``prompt=login`` Entra
+    would answer the page by itself, with the old sign-in. That Entra asks for the password
+    again is for the person to see; the test checks that Entra takes the request and a token
+    for the configured user comes back. Azure PowerShell and a memory cache of its own, as in
+    the chosen-browser test.
+    """
+    walkthrough(sign_in_step("browser"))
+    auth = AuthContext(
+        TENANT, username=USERNAME, browser=SIGN_IN_BROWSER, browser_timeout=SIGN_IN_TIMEOUT_SECONDS
+    )
+    async with ArmClient(auth) as client:
+        await client.login(reauthenticate=True)
+        token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
+
+    assert is_test_user(token_user(token.token))
+    assert token_claims(token.token)["aud"] == client.resource
+
+
 # The two ways a person signs in.
 SIGN_IN_PATHS = [
     pytest.param(

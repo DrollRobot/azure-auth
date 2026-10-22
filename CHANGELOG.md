@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authentication a policy finds too old), `suberror`, `correlation_id`, `trace_id` and
   `claims`. Callers can tell one failure from another, and quote the ids to Microsoft
   support, without reading the message.
+- `login(reauthenticate=True)` on every client opens the sign-in window and has Entra ask for
+  the password again, and for multi-factor authentication where the tenant wants it, even
+  when a token is cached or the browser is still signed in. Customer tenants reached through
+  `get_tenant_context()` then see the new sign-in, for a Conditional Access policy that found
+  the old one too old. It signs in in the browser even with the broker, which cannot be told
+  to ask again.
 
 ## [0.7.0] - 2026-10-22 - Sign-in check
 

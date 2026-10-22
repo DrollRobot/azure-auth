@@ -118,6 +118,19 @@ def test_login_uses_the_clients_id_and_scopes(auth: AuthContext, fake_msal: Fake
     assert graph.auth is auth
 
 
+def test_reauthenticating_skips_the_consent_check_and_asks_again(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    scripted(fake_msal, held=("User.Read.All",))
+
+    GraphClient(auth, scopes=["User.Read.All"]).login(reauthenticate=True)
+
+    # Nothing silent first: the sign-in window shows Entra's own consent screen.
+    assert [(c.method, c.scopes, c.kwargs.get("prompt")) for c in fake_msal.calls] == [
+        ("interactive", [USERS], "login")
+    ]
+
+
 # ---------------------------------------------------------------------------- clouds
 
 

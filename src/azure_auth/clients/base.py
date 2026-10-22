@@ -214,13 +214,21 @@ class ResourceClient:
 
     # ------------------------------------------------------------------ lifecycle
 
-    async def login(self, *, pick_account: bool = False, fresh: bool = False) -> None:
+    async def login(
+        self, *, pick_account: bool = False, reauthenticate: bool = False, fresh: bool = False
+    ) -> None:
         """Sign in now instead of at the first request.
 
         Args:
             pick_account: Show the account picker, even when a cached token or account
                 exists or the broker or browser could sign in by itself. Someone other than
                 the configured user is refused.
+            reauthenticate: Open the sign-in window and have Entra ask for the password
+                again, and for multi-factor authentication where the tenant wants it, even
+                when a cached token exists or a still signed-in browser could sign in by
+                itself. Contexts from :meth:`~azure_auth.AuthContext.get_tenant_context` then
+                carry the new sign-in's time, for a customer whose Conditional Access policy
+                found the old one too old; see :meth:`azure_auth.AuthContext.login`.
             fresh: Ask Entra for a new token even when a usable one is cached. That proves
                 the sign-in works now, not when the cached token was issued: a Conditional
                 Access policy may have started refusing the refresh token since. A context
@@ -229,7 +237,10 @@ class ResourceClient:
                 checking sign-ins ahead of the work, when the token is used later.
         """
         await self._credential.login(
-            client_id=self._client_id, scopes=self._scopes, pick_account=pick_account
+            client_id=self._client_id,
+            scopes=self._scopes,
+            pick_account=pick_account,
+            reauthenticate=reauthenticate,
         )
         if fresh:
             await self._token(force_refresh=True)
