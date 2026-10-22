@@ -34,6 +34,13 @@ Signing in is lazy: the first request prompts if it has to. To choose the moment
 `await client.login()`. Pass `pick_account=True` to show the account picker even when a token
 is cached, or the broker or a still signed-in browser could sign in by itself.
 
+Pass `fresh=True` to ask Entra for a new token even when a usable one is cached. That proves
+the sign-in works now, not when the cached token was issued: a Conditional Access policy may
+have started refusing the refresh token since. A context that may prompt opens the window if
+Entra refuses; one from `get_tenant_context()` raises the refusal. Use it when checking
+sign-ins ahead of the work, where a cached token that cannot be renewed would fail later,
+after the moment for a prompt has passed.
+
 `username` selects the cached account and pre-fills the sign-in page. If somebody else signs
 in, the context raises `AuthError`, because their tokens would never be found again.
 

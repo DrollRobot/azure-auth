@@ -216,17 +216,25 @@ class ResourceClient:
 
     # ------------------------------------------------------------------ lifecycle
 
-    def login(self, *, pick_account: bool = False) -> None:
+    def login(self, *, pick_account: bool = False, fresh: bool = False) -> None:
         """Sign in now instead of at the first request.
 
         Args:
             pick_account: Show the account picker, even when a cached token or account
                 exists or the broker or browser could sign in by itself. Someone other than
                 the configured user is refused.
+            fresh: Ask Entra for a new token even when a usable one is cached. That proves
+                the sign-in works now, not when the cached token was issued: a Conditional
+                Access policy may have started refusing the refresh token since. A context
+                that may prompt opens the sign-in window if Entra refuses; one from
+                :meth:`~azure_auth.AuthContext.get_tenant_context` raises the refusal. For
+                checking sign-ins ahead of the work, when the token is used later.
         """
         self._credential.login(
             client_id=self._client_id, scopes=self._scopes, pick_account=pick_account
         )
+        if fresh:
+            self._token(force_refresh=True)
 
     def close(self) -> None:
         """Close the underlying HTTP connections."""

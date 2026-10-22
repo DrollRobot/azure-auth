@@ -953,3 +953,74 @@ async def test_granted_scopes_refuses_an_unreadable_token_and_app_flows(
     app = AuthContext("tenant", client_id="app", client_secret="s3cret")
     with pytest.raises(ValueError, match="roles"):
         await GraphClient(app).granted_scopes()
+
+
+# ------------------------------------------------------------------------- a fresh login
+
+SIGN_IN_FREQUENCY = (
+    "AADSTS70043: The refresh token has expired or is invalid due to sign-in frequency checks "
+    "by conditional access."
+)
+
+
+def refusing_refresh(fake_msal: FakeMsal) -> None:
+    """Script Entra as a tenant whose policy has started refusing the refresh token.
+
+    The cache still answers with a usable token; only a request that reaches Entra fails.
+    """
+    scripted(fake_msal, held=("User.Read.All",))
+    cache = fake_msal.silent
+
+    def silent(call: Call) -> dict[str, Any] | None:
+        if call.kwargs.get("force_refresh"):
+            return error_result("invalid_grant", SIGN_IN_FREQUENCY, error_codes=[70043])
+        return cache(call)
+
+    fake_msal.silent = silent
+
+
+async def test_login_trusts_a_cached_token(auth: AuthContext, fake_msal: FakeMsal) -> None:
+    scripted(fake_msal, held=("User.Read.All",))
+
+    await GraphClient(auth, scopes=["User.Read.All"]).login()
+
+    assert fake_msal.methods() == ["silent", "silent"]
+    assert not any(call.kwargs.get("force_refresh") for call in fake_msal.calls)
+
+
+async def test_fresh_login_asks_entra_even_with_a_cached_token(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    scripted(fake_msal, held=("User.Read.All",))
+
+    await GraphClient(auth, scopes=["User.Read.All"]).login(fresh=True)
+
+    # The consent check and the sign-in as before, then the named token again, from Entra.
+    assert [(c.scopes, bool(c.kwargs.get("force_refresh"))) for c in fake_msal.calls] == [
+        ([DEFAULT_SCOPE], False),
+        ([USERS], False),
+        ([USERS], True),
+    ]
+
+
+async def test_fresh_login_opens_the_browser_when_entra_refuses_the_refresh(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    refusing_refresh(fake_msal)
+
+    await GraphClient(auth, scopes=["User.Read.All"]).login(fresh=True)
+
+    assert fake_msal.methods() == ["silent", "silent", "silent", "interactive"]
+    assert fake_msal.calls[-1].scopes == [USERS]
+
+
+async def test_fresh_login_on_a_customer_context_raises_entras_refusal(
+    fake_msal: FakeMsal,
+) -> None:
+    refusing_refresh(fake_msal)
+    customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
+
+    with pytest.raises(InteractionRequired, match="AADSTS70043"):
+        await GraphClient(customer, scopes=["User.Read.All"]).login(fresh=True)
+
+    assert "interactive" not in fake_msal.methods()

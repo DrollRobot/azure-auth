@@ -9,7 +9,7 @@ from azure_auth import AuthContext
 from azure_auth.clients import ArmClient, ArmError
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
-from tests.fakes import FakeLookup, FakeMsal
+from tests.fakes import FakeLookup, FakeMsal, token_result
 from tests.http import Recorder, ok
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
@@ -219,3 +219,19 @@ async def test_operation_url_on_another_host_is_refused(
     started = await arm.send("DELETE", GROUP, api_version="2021-04-01")
     with pytest.raises(ValueError, match="Refusing to send a token"):
         await arm.wait(started)
+
+
+# ---------------------------------------------------------------------------- login
+
+
+async def test_fresh_login_asks_entra_even_with_a_cached_token(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    fake_msal.accounts = [{"username": "admin@contoso.com", "home_account_id": "uid.utid"}]
+    fake_msal.silent = lambda call: token_result()
+
+    await ArmClient(auth).login(fresh=True)
+
+    # The sign-in as before, then the token again, from Entra rather than the cache.
+    assert fake_msal.methods() == ["silent", "silent"]
+    assert [bool(call.kwargs.get("force_refresh")) for call in fake_msal.calls] == [False, True]

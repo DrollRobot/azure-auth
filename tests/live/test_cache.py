@@ -98,3 +98,21 @@ async def test_an_expired_access_token_is_refreshed_without_prompting(cache_path
     later_run = cached_user_auth(cache_path)
     async with GraphClient(later_run, scopes=REFRESH_SCOPES) as graph:
         await assert_refreshed_without_prompting(later_run, graph, expiring, str(me["id"]))
+
+
+@needs_user
+async def test_a_fresh_login_renews_the_cached_token_without_prompting(cache_path: Path) -> None:
+    """``login(fresh=True)`` asks Entra for a new token although the cache holds a usable one.
+
+    A tool that checks its sign-ins ahead of the work depends on that: a cached token proves
+    nothing about whether Entra will still issue one.
+    """
+    later_run = cached_user_auth(cache_path)
+    async with GraphClient(later_run, scopes=REFRESH_SCOPES) as graph:
+        ensure_token(live_user_auth(cache_path), graph.scopes, graph.client_id)
+        cached = await later_run.aio.acquire_token(graph.scopes, client_id=graph.client_id)
+        await graph.login(fresh=True)
+        renewed = await later_run.aio.acquire_token(graph.scopes, client_id=graph.client_id)
+
+    assert renewed.token != cached.token, "the cached token was used again; nothing refreshed"
+    assert renewed.expires_on > time.time()

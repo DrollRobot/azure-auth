@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `login(fresh=True)` on every client asks Entra for a new token even when a usable one is
+  cached, so a sign-in checked ahead of the work is known to still work: a Conditional Access
+  policy may have started refusing the refresh token since the cached token was issued. A
+  context that may prompt opens the window if Entra refuses; a customer context raises.
+
 ## [0.6.1] - 2026-10-19 - Thread-safe disk cache
 
 ### Fixed
