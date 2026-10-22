@@ -7,12 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-22 - Sign-in check
+
 ### Added
 
-- `login(fresh=True)` on every client asks Entra for a new token even when a usable one is
-  cached, so a sign-in checked ahead of the work is known to still work: a Conditional Access
-  policy may have started refusing the refresh token since the cached token was issued. A
-  context that may prompt opens the window if Entra refuses; a customer context raises.
+- Signing in can now confirm that Entra will still issue a token, instead of trusting the one
+  in the cache.
 
 ## [0.6.1] - 2026-10-19 - Thread-safe disk cache
 
@@ -144,7 +144,8 @@ Also included, but not yet verified: application sign-in with a secret or certif
 Windows broker, clients for Azure Resource Manager, Exchange Online, Security & Compliance
 and Key Vault, blocking versions of every client, and GDAP access to managed tenants.
 
-[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/DrollRobot/azure-auth/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/DrollRobot/azure-auth/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/DrollRobot/azure-auth/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/DrollRobot/azure-auth/compare/v0.5.0...v0.5.1
