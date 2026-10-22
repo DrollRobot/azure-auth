@@ -1020,7 +1020,8 @@ async def test_fresh_login_on_a_customer_context_raises_entras_refusal(
     refusing_refresh(fake_msal)
     customer = AuthContext("tenant", username=USER).get_tenant_context(CUSTOMER)
 
-    with pytest.raises(InteractionRequired, match="AADSTS70043"):
+    with pytest.raises(InteractionRequired, match="AADSTS70043") as caught:
         await GraphClient(customer, scopes=["User.Read.All"]).login(fresh=True)
 
     assert "interactive" not in fake_msal.methods()
+    assert caught.value.error_codes == {70043}

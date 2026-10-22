@@ -366,6 +366,76 @@ def test_consent_errors_are_recognised(result: dict[str, Any]) -> None:
 def test_interaction_errors_are_recognised(code: str) -> None:
     error = error_from_msal_result({"error": code}, tenant=TENANT, scopes=[])
     assert isinstance(error, InteractionRequired)
+    assert error.error_codes == frozenset()
+
+
+# Entra's answer to a refresh in a customer tenant whose policy wants newer MFA, in the shape
+# MSAL returns it (seen live 2026-10-22; the ids and claims are made up).
+STALE_MFA = {
+    "error": "invalid_grant",
+    "error_description": "AADSTS50078: Presented multi-factor authentication has expired due "
+    "to policies configured by your administrator. Trace ID: trace-1 Correlation ID: corr-1 "
+    "Timestamp: 2026-10-22 06:58:41Z",
+    "error_codes": [50078],
+    "suberror": "basic_action",
+    "correlation_id": "corr-1",
+    "trace_id": "trace-1",
+    "claims": '{"access_token":{"capolids":{"essential":true,"values":["p1"]}}}',
+}
+
+
+@pytest.mark.parametrize(
+    ("result", "kind"),
+    [
+        (STALE_MFA, InteractionRequired),
+        ({**STALE_MFA, "error_codes": [65001]}, ConsentRequired),
+        ({**STALE_MFA, "error": "invalid_client"}, AuthError),
+    ],
+    ids=["interaction", "consent", "other"],
+)
+def test_every_error_carries_entras_answer_in_its_fields(
+    result: dict[str, Any], kind: type[AuthError]
+) -> None:
+    error = error_from_msal_result(result, tenant=TENANT, scopes=["a"])
+    assert type(error) is kind
+    assert (
+        error.error,
+        error.error_codes,
+        error.suberror,
+        error.correlation_id,
+        error.trace_id,
+        error.claims,
+    ) == (
+        result["error"],
+        frozenset(result["error_codes"]),
+        "basic_action",
+        "corr-1",
+        "trace-1",
+        result["claims"],
+    )
+    # The message is Entra's, whole.
+    assert str(error) == f"{result['error']}: {result['error_description']}"
+
+
+def test_an_error_entra_gave_no_answer_for_has_empty_fields() -> None:
+    error = error_from_msal_result(None, tenant=TENANT, scopes=["a"])
+    assert (error.error, error.error_codes, error.correlation_id, error.claims) == (
+        None,
+        frozenset(),
+        None,
+        None,
+    )
+    assert AuthError("x").error_codes == frozenset()
+
+
+def test_the_brokers_answer_gives_its_error_codes_and_sub_error() -> None:
+    error = error_from_msal_result(BROKER_CONSENT_PII_ON, tenant=TENANT, scopes=["a"])
+    assert (error.error, error.error_codes, error.suberror, error.trace_id) == (
+        "broker_error",
+        frozenset({65001}),
+        "consent_required",
+        None,
+    )
 
 
 def broker_error(status: str) -> dict[str, Any]:

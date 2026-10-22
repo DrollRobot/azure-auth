@@ -280,7 +280,9 @@ for customer in await home.list_customers():
 
 - A customer tenant's context **never prompts.** When a token cannot be obtained silently it
   raises `InteractionRequired` or `ConsentRequired`, and the error carries the tenant id. Sign
-  in on a client of the home context first.
+  in on a client of the home context first. The error's `error_codes` hold the AADSTS codes
+  Entra gave, so you can tell its reasons apart without reading the message: 50078 or 70043,
+  for one, mean the customer's policy finds the home sign-in too old.
 - `auth.home` is the context you signed in on. For a context you built yourself it is the
   context itself; for one from `get_tenant_context()` it points back to the one you built. So
   `auth.home is not auth` tells you that `auth` came from `get_tenant_context()`.
@@ -404,7 +406,7 @@ Every client:
 Errors:
 
 ```
-AuthError
+AuthError(error, error_codes, suberror, correlation_id, trace_id, claims)
 ├── InteractionRequired(tenant_id, scopes)
 ├── ConsentRequired(tenant_id, scopes)
 ├── AccountSelectionRequired
@@ -419,7 +421,13 @@ ResourceError(status, code, request_id, body)
 └── InvokeCommandError
 ```
 
-MSAL result dictionaries never reach your code.
+MSAL result dictionaries never reach your code. An error made from Entra's answer keeps its
+message whole, and its details in the fields on `AuthError`: the OAuth `error`, the AADSTS
+`error_codes`, the `suberror`, the `correlation_id` and `trace_id` that Microsoft support
+asks for (the sign-in logs call the trace id the request id), and the `claims` challenge for
+a new sign-in to satisfy. A field is empty when the answer did not carry it. The Windows
+broker's answer carries only the error and, with its PII logging on, the codes and the
+sub-error.
 
 ## Microsoft Graph
 

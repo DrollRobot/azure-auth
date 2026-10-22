@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Every error made from Entra's answer keeps that answer's details in fields, as well as in
+  its message: `error`, `error_codes` (the AADSTS codes, such as 50078 for multi-factor
+  authentication a policy finds too old), `suberror`, `correlation_id`, `trace_id` and
+  `claims`. Callers can tell one failure from another, and quote the ids to Microsoft
+  support, without reading the message.
+
 ## [0.7.0] - 2026-10-22 - Sign-in check
 
 ### Added

@@ -49,7 +49,33 @@ _ENTRA_CODE = re.compile(r"AADSTS(\d+)")
 
 
 class AuthError(Exception):
-    """Base class for every authentication failure raised by this package."""
+    """Base class for every authentication failure raised by this package.
+
+    An error made from Entra's answer keeps that answer's details in these fields as well as
+    in the message, so a caller can tell one failure from another, or quote the ids to
+    Microsoft support, without reading the message. A field is empty when the answer did not
+    carry it, and for an error not made from one. The Windows broker's answer carries only the
+    error, and, with its PII logging on, the codes and the sub-error.
+
+    Attributes:
+        error: The OAuth error, such as ``invalid_grant``, or ``broker_error``; else ``None``.
+        error_codes: The AADSTS codes, such as 50078 when a Conditional Access policy finds the
+            multi-factor authentication too old.
+        suberror: Entra's sub-error, such as ``consent_required`` or ``message_only``; else
+            ``None``.
+        correlation_id: The request's correlation id; else ``None``.
+        trace_id: The request's trace id, which Entra's sign-in logs call the request id;
+            else ``None``.
+        claims: The claims challenge Entra sent, as JSON, for a new sign-in to satisfy; else
+            ``None``.
+    """
+
+    error: str | None = None
+    error_codes: frozenset[int] = frozenset()
+    suberror: str | None = None
+    correlation_id: str | None = None
+    trace_id: str | None = None
+    claims: str | None = None
 
 
 class InteractionRequired(AuthError):
@@ -234,6 +260,44 @@ def entra_error_codes(result: Mapping[str, Any] | None) -> frozenset[int]:
     return frozenset(codes)
 
 
+def _text(result: Mapping[str, Any], key: str) -> str | None:
+    """Read one of Entra's text fields out of a failed MSAL result.
+
+    Args:
+        result: The dictionary MSAL returned.
+        key: The field.
+
+    Returns:
+        The field's text, or ``None`` when it is missing or empty.
+    """
+    value = result.get(key)
+    return str(value) if value else None
+
+
+def with_entra_answer(error: AuthError, result: Mapping[str, Any] | None) -> AuthError:
+    """Copy the details of Entra's answer onto an error made from it.
+
+    Args:
+        error: The error.
+        result: The dictionary MSAL returned, or ``None``, which leaves the error as it is.
+
+    Returns:
+        The same error, for raising.
+    """
+    if not result:
+        return error
+    error.error = _text(result, "error")
+    error.error_codes = entra_error_codes(result)
+    broker_suberror = _BROKER_SUBERROR.search(_broker_text(result))
+    error.suberror = _text(result, "suberror") or (
+        broker_suberror.group(1) if broker_suberror else None
+    )
+    error.correlation_id = _text(result, "correlation_id")
+    error.trace_id = _text(result, "trace_id")
+    error.claims = _text(result, "claims")
+    return error
+
+
 def error_from_msal_result(
     result: Mapping[str, Any] | None,
     *,
@@ -248,7 +312,8 @@ def error_from_msal_result(
         scopes: Scopes that were requested.
 
     Returns:
-        The exception to raise. The MSAL dictionary itself is never exposed.
+        The exception to raise, carrying Entra's answer in its fields
+        (:func:`with_entra_answer`). The MSAL dictionary itself is never exposed.
     """
     tenant_id = tenant.id
     if not result:
@@ -272,15 +337,18 @@ def error_from_msal_result(
             broker += f", SubError: {suberror.group(1)}"
         message = f"{reason} ({broker})"
 
+    translated: AuthError
     if markers & _CONSENT_MARKERS or codes & _CONSENT_ERROR_CODES:
-        return ConsentRequired(message, tenant_id=tenant_id, scopes=scopes)
-    if error in _INTERACTION_ERRORS or broker_status(result) in _BROKER_INTERACTION_STATUSES:
-        return InteractionRequired(message, tenant_id=tenant_id, scopes=scopes)
-    if error in _DECLINED_ERRORS:
-        return AuthError(
+        translated = ConsentRequired(message, tenant_id=tenant_id, scopes=scopes)
+    elif error in _INTERACTION_ERRORS or broker_status(result) in _BROKER_INTERACTION_STATUSES:
+        translated = InteractionRequired(message, tenant_id=tenant_id, scopes=scopes)
+    elif error in _DECLINED_ERRORS:
+        translated = AuthError(
             f"{message}. No token was issued for {' '.join(scopes) or '(no scopes)'} in tenant "
             f"{tenant}. Either the sign-in was cancelled, or the account is not allowed to "
             "consent to these scopes and was shown 'Need admin approval' -- in which case an "
             "administrator has to grant them before this account can use them."
         )
-    return AuthError(message)
+    else:
+        translated = AuthError(message)
+    return with_entra_answer(translated, result)

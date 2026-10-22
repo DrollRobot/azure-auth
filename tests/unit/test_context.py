@@ -652,6 +652,8 @@ def test_a_customer_the_broker_cannot_serve_silently_asks_for_a_sign_in(
         user_context(broker=True).get_tenant_context("customer").acquire_token([ARM_SCOPE])
     assert caught.value.tenant_id == CUSTOMER_GUID
     assert fake_msal.methods() == ["silent"]
+    # The advice is added to the broker's answer, which stays in the fields.
+    assert caught.value.error == "broker_error"
 
 
 def test_broker_applications_turn_on_the_brokers_pii_logging(
@@ -680,6 +682,7 @@ ENTRA_REFUSALS = [
         ),
         "AADSTS53003: Access has been blocked by Conditional Access policies "
         "(broker: Status_InteractionRequired, SubError: message_only)",
+        {53003},
         id="broker",
     ),
     pytest.param(
@@ -688,14 +691,20 @@ ENTRA_REFUSALS = [
             "invalid_grant", "AADSTS50105: The user is not assigned.", error_codes=[50105]
         ),
         "invalid_grant: AADSTS50105: The user is not assigned.",
+        {50105},
         id="browser",
     ),
 ]
 
 
-@pytest.mark.parametrize(("broker", "result", "message"), ENTRA_REFUSALS)
+@pytest.mark.parametrize(("broker", "result", "message", "codes"), ENTRA_REFUSALS)
 def test_a_customer_entra_refused_for_a_reason_gives_only_the_reason(
-    fake_msal: FakeMsal, broker_installed: None, broker: bool, result: Result, message: str
+    fake_msal: FakeMsal,
+    broker_installed: None,
+    broker: bool,
+    result: Result,
+    message: str,
+    codes: set[int],
 ) -> None:
     fake_msal.accounts = [ACCOUNT]
     fake_msal.silent = lambda call: result
@@ -706,6 +715,8 @@ def test_a_customer_entra_refused_for_a_reason_gives_only_the_reason(
     # A home sign-in would not change Entra's answer, so the message does not suggest one.
     assert str(caught.value) == message
     assert caught.value.tenant_id == CUSTOMER_GUID
+    # The caller can tell one reason from another without reading the message.
+    assert caught.value.error_codes == codes
 
 
 def test_a_customer_missing_consent_through_the_broker_is_consent_required(

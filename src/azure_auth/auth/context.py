@@ -48,6 +48,7 @@ from azure_auth.auth.errors import (
     broker_status,
     entra_error_codes,
     error_from_msal_result,
+    with_entra_answer,
 )
 from azure_auth.auth.tenant import MULTI_TENANT_AUTHORITIES, Tenant, as_guid
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
@@ -869,12 +870,13 @@ class AuthContext:
             # When Entra gave a reason, the reason is the message. For Conditional Access or a
             # user not assigned to the application, the advice to sign in at home was wrong.
             if isinstance(error, InteractionRequired) and not entra_error_codes(result):
-                raise InteractionRequired(
+                advised = InteractionRequired(
                     f"{error} Contexts from get_tenant_context() never prompt; call login() on a "
                     "client of the home context (auth.home) first.",
                     tenant_id=self._tenant.id,
                     scopes=scopes,
                 )
+                raise with_entra_answer(advised, result)
             raise error
 
         # Entra puts up its own consent screen when an application has not been granted the
