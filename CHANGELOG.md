@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `flush_cache()` on every context writes the disk cache's unwritten changes to its file.
+  Call it once a sign-in is worth keeping should the process be killed. `await
+  auth.aio.close()` does the same.
+- `CacheFileEmpty`, raised for a cache file of 0 bytes, which no process can decrypt. It names
+  the file and says to delete it; msal-extensions' own error is chained behind it.
 - Every error made from Entra's answer keeps that answer's details in fields, as well as in
   its message: `error`, `error_codes` (the AADSTS codes, such as 50078 for multi-factor
   authentication a policy finds too old), `suberror`, `correlation_id`, `trace_id` and
@@ -20,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_tenant_context()` then see the new sign-in, for a Conditional Access policy that found
   the old one too old. It signs in in the browser even with the broker, which cannot be told
   to ask again.
+
+### Changed
+
+- The disk cache is written on `flush_cache()`, when an async context closes and when the
+  process exits, once for all the changes since the last write, instead of on every token
+  MSAL stores or drops. A run across hundreds of tenants wrote a file of several megabytes
+  thousands of times.
+
+### Fixed
+
+- A process stopped while writing the disk cache no longer leaves an empty file that every
+  later run fails to decrypt (Windows). The new file is built beside the old one and renamed
+  into place.
 
 ## [0.7.0] - 2026-10-22 - Sign-in check
 

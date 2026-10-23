@@ -261,6 +261,21 @@ there (`grant_when_possible`, below).
 `cache_path=` sets the file. The default is a file in the per-user cache directory. Contexts
 in one process that name the same file share one cache, which their threads can use at once.
 
+With `"disk"`, the tokens MSAL stores and drops change the cache in memory. The file is
+written by `auth.flush_cache()` (`await auth.aio.flush_cache()`, or `close()`, asynchronously)
+and when the process exits, once for all the changes since the last write: writing means
+encrypting the whole file, and a run across many tenants changes the cache thousands of times.
+Call `flush_cache()` once a sign-in is worth keeping should the process be killed, such as
+after a browser sign-in or after each batch of work. Contexts from `get_tenant_context()`
+share the cache, so one call writes every tenant's tokens. A process killed outright writes
+nothing more; the tokens it got are gotten again next time, silently, from the sign-in the
+file holds.
+
+On Windows the file holds the tokens, and each write builds the new file beside the old one
+and renames it into place, so a process stopped mid-write leaves the old file whole. An empty
+cache file, which an older azure-auth stopped mid-write could leave, raises `CacheFileEmpty`,
+naming the file: delete it and sign in again.
+
 There is no unencrypted disk cache. Where the platform cannot encrypt, for example Linux
 without libsecret, `cache="disk"` raises `CacheEncryptionUnavailable`. It never falls back to
 plain text and never silently switches to the memory cache.

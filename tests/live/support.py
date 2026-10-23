@@ -415,8 +415,8 @@ def expire_cached_access_tokens(cache_path: Path) -> int:
     """
     expired = 0
     for path in (cache_path, cache_path.with_name(BROKER_CACHE_NAME)):
-        if path.exists():
-            expired += cache_aging.expire_access_tokens(build_cache("disk", path))
+        # The cache this process holds, whether or not it has written its file yet.
+        expired += cache_aging.expire_access_tokens(build_cache("disk", path))
     return expired
 
 
@@ -425,8 +425,9 @@ def ensure_token(auth: AuthContext, scopes: Sequence[str], client_id: str | None
 
     A cached sign-in answers silently. Without one, the browser or the broker's window opens,
     and if it is still waiting after ``PROMPT_ALARM_SECONDS`` the person at the desktop is
-    called (:func:`walkthrough_if_waiting`). The token is kept, so the test that follows uses
-    it without asking again.
+    called (:func:`walkthrough_if_waiting`). The token is kept, and the cache file written, so
+    the test that follows uses it without asking again, and so does a later run even if this
+    one is killed.
 
     Args:
         auth: The context the test is about to use.
@@ -435,6 +436,7 @@ def ensure_token(auth: AuthContext, scopes: Sequence[str], client_id: str | None
     """
     with walkthrough_if_waiting(sign_in_step("WAM" if auth._broker else "browser")):
         auth.acquire_token(scopes, client_id=client_id)
+    auth.flush_cache()
 
 
 def sign_in_to_vault(auth: AuthContext) -> None:

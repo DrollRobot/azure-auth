@@ -46,7 +46,7 @@ from typing import Any
 import pytest
 
 from azure_auth import AuthContext
-from azure_auth.auth.cache import default_cache_path
+from azure_auth.auth.cache import build_cache, default_cache_path
 from tests import cache_reminder
 from tests.live.support import (
     BROKER_CACHE_NAME,
@@ -110,19 +110,23 @@ def live_cache_file() -> Path:
 
 
 @pytest.fixture(scope="session")
-def _live_cache_path() -> Path:
+def _live_cache_path() -> Iterator[Path]:
     """The live tests' disk cache (:func:`live_cache_file`), with its reminder in place.
 
     A credential store nobody sees is a credential store nobody deletes. So before the first
     test touches the cache, when ``AZURE_AUTH_TEST_CACHE_REMINDER_PATH`` names a folder, a
     reminder pointing at the cache's folder is put there (``tests/cache_reminder.py``). The
     end-of-run summary names the cache files either way (:func:`pytest_terminal_summary`).
+    After the last test, the caches' unwritten tokens are written, so the summary describes
+    the files as the run leaves them.
     """
     path = live_cache_file()
     folder = cache_reminder.configured_folder()
     if folder is not None:
         cache_reminder.place_reminder(path, folder)
-    return path
+    yield path
+    for cache in (path, path.with_name(BROKER_CACHE_NAME)):
+        build_cache("disk", cache).flush()
 
 
 def pytest_terminal_summary(

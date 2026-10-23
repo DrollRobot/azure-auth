@@ -33,7 +33,7 @@ from msal import BrowserInteractionTimeoutError, TokenCache
 from msal.oauth2cli.authcode import AuthCodeReceiver
 
 from azure_auth.auth import cng
-from azure_auth.auth.cache import CacheKind, build_cache
+from azure_auth.auth.cache import CacheKind, DiskTokenCache, build_cache
 from azure_auth.auth.credentials import (
     AppCredential,
     CertStoreCredential,
@@ -275,7 +275,8 @@ class AuthContext:
             private_key_pem: Private key in PEM format.
             certificate_pfx: PKCS#12 archive as bytes or a path.
             certificate_password: Password for ``private_key_pem`` or ``certificate_pfx``.
-            cache: ``memory`` (default) or ``disk`` for an encrypted cache file.
+            cache: ``memory`` (default) or ``disk`` for an encrypted cache file, written by
+                :meth:`flush_cache` and when the process exits.
             cache_path: Location of the disk cache. Defaults to the per-user cache directory.
             broker: Use the Windows authentication broker (WAM) for user sign-in. Needs the
                 ``broker`` extra. Turns on the broker's PII logging, for the whole process, so
@@ -592,6 +593,25 @@ class AuthContext:
             pick_account=pick_account,
             reauthenticate=reauthenticate,
         )
+
+    def flush_cache(self) -> None:
+        """Write the disk cache's unwritten changes to its file.
+
+        With ``cache="disk"``, the tokens MSAL stores and drops change the cache in memory. The
+        file is written here, by :meth:`AsyncAuthContext.close`, and when the process exits,
+        once for all the changes since the last write: writing means encrypting the whole
+        file, and a run across many tenants changes the cache thousands of times. Call it once
+        a sign-in is worth keeping should the process be killed, such as after a browser
+        sign-in or after each batch of work. Contexts from :meth:`get_tenant_context` share the
+        cache, so one call writes every tenant's tokens. With ``cache="memory"`` there is
+        nothing to write.
+
+        Raises:
+            CacheFileEmpty: If the cache file is there but empty, which no process can decrypt.
+            OSError: If the file could not be written. The changes stay for the next call.
+        """
+        if isinstance(self._cache, DiskTokenCache):
+            self._cache.flush()
 
     def acquire_token_silently(
         self,
@@ -1248,8 +1268,19 @@ class AsyncAuthContext:
             reauthenticate=reauthenticate,
         )
 
+    async def flush_cache(self) -> None:
+        """Write the disk cache's unwritten changes to its file.
+
+        See :meth:`AuthContext.flush_cache`.
+        """
+        await asyncio.to_thread(self._sync.flush_cache)
+
     async def close(self) -> None:
-        """Do nothing; present for the ``AsyncTokenCredential`` protocol."""
+        """Write the disk cache's unwritten changes to its file (:meth:`flush_cache`).
+
+        Also what the ``AsyncTokenCredential`` protocol asks for.
+        """
+        await self.flush_cache()
 
     async def __aenter__(self) -> Self:
         """Enter the context manager.

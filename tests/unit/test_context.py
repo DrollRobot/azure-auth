@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import threading
 import time
 import uuid
@@ -9,6 +11,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
+import msal_extensions
 import pytest
 from msal import BrowserInteractionTimeoutError, TokenCache
 
@@ -1327,3 +1330,83 @@ def test_before_browser_opens_is_rejected_for_app_flows() -> None:
         AuthContext(
             "tenant", client_id="app", client_secret="s3cret", before_browser_opens=lambda: None
         )
+
+
+# ---------------------------------------------------------------------------- the disk cache
+
+
+# msal-extensions ships no types, so mypy sees its class as Any.
+class _PlainFile(msal_extensions.FilePersistence):  # type: ignore[misc]
+    """A plain file standing in for the encrypted one."""
+
+    is_encrypted = True
+
+
+@pytest.fixture
+def cache_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Make disk caches plain files, in a process with no disk cache open yet.
+
+    Returns:
+        The file for a context's ``cache_path``.
+    """
+    monkeypatch.setattr("msal_extensions.build_encrypted_persistence", _PlainFile)
+    monkeypatch.setattr("azure_auth.auth.cache._disk_caches", {})
+    return tmp_path / "cache.bin"
+
+
+def _store(auth: AuthContext, token: str) -> None:
+    """Record a token in a context's cache, as MSAL does after a token response."""
+    auth._cache.add(
+        {
+            "client_id": "app",
+            "scope": ["https://graph.microsoft.com/.default"],
+            "token_endpoint": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+            "response": {"access_token": token, "expires_in": 3600, "token_type": "Bearer"},
+        }
+    )
+
+
+def _written(path: Path) -> list[str]:
+    """Read the access tokens a plain cache file holds; none for no file."""
+    if not path.exists():
+        return []
+    state = json.loads(path.read_text(encoding="utf-8"))
+    return [entry["secret"] for entry in state.get("AccessToken", {}).values()]
+
+
+def test_flush_cache_writes_the_disk_cache(cache_file: Path) -> None:
+    auth = user_context(cache="disk", cache_path=cache_file)
+    _store(auth, "kept")
+    assert _written(cache_file) == []
+
+    auth.flush_cache()
+
+    assert _written(cache_file) == ["kept"]
+
+
+def test_a_tenant_context_flushes_the_cache_it_shares(cache_file: Path) -> None:
+    auth = user_context(cache="disk", cache_path=cache_file)
+    _store(auth, "kept")
+
+    auth.get_tenant_context(CUSTOMER).flush_cache()
+
+    assert _written(cache_file) == ["kept"]
+
+
+def test_flush_cache_has_nothing_to_do_for_the_memory_cache() -> None:
+    auth = user_context(cache="memory")
+    _store(auth, "kept")
+
+    auth.flush_cache()
+
+    found = auth._cache.search(TokenCache.CredentialType.ACCESS_TOKEN)
+    assert [entry["secret"] for entry in found] == ["kept"]
+
+
+def test_closing_the_async_context_flushes_the_cache(cache_file: Path) -> None:
+    auth = user_context(cache="disk", cache_path=cache_file)
+    _store(auth, "kept")
+
+    asyncio.run(auth.aio.close())
+
+    assert _written(cache_file) == ["kept"]

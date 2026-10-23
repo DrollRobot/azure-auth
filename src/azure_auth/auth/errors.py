@@ -148,6 +148,28 @@ class CacheEncryptionUnavailable(AuthError):
     """An encrypted disk cache was requested but this platform cannot encrypt it."""
 
 
+class CacheFileEmpty(AuthError):
+    """The disk cache file is there but holds nothing, so it cannot be decrypted.
+
+    A process stopped while writing the file can leave it so: an older azure-auth emptied the
+    file before filling it. Nothing is in it to recover. Delete the file and sign in again; the
+    sign-in starts a new one.
+
+    Attributes:
+        path: The cache file.
+    """
+
+    def __init__(self, message: str, *, path: str) -> None:
+        """Create the error.
+
+        Args:
+            message: Human readable description.
+            path: The cache file.
+        """
+        super().__init__(message)
+        self.path = path
+
+
 class BrokerUnavailable(AuthError):
     """The authentication broker was required but cannot be used."""
 

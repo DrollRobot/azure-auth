@@ -39,8 +39,8 @@ def expire_access_tokens(cache: Any, *, seconds_ago: int = 60) -> int:
     """Move the expiry of every cached access token into the past.
 
     Refresh tokens, accounts and ID tokens are left alone, so the cache ends up exactly as
-    it would after the access tokens ran out on their own. A disk cache writes the change
-    straight back to its file, so another context opening that file sees it.
+    it would after the access tokens ran out on their own. A disk cache is flushed, so
+    another process opening that file sees the change.
 
     Args:
         cache: An ``msal.TokenCache``, or a subclass such as the encrypted disk cache.
@@ -56,4 +56,6 @@ def expire_access_tokens(cache: Any, *, seconds_ago: int = 60) -> int:
         # Extended expiry too: MSAL may fall back to an access token inside its extended
         # lifetime when the token endpoint is unreachable, which would mask a broken refresh.
         cache.modify(_ACCESS_TOKEN, entry, {"expires_on": past, "extended_expires_on": past})
+    if hasattr(cache, "flush"):
+        cache.flush()  # The disk cache writes its file on flush; a memory cache has none.
     return len(entries)
