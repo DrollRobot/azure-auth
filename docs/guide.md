@@ -99,8 +99,8 @@ stay masked.
 
 A context works in whichever Microsoft cloud its tenant lives in, without being told which.
 Given a GUID or domain name, it looks the tenant up when it is created (one unauthenticated
-request to each of three sign-in hosts, no sign-in), and every client built on it uses that
-cloud's endpoints.
+request to each of three sign-in hosts, all at once, no sign-in), and every client built on
+it uses that cloud's endpoints.
 
 Everything known about the tenant is in one place, `auth.tenant`:
 
@@ -167,6 +167,21 @@ auth = AuthContext(Tenant.lookup("21vianet.com", CHINA), username="admin@21viane
 # The GUID and cloud already known: no request at all.
 auth = AuthContext(Tenant("<tenant GUID>", US_GOV), username="admin@contoso.us")
 auth = AuthContext(Tenant("organizations", COMMERCIAL), username="someone@contoso.com")
+```
+
+No single sign-in host knows every tenant, so the lookup asks all three and takes as long
+as the slowest answer. A host that cannot be reached, or does not answer in time, is skipped
+with a warning (logger `azure_auth.auth.tenant`), and the hosts that did answer decide. When
+they find nothing and a host was skipped, the lookup raises `AuthError` rather than
+`TenantNotFound`, since the tenant may live behind the host that did not answer.
+
+A cloud none of your tenants is in can be left out, by constant or by name, on the lookup
+and on a context, whose `get_tenant_context()` lookups then leave it out too. A network that
+blocks the China host then costs nothing instead of a timeout:
+
+```python
+tenant = Tenant.lookup("contoso.com", clouds=[COMMERCIAL, US_GOV])
+auth = AuthContext("contoso.com", username="admin@contoso.com", lookup_clouds=["Commercial"])
 ```
 
 A `Tenant` built by hand is taken as given and not checked, so a wrong cloud fails when it is

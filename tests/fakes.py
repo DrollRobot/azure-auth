@@ -203,10 +203,18 @@ class FakeLookup:
     region_sub_scope: str | None = None
     error: Exception | None = None
     calls: list[tuple[str, Cloud | None]] = field(default_factory=list)
+    clouds_asked: list[tuple[Cloud, ...] | None] = field(default_factory=list)
 
-    def __call__(self, name: str, cloud: Cloud | None = None) -> Tenant:
+    def __call__(
+        self,
+        name: str,
+        cloud: Cloud | None = None,
+        *,
+        clouds: tuple[Cloud, ...] | None = None,
+    ) -> Tenant:
         """Record the lookup and find the tenant in ``cloud``, or raise ``error``."""
         self.calls.append((name, cloud))
+        self.clouds_asked.append(clouds)
         if self.error is not None:
             raise self.error
         oidc = {"tenant_region_sub_scope": self.region_sub_scope}

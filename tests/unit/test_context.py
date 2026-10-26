@@ -950,6 +950,33 @@ def test_a_request_for_the_contexts_own_tenant_by_guid_may_prompt(fake_msal: Fak
     assert fake_msal.methods() == ["interactive"]
 
 
+def test_the_clouds_to_ask_are_chosen_once_for_every_lookup(fake_lookup: FakeLookup) -> None:
+    auth = AuthContext(TENANT, username=USER, lookup_clouds=["usgov", COMMERCIAL])
+    customer = auth.get_tenant_context(CUSTOMER)
+
+    assert fake_lookup.calls == [(TENANT, None), (CUSTOMER, COMMERCIAL)]
+    assert fake_lookup.clouds_asked == [(US_GOV, COMMERCIAL), (US_GOV, COMMERCIAL)]
+    # And so is a lookup made from the customer's context.
+    customer.get_tenant_context("other.example")
+    assert fake_lookup.clouds_asked[-1] == (US_GOV, COMMERCIAL)
+
+
+def test_every_cloud_is_asked_unless_told_otherwise(fake_lookup: FakeLookup) -> None:
+    user_context().get_tenant_context(CUSTOMER)
+    assert fake_lookup.clouds_asked == [None, None]
+
+
+@pytest.mark.parametrize(
+    ("clouds", "complaint"), [([], "names no cloud"), (["Mars"], "Unknown cloud")]
+)
+def test_no_cloud_or_an_unknown_one_is_refused_before_any_lookup(
+    fake_lookup: FakeLookup, clouds: list[str], complaint: str
+) -> None:
+    with pytest.raises(ValueError, match=complaint):
+        AuthContext(TENANT, username=USER, lookup_clouds=clouds)
+    assert fake_lookup.calls == []
+
+
 def test_a_failed_lookup_fails_the_constructor(fake_lookup: FakeLookup) -> None:
     fake_lookup.error = TenantNotFound("no such tenant", name=TENANT)
     with pytest.raises(TenantNotFound):

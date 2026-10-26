@@ -51,6 +51,7 @@ from azure_auth.auth.errors import (
     with_entra_answer,
 )
 from azure_auth.auth.tenant import MULTI_TENANT_AUTHORITIES, Tenant, as_guid
+from azure_auth.clouds import Cloud, get_cloud
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
 
 _LOGGER = logging.getLogger(__name__)
@@ -79,6 +80,26 @@ _BROKER_CANCELLED_STATUS = "Status_UserCanceled"
 # The names this process has registered browsers under with ``webbrowser``. Each registration
 # appends to webbrowser's try order, so a command is registered once, not at every sign-in.
 _registered_browsers: set[str] = set()
+
+
+def _lookup_clouds(clouds: Iterable[Cloud | str] | None) -> tuple[Cloud, ...] | None:
+    """Resolve ``lookup_clouds`` now, so a wrong name fails the constructor, not a lookup.
+
+    Args:
+        clouds: Clouds or cloud names, or ``None`` for every cloud.
+
+    Returns:
+        The clouds, or ``None`` for the lookup's default.
+
+    Raises:
+        ValueError: If ``clouds`` is empty or names an unknown cloud.
+    """
+    if clouds is None:
+        return None
+    resolved = tuple(get_cloud(cloud) for cloud in clouds)
+    if not resolved:
+        raise ValueError("lookup_clouds names no cloud whose sign-in host to ask")
+    return resolved
 
 
 def _browser_command(browser: str | Path | Sequence[str]) -> tuple[str, ...]:
@@ -250,12 +271,13 @@ class AuthContext:
         browser_timeout: float = _DEFAULT_BROWSER_TIMEOUT_SECONDS,
         browser: str | Path | Sequence[str] | None = None,
         before_browser_opens: Callable[[], object] | None = None,
+        lookup_clouds: Iterable[Cloud | str] | None = None,
     ) -> None:
         """Configure the context, looking the tenant up when it is given as a string.
 
-        The lookup (:meth:`Tenant.lookup`) is one unauthenticated request to each of three
-        public sign-in hosts. Nothing else touches the network until the first token is
-        requested.
+        The lookup (:meth:`Tenant.lookup`) is one unauthenticated request to each public
+        sign-in host, all three unless ``lookup_clouds`` says otherwise, made at the same
+        time. Nothing else touches the network until the first token is requested.
 
         Args:
             tenant: Tenant id (GUID) or verified domain name, to look up; or a
@@ -297,13 +319,17 @@ class AuthContext:
                 browser sign-in window opens, on the thread signing in. It is not called when
                 the cache or the broker answers. Its return value is ignored; an exception it
                 raises fails the sign-in, and no window opens.
+            lookup_clouds: The clouds whose sign-in hosts the lookups ask, here and in
+                :meth:`get_tenant_context`, as :class:`~azure_auth.Cloud` constants or
+                names. All of them by default. Leave out a cloud no tenant of yours is in,
+                such as China from a network that cannot reach it.
 
         Raises:
             ValueError: If the arguments do not describe exactly one flow, ``browser`` or
                 ``before_browser_opens`` is given for an app flow, ``browser`` names no
-                program, or ``tenant`` is a multi-tenant authority such as
-                ``organizations``, which has nothing to look up: build its :class:`Tenant` by
-                hand.
+                program, ``lookup_clouds`` is empty or names an unknown cloud, or ``tenant``
+                is a multi-tenant authority such as ``organizations``, which has nothing to
+                look up: build its :class:`Tenant` by hand.
             CacheEncryptionUnavailable: If ``cache='disk'`` cannot be encrypted here.
             CertificateUnavailable: If a PFX archive cannot be read.
             TenantNotFound: If the lookup finds no such tenant.
@@ -347,9 +373,14 @@ class AuthContext:
         self._browser_timeout = browser_timeout
         self._browser = None if browser is None else _browser_command(browser)
         self._before_browser_opens = before_browser_opens
+        self._lookup_clouds = _lookup_clouds(lookup_clouds)
         self._can_prompt = True
         self._home = self
-        self._tenant = tenant if isinstance(tenant, Tenant) else Tenant.lookup(tenant)
+        self._tenant = (
+            tenant
+            if isinstance(tenant, Tenant)
+            else Tenant.lookup(tenant, clouds=self._lookup_clouds)
+        )
         self._init_state()
 
     def _init_state(self) -> None:
@@ -448,7 +479,9 @@ class AuthContext:
         if guid is None:
             found = self._lookups.get(tenant.lower())
             if found is None:
-                found = self._lookups[tenant.lower()] = Tenant.lookup(tenant, self._tenant.cloud)
+                found = self._lookups[tenant.lower()] = Tenant.lookup(
+                    tenant, self._tenant.cloud, clouds=self._lookup_clouds
+                )
             guid = found.id
         if guid == self._tenant.id:
             return self
@@ -466,6 +499,7 @@ class AuthContext:
                 context._browser_timeout = self._browser_timeout
                 context._browser = self._browser
                 context._before_browser_opens = self._before_browser_opens
+                context._lookup_clouds = self._lookup_clouds
                 context._can_prompt = False
                 context._home = self._home
                 context._init_state()

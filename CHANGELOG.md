@@ -25,9 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_tenant_context()` then see the new sign-in, for a Conditional Access policy that found
   the old one too old. It signs in in the browser even with the broker, which cannot be told
   to ask again.
+- The tenant lookup can be told which clouds to ask, with `clouds=` on `Tenant.lookup()`
+  and `lookup_clouds=` on a context. A cloud none of your tenants is in, such as China from
+  a network that cannot reach it, then costs the lookup nothing.
 
 ### Changed
 
+- The tenant lookup asks the sign-in hosts all at once instead of one after another, so
+  it takes as long as the slowest answer.
 - The disk cache is written on `flush_cache()`, when an async context closes and when the
   process exits, once for all the changes since the last write, instead of on every token
   MSAL stores or drops. A run across hundreds of tenants wrote a file of several megabytes
@@ -35,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A sign-in host that cannot be reached, or does not answer in time, no longer fails the
+  tenant lookup. It is skipped with a warning, and the hosts that answered decide. The
+  lookup still fails when they find nothing, since the tenant may be behind the host that
+  was skipped.
 - A process stopped while writing the disk cache no longer leaves an empty file that every
   later run fails to decrypt (Windows). The new file is built beside the old one and renamed
   into place.

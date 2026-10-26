@@ -167,6 +167,111 @@ def test_a_tenant_that_does_not_exist_is_not_found(tenant: str) -> None:
         Tenant.lookup(tenant)
 
 
+class _Blocking(httpx.HTTPTransport):
+    """The real transport, with some hosts made unreachable, as a blocking network would.
+
+    It also records the host of every request, blocked or not.
+    """
+
+    def __init__(self, *hosts: str) -> None:
+        super().__init__()
+        self.hosts = hosts
+        self.blocked: list[str] = []
+        self.asked: list[str] = []
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.asked.append(request.url.host)
+        if request.url.host in self.hosts:
+            self.blocked.append(str(request.url))
+            raise httpx.ConnectTimeout("blocked by the test", request=request)
+        return super().handle_request(request)
+
+
+def test_a_tenant_is_found_when_a_host_cannot_be_reached() -> None:
+    # From a network that blocks the China host, a commercial tenant is still found.
+    domain, cloud, _ = REFERENCE_TENANTS["commercial"]
+    transport = _Blocking("login.chinacloudapi.cn")
+
+    tenant = Tenant.lookup(domain, transport=transport)
+
+    assert tenant == Tenant.lookup(domain)
+    assert tenant.cloud is cloud
+    assert len(transport.blocked) == 1
+
+
+def test_a_tenant_behind_a_host_that_cannot_be_reached_is_an_error_not_a_miss() -> None:
+    # Only the US government host answers, and it does not know China tenants.
+    domain, _, _ = REFERENCE_TENANTS["china"]
+    transport = _Blocking("login.microsoftonline.com", "login.chinacloudapi.cn")
+
+    with pytest.raises(AuthError, match="could not be reached") as caught:
+        Tenant.lookup(domain, transport=transport)
+
+    assert not isinstance(caught.value, TenantNotFound)
+    assert len(transport.blocked) == 2
+
+
+def test_no_host_answering_in_time_is_an_error() -> None:
+    # No TLS handshake completes in a millisecond, so every host times out.
+    domain, _, _ = REFERENCE_TENANTS["commercial"]
+    with pytest.raises(AuthError, match="could not be reached"):
+        Tenant.lookup(domain, timeout=0.001)
+
+
+def test_only_the_chosen_clouds_are_asked() -> None:
+    commercial, _, _ = REFERENCE_TENANTS["commercial"]
+    china, _, _ = REFERENCE_TENANTS["china"]
+    transport = _Blocking("login.chinacloudapi.cn")
+
+    found = Tenant.lookup(commercial, clouds=[COMMERCIAL, US_GOV], transport=transport)
+    # The US government host does not know China tenants (the commercial host does).
+    with pytest.raises(TenantNotFound, match="the USGov cloud"):
+        Tenant.lookup(china, clouds=["USGov"], transport=transport)
+
+    assert found == Tenant.lookup(commercial)
+    assert transport.blocked == []
+
+
+def test_the_named_clouds_own_host_decides_when_another_cannot_be_reached() -> None:
+    # A cloud's own host knows every tenant in it: its "no such tenant" is final, and
+    # without it nobody can say.
+    missing = "no-such-tenant-4f1c.onmicrosoft.com"
+    transport = _Blocking("login.chinacloudapi.cn")
+
+    with pytest.raises(TenantNotFound, match="the Commercial cloud"):
+        Tenant.lookup(missing, COMMERCIAL, transport=transport)
+    with pytest.raises(AuthError, match="could not be reached") as caught:
+        Tenant.lookup(missing, CHINA, transport=transport)
+
+    assert not isinstance(caught.value, TenantNotFound)
+    assert len(transport.blocked) == 2
+
+
+def test_a_context_asks_only_the_clouds_it_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The context's lookups cannot be handed a transport, so the real one is watched
+    # through the lookup itself.
+    transport = _Blocking()
+    real_lookup = Tenant.lookup.__func__  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        Tenant,
+        "lookup",
+        classmethod(lambda cls, *args, **kw: real_lookup(cls, *args, transport=transport, **kw)),
+    )
+    commercial, _, _ = REFERENCE_TENANTS["commercial"]
+    gcc, _, _ = REFERENCE_TENANTS["gcc"]
+
+    auth = AuthContext(commercial, username=f"nobody@{commercial}", lookup_clouds=["Commercial"])
+    customer = auth.get_tenant_context(gcc)
+    AuthContext(commercial, username=f"nobody@{commercial}")
+
+    assert (auth.tenant.domain, customer.tenant.domain) == (commercial, gcc)
+    # The context's own lookup and the customer's asked one host; the default asked three.
+    assert transport.asked[:2] == ["login.microsoftonline.com"] * 2
+    assert sorted(transport.asked[2:]) == sorted(
+        ["login.microsoftonline.com", "login.microsoftonline.us", "login.chinacloudapi.cn"]
+    )
+
+
 # ---------------------------------------------------------------------------- the table
 
 

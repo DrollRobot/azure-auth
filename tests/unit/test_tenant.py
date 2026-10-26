@@ -6,6 +6,8 @@ with the GUIDs replaced. ``tests/live/test_clouds.py`` fetches the real ones.
 
 from __future__ import annotations
 
+import logging
+import threading
 from typing import Any
 
 import httpx
@@ -61,11 +63,25 @@ NOT_FOUND = {"error": "invalid_tenant", "error_description": "AADSTS90002: Tenan
 COM, US, CN = "login.microsoftonline.com", "login.microsoftonline.us", "login.chinacloudapi.cn"
 
 
-def by_host(answers: dict[str, dict[str, Any] | None]) -> Recorder:
-    """Answer the lookup per sign-in host: a configuration, or "no such tenant" for ``None``."""
+# A host that cannot be reached: the handler raises what the real transport would.
+SILENT = httpx.ReadTimeout("timed out")
+
+
+def by_host(
+    answers: dict[str, dict[str, Any] | httpx.Response | Exception | None],
+) -> Recorder:
+    """Answer the lookup per sign-in host.
+
+    A configuration is answered, ``None`` is "no such tenant", a response is sent as it is,
+    and an exception is raised as the transport would when the host cannot be reached.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         answer = answers[request.url.host]
+        if isinstance(answer, Exception):
+            raise answer
+        if isinstance(answer, httpx.Response):
+            return answer
         return ok(answer) if answer is not None else ok(NOT_FOUND, status=400)
 
     return Recorder(handler)
@@ -214,6 +230,133 @@ def test_a_tenant_not_in_the_named_cloud_is_not_found() -> None:
     recorder = by_host({COM: COMMERCIAL_OIDC, US: COMMERCIAL_OIDC, CN: COMMERCIAL_OIDC})
     with pytest.raises(TenantNotFound, match="the China cloud"):
         Tenant.lookup("contoso.com", CHINA, transport=recorder.transport)
+
+
+def test_the_hosts_are_asked_at_the_same_time() -> None:
+    # Each answer waits for every host to have been asked: one after another, the first
+    # request would wait for ever (here, until the barrier breaks and fails the test).
+    asked = threading.Barrier(3, timeout=5)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.wait()
+        return ok(COMMERCIAL_OIDC)
+
+    recorder = Recorder(handler)
+
+    tenant = Tenant.lookup("contoso.com", transport=recorder.transport)
+
+    assert tenant.id == COMMERCIAL_ID
+    assert sorted(request.url.host for request in recorder.requests) == sorted([COM, US, CN])
+
+
+# ---------------------------------------------------------------------------- silent hosts
+
+
+def test_a_host_that_does_not_answer_is_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    recorder = by_host({COM: COMMERCIAL_OIDC, US: COMMERCIAL_OIDC, CN: SILENT})
+
+    with caplog.at_level(logging.WARNING, logger="azure_auth.auth.tenant"):
+        tenant = Tenant.lookup("contoso.com", transport=recorder.transport)
+
+    assert (tenant.id, tenant.cloud) == (COMMERCIAL_ID, COMMERCIAL)
+    assert len(recorder.requests) == 3
+    [record] = [r for r in caplog.records if r.name == "azure_auth.auth.tenant"]
+    assert record.levelno == logging.WARNING
+    assert "China sign-in host did not answer the lookup of contoso.com" in record.message
+    assert "ReadTimeout: timed out" in record.message
+
+
+@pytest.mark.parametrize("error", [SILENT, httpx.ConnectError("blocked")])
+def test_a_connection_that_fails_is_a_host_that_does_not_answer(error: Exception) -> None:
+    recorder = by_host({COM: error, US: DOD_OIDC, CN: None})
+    assert Tenant.lookup("army.example", transport=recorder.transport).cloud is US_GOV_DOD
+
+
+def test_nothing_found_with_a_host_unasked_is_an_error_not_a_miss() -> None:
+    # The tenant may well be behind the host that did not answer.
+    recorder = by_host({COM: None, US: None, CN: SILENT})
+
+    with pytest.raises(AuthError, match="could not be reached") as caught:
+        Tenant.lookup("contoso.cn", transport=recorder.transport)
+
+    assert not isinstance(caught.value, TenantNotFound)
+    assert "China (login.chinacloudapi.cn): timed out" in str(caught.value)
+    assert caught.value.__cause__ is SILENT
+
+
+def test_no_host_answering_is_an_error() -> None:
+    recorder = by_host({COM: SILENT, US: SILENT, CN: SILENT})
+    with pytest.raises(AuthError, match="could not be reached") as caught:
+        Tenant.lookup("contoso.com", transport=recorder.transport)
+    for host in ("login.microsoftonline.com", "login.microsoftonline.us", CN):
+        assert host in str(caught.value)
+
+
+def test_the_named_clouds_own_host_settles_not_found() -> None:
+    # The commercial host answers for every commercial tenant, so its "no such tenant" is
+    # final; the China host that did not answer has nothing to add.
+    recorder = by_host({COM: None, US: None, CN: SILENT})
+    with pytest.raises(TenantNotFound, match="the Commercial cloud"):
+        Tenant.lookup("nobody.example", COMMERCIAL, transport=recorder.transport)
+
+
+def test_the_named_clouds_own_host_not_answering_is_an_error() -> None:
+    recorder = by_host({COM: COMMERCIAL_OIDC, US: COMMERCIAL_OIDC, CN: SILENT})
+    with pytest.raises(AuthError, match=r"the China cloud.*could not be reached"):
+        Tenant.lookup("contoso.cn", CHINA, transport=recorder.transport)
+
+
+def test_an_unexpected_answer_still_fails_the_lookup_whatever_the_other_hosts_say() -> None:
+    recorder = by_host({COM: COMMERCIAL_OIDC, US: SILENT, CN: httpx.Response(500, text="boom")})
+    with pytest.raises(AuthError, match="answered 500: boom"):
+        Tenant.lookup("contoso.com", transport=recorder.transport)
+
+
+# ---------------------------------------------------------------------------- choosing the hosts
+
+
+def test_only_the_chosen_clouds_hosts_are_asked() -> None:
+    recorder = by_host({COM: COMMERCIAL_OIDC, US: COMMERCIAL_OIDC, CN: SILENT})
+
+    tenant = Tenant.lookup("contoso.com", clouds=[US_GOV, COMMERCIAL], transport=recorder.transport)
+
+    assert tenant.id == COMMERCIAL_ID
+    assert [request.url.host for request in recorder.requests] == [US, COM]
+
+
+def test_clouds_may_be_named_and_clouds_sharing_a_host_ask_it_once() -> None:
+    recorder = by_host({COM: SILENT, US: DOD_OIDC, CN: SILENT})
+
+    tenant = Tenant.lookup(
+        "army.example", clouds=["usgov", US_GOV_DOD, "USGov"], transport=recorder.transport
+    )
+
+    assert tenant.cloud is US_GOV_DOD
+    assert [request.url.host for request in recorder.requests] == [US]
+
+
+def test_a_tenant_in_a_cloud_left_out_is_not_found_in_the_clouds_asked() -> None:
+    recorder = by_host({COM: None, US: None, CN: CHINA_OIDC})
+
+    with pytest.raises(TenantNotFound, match="the Commercial or USGov clouds") as caught:
+        Tenant.lookup("contoso.cn", clouds=["Commercial", "USGov"], transport=recorder.transport)
+    with pytest.raises(TenantNotFound, match="the Commercial cloud"):
+        Tenant.lookup("contoso.cn", clouds=[COMMERCIAL], transport=recorder.transport)
+
+    assert caught.value.name == "contoso.cn"
+    assert CN not in {request.url.host for request in recorder.requests}
+
+
+@pytest.mark.parametrize(
+    ("clouds", "complaint"), [([], "names no cloud"), (["Mars"], "Unknown cloud")]
+)
+def test_no_cloud_or_an_unknown_one_is_refused_before_a_request(
+    clouds: list[str], complaint: str
+) -> None:
+    recorder = Recorder([])
+    with pytest.raises(ValueError, match=complaint):
+        Tenant.lookup("contoso.com", clouds=clouds, transport=recorder.transport)
+    assert recorder.requests == []
 
 
 # ---------------------------------------------------------------------------- the object
