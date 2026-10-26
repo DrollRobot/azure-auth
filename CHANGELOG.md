@@ -7,46 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-26 - Resilient tenant lookup
+
 ### Added
 
-- `flush_cache()` on every context writes the disk cache's unwritten changes to its file.
-  Call it once a sign-in is worth keeping should the process be killed. `await
-  auth.aio.close()` does the same.
-- `CacheFileEmpty`, raised for a cache file of 0 bytes, which no process can decrypt. It names
-  the file and says to delete it; msal-extensions' own error is chained behind it.
-- Every error made from Entra's answer keeps that answer's details in fields, as well as in
-  its message: `error`, `error_codes` (the AADSTS codes, such as 50078 for multi-factor
-  authentication a policy finds too old), `suberror`, `correlation_id`, `trace_id` and
-  `claims`. Callers can tell one failure from another, and quote the ids to Microsoft
-  support, without reading the message.
-- `login(reauthenticate=True)` on every client opens the sign-in window and has Entra ask for
-  the password again, and for multi-factor authentication where the tenant wants it, even
-  when a token is cached or the browser is still signed in. Customer tenants reached through
-  `get_tenant_context()` then see the new sign-in, for a Conditional Access policy that found
-  the old one too old. It signs in in the browser even with the broker, which cannot be told
-  to ask again.
-- The tenant lookup can be told which clouds to ask, with `clouds=` on `Tenant.lookup()`
-  and `lookup_clouds=` on a context. A cloud none of your tenants is in, such as China from
-  a network that cannot reach it, then costs the lookup nothing.
-
-### Changed
-
-- The tenant lookup asks the sign-in hosts all at once instead of one after another, so
-  it takes as long as the slowest answer.
-- The disk cache is written on `flush_cache()`, when an async context closes and when the
-  process exits, once for all the changes since the last write, instead of on every token
-  MSAL stores or drops. A run across hundreds of tenants wrote a file of several megabytes
-  thousands of times.
+- `login(reauthenticate=True)` makes Entra ask for the password and MFA again, cached token
+  or not.
+- Errors from Entra carry its `error`, `error_codes`, `suberror`, `correlation_id`,
+  `trace_id` and `claims` as fields.
 
 ### Fixed
 
-- A sign-in host that cannot be reached, or does not answer in time, no longer fails the
-  tenant lookup. It is skipped with a warning, and the hosts that answered decide. The
-  lookup still fails when they find nothing, since the tenant may be behind the host that
-  was skipped.
-- A process stopped while writing the disk cache no longer leaves an empty file that every
-  later run fails to decrypt (Windows). The new file is built beside the old one and renamed
-  into place.
+- `Tenant.lookup()` no longer fails when a sign-in host is unreachable or times out, the host
+  is skipped with a warning. Hosts are now queried in parallel. Added option `clouds=` on the
+  lookup or `lookup_clouds=` on a context to save unnecessary queries.
+- A process killed while writing the disk cache no longer leaves a 0-byte file (Windows). The
+  cache is written on `flush_cache()`, `await auth.aio.close()` and exit, not on every MSAL
+  change, and a 0-byte file raises `CacheFileEmpty`.
 
 ## [0.7.0] - 2026-10-22 - Sign-in check
 
