@@ -215,7 +215,12 @@ class ResourceClient:
     # ------------------------------------------------------------------ lifecycle
 
     async def login(
-        self, *, pick_account: bool = False, reauthenticate: bool = False, fresh: bool = False
+        self,
+        *,
+        pick_account: bool = False,
+        reauthenticate: bool = False,
+        consent: bool = False,
+        fresh: bool = False,
     ) -> None:
         """Sign in now instead of at the first request.
 
@@ -229,6 +234,11 @@ class ResourceClient:
                 itself. Contexts from :meth:`~azure_auth.AuthContext.get_tenant_context` then
                 carry the new sign-in's time, for a customer whose Conditional Access policy
                 found the old one too old; see :meth:`azure_auth.AuthContext.login`.
+            consent: Open the sign-in window and have Entra show its consent screen for the
+                client's scopes, even when they are consented already and a cached token or a
+                still signed-in browser could sign in by itself. An administrator sees
+                "Consent on behalf of your organization" there, for a tenant where only the
+                signed-in user has consented; see :meth:`azure_auth.AuthContext.login`.
             fresh: Ask Entra for a new token even when a usable one is cached. That proves
                 the sign-in works now, not when the cached token was issued: a Conditional
                 Access policy may have started refusing the refresh token since. A context
@@ -241,6 +251,7 @@ class ResourceClient:
             scopes=self._scopes,
             pick_account=pick_account,
             reauthenticate=reauthenticate,
+            consent=consent,
         )
         if fresh:
             await self._token(force_refresh=True)

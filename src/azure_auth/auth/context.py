@@ -591,6 +591,7 @@ class AuthContext:
         scopes: Iterable[str],
         pick_account: bool = False,
         reauthenticate: bool = False,
+        consent: bool = False,
     ) -> None:
         """Sign in now instead of at the first request.
 
@@ -611,21 +612,30 @@ class AuthContext:
                 Access policy found the old one too old. Signs in in the browser even with
                 ``broker``, which cannot be told to ask again (msal 1.39). Someone other than
                 the configured user is refused. Ignored by app flows.
+            consent: Open the sign-in window and have Entra show its consent screen for the
+                scopes, even when they are consented already and a cached token or a still
+                signed-in browser could sign in by itself (OpenID Connect ``prompt=consent``).
+                An administrator sees "Consent on behalf of your organization" there, so a
+                tenant where only the signed-in user has consented can get a tenant-wide grant.
+                Signs in in the browser even with ``broker``, which ignores the request (msal
+                1.39). Someone other than the configured user is refused. Ignored by app flows.
 
         Raises:
-            ValueError: If both ``pick_account`` and ``reauthenticate`` are set.
+            ValueError: If more than one of ``pick_account``, ``reauthenticate`` and
+                ``consent`` is set.
             InteractionRequired: If this context came from :meth:`get_tenant_context` and the
                 user must sign in.
         """
-        if pick_account and reauthenticate:
-            raise ValueError("pick_account and reauthenticate cannot both be set")
+        if pick_account + reauthenticate + consent > 1:
+            raise ValueError("Only one of pick_account, reauthenticate and consent can be set")
         self._acquire(
             scopes,
             client_id,
             None,
-            pick_account or reauthenticate,
+            pick_account or reauthenticate or consent,
             pick_account=pick_account,
             reauthenticate=reauthenticate,
+            consent=consent,
         )
 
     def flush_cache(self) -> None:
@@ -730,6 +740,7 @@ class AuthContext:
         *,
         pick_account: bool,
         reauthenticate: bool = False,
+        consent: bool = False,
         silent_only: bool = False,
     ) -> AccessTokenInfo:
         """Acquire a token under the single-flight lock for its key.
@@ -742,6 +753,8 @@ class AuthContext:
             pick_account: Show the account picker, even when a silent token is available.
             reauthenticate: Have Entra ask for the password again, even when a silent token
                 is available.
+            consent: Have Entra show its consent screen, even when a silent token is
+                available.
             silent_only: Never prompt, even where this context may: fail instead.
 
         Returns:
@@ -755,7 +768,7 @@ class AuthContext:
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
         with lock:
-            if not (claims or force_refresh or pick_account or reauthenticate):
+            if not (claims or force_refresh or pick_account or reauthenticate or consent):
                 recent = self._recent_token(scope_list, resolved)
                 if recent is not None:
                     return recent
@@ -769,6 +782,7 @@ class AuthContext:
                     force_refresh,
                     pick_account,
                     reauthenticate=reauthenticate,
+                    consent=consent,
                     silent_only=silent_only,
                 )
             info = AccessTokenInfo(
@@ -913,6 +927,7 @@ class AuthContext:
         pick_account: bool,
         *,
         reauthenticate: bool = False,
+        consent: bool = False,
         silent_only: bool = False,
     ) -> dict[str, Any]:
         """Get a user token: silently if possible, interactively if allowed.
@@ -925,16 +940,19 @@ class AuthContext:
             pick_account: Show the account picker, even when a silent token is available.
             reauthenticate: Have Entra ask for the password again, in the browser, even when
                 a silent token is available.
+            consent: Have Entra show its consent screen, in the browser, even when a silent
+                token is available.
             silent_only: Never prompt, even where this context may: fail instead.
 
         Returns:
             The successful MSAL result.
         """
-        # The broker cannot be told to ask for the password again (msal 1.39 broker.py).
-        use_broker = not reauthenticate and self._broker_usable()
+        # The broker cannot be told to ask for the password again, or to show the consent
+        # screen: it takes select_account only (msal 1.39 broker.py).
+        use_broker = not (reauthenticate or consent) and self._broker_usable()
         app = self._app(client_id, use_broker=use_broker)
         result: dict[str, Any] | None = None
-        if not (pick_account or reauthenticate):
+        if not (pick_account or reauthenticate or consent):
             accounts = self._accounts(app)
             if len(accounts) > 1:
                 raise AccountSelectionRequired(
@@ -967,8 +985,9 @@ class AuthContext:
             raise error
 
         # Entra puts up its own consent screen when an application has not been granted the
-        # scopes being asked for, so consent is handled by the ordinary sign-in and needs
-        # nothing from this package. A retry with prompt=consent was tried here and removed:
+        # scopes being asked for, so consent is handled by the ordinary sign-in; ``consent``
+        # asks for the screen again on request only. An automatic retry with prompt=consent
+        # was tried here and removed:
         # measured against a live tenant on 2026-09-20, a user who may not consent is shown
         # "Need admin approval" and leaving that page returns a bare access_denied, which no
         # retry can fix. Pressing Cancel on the consent screen returns consent_required with
@@ -982,6 +1001,7 @@ class AuthContext:
             use_broker=use_broker,
             pick_account=pick_account,
             reauthenticate=reauthenticate,
+            consent=consent,
         )
         if "access_token" not in result:
             raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
@@ -997,12 +1017,13 @@ class AuthContext:
         use_broker: bool,
         pick_account: bool = False,
         reauthenticate: bool = False,
+        consent: bool = False,
     ) -> dict[str, Any]:
         """Prompt the user, through the broker when enabled, else in the browser.
 
-        Without ``pick_account`` or ``reauthenticate`` the sign-in may still finish with nobody
-        acting: the broker answers silently for an account it holds, and a browser that is
-        still signed in completes the page by itself.
+        Without ``pick_account``, ``reauthenticate`` or ``consent`` the sign-in may still
+        finish with nobody acting: the broker answers silently for an account it holds, and a
+        browser that is still signed in completes the page by itself.
 
         Args:
             client_id: Client id of the public client application.
@@ -1012,6 +1033,7 @@ class AuthContext:
             pick_account: Show the account picker, so a person always chooses the account.
             reauthenticate: Have Entra ask for the password again, and for multi-factor
                 authentication where the tenant wants it.
+            consent: Have Entra show its consent screen for the scopes again.
 
         Returns:
             The MSAL result, successful or not.
@@ -1021,7 +1043,13 @@ class AuthContext:
         """
         # With select_account the broker skips its silent attempts and drops the login hint
         # (msal 1.39).
-        prompt = "login" if reauthenticate else "select_account" if pick_account else None
+        prompt: str | None = None
+        if consent:
+            prompt = "consent"
+        elif reauthenticate:
+            prompt = "login"
+        elif pick_account:
+            prompt = "select_account"
         if use_broker:
             broker_app = self._app(client_id, use_broker=True)
             try:
@@ -1284,6 +1312,7 @@ class AsyncAuthContext:
         scopes: Sequence[str],
         pick_account: bool = False,
         reauthenticate: bool = False,
+        consent: bool = False,
     ) -> None:
         """Sign in now; see :meth:`AuthContext.login`.
 
@@ -1293,6 +1322,8 @@ class AsyncAuthContext:
             pick_account: Show the account picker; see :meth:`AuthContext.login`.
             reauthenticate: Have Entra ask for the password again; see
                 :meth:`AuthContext.login`.
+            consent: Have Entra show its consent screen again; see
+                :meth:`AuthContext.login`.
         """
         await asyncio.to_thread(
             self._sync.login,
@@ -1300,6 +1331,7 @@ class AsyncAuthContext:
             scopes=scopes,
             pick_account=pick_account,
             reauthenticate=reauthenticate,
+            consent=consent,
         )
 
     async def flush_cache(self) -> None:

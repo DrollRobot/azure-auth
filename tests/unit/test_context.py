@@ -290,18 +290,41 @@ def test_reauthenticating_always_asks_for_the_password_again(fake_msal: FakeMsal
     assert fake_msal.calls[0].kwargs["prompt"] == "login"
 
 
-def test_pick_account_and_reauthenticate_cannot_both_be_set(fake_msal: FakeMsal) -> None:
-    with pytest.raises(ValueError, match="cannot both be set"):
-        user_context().login(client_id="app", scopes=["a"], pick_account=True, reauthenticate=True)
+def test_asking_for_consent_always_shows_the_consent_screen(fake_msal: FakeMsal) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: token_result()
+
+    user_context().login(client_id=GRAPH_CLI_CLIENT_ID, scopes=["User.Read"], consent=True)
+
+    assert fake_msal.methods() == ["interactive"]
+    # Entra would otherwise skip the screen for scopes the user has consented to already.
+    assert fake_msal.calls[0].kwargs["prompt"] == "consent"
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        {"pick_account": True, "reauthenticate": True},
+        {"pick_account": True, "consent": True},
+        {"reauthenticate": True, "consent": True},
+    ],
+    ids=lambda flags: "+".join(flags),
+)
+def test_only_one_way_of_forcing_the_window_can_be_set(
+    fake_msal: FakeMsal, flags: dict[str, bool]
+) -> None:
+    with pytest.raises(ValueError, match="Only one of"):
+        user_context().login(client_id="app", scopes=["a"], **flags)
 
     assert fake_msal.calls == []
 
 
-def test_a_customer_context_never_prompts_even_to_reauthenticate(fake_msal: FakeMsal) -> None:
+@pytest.mark.parametrize("flag", ["reauthenticate", "consent"])
+def test_a_customer_context_never_prompts_even_when_told_to(fake_msal: FakeMsal, flag: str) -> None:
     customer = user_context().get_tenant_context("customer")
 
     with pytest.raises(InteractionRequired):
-        customer.login(client_id="app", scopes=["a"], reauthenticate=True)
+        customer.login(client_id="app", scopes=["a"], **{flag: True})
 
     assert "interactive" not in fake_msal.methods()
 
@@ -799,6 +822,20 @@ def test_reauthenticating_with_the_broker_signs_in_in_the_browser(
     ]
 
 
+def test_asking_for_consent_with_the_broker_signs_in_in_the_browser(
+    fake_msal: FakeMsal, broker_installed: None
+) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: token_result()
+
+    user_context(broker=True).login(client_id="app", scopes=["a"], consent=True)
+
+    # The broker ignores every prompt but select_account, and would skip the consent screen.
+    assert [(c.method, c.app.broker, c.kwargs["prompt"]) for c in fake_msal.calls] == [
+        ("interactive", False, "consent")
+    ]
+
+
 def test_signing_in_as_someone_else_through_the_broker_is_rejected(
     fake_msal: FakeMsal, broker_installed: None
 ) -> None:
@@ -1182,6 +1219,15 @@ def test_a_chosen_browser_is_told_to_ask_for_the_password_again(
 
     (flow,) = (call for call in fake_msal.calls if call.method == "initiate_auth_code_flow")
     assert flow.kwargs["prompt"] == "login"
+
+
+def test_a_chosen_browser_is_told_to_show_the_consent_screen(
+    fake_msal: FakeMsal, fake_receiver: FakeReceiver
+) -> None:
+    user_context(browser="msedge").login(client_id="app", scopes=[ARM_SCOPE], consent=True)
+
+    (flow,) = (call for call in fake_msal.calls if call.method == "initiate_auth_code_flow")
+    assert flow.kwargs["prompt"] == "consent"
 
 
 def test_an_unanswered_sign_in_in_a_chosen_browser_is_reported_not_hung(

@@ -162,12 +162,18 @@ class GraphClient(ResourceClient):
         return self._grant_when_possible
 
     async def login(
-        self, *, pick_account: bool = False, reauthenticate: bool = False, fresh: bool = False
+        self,
+        *,
+        pick_account: bool = False,
+        reauthenticate: bool = False,
+        consent: bool = False,
+        fresh: bool = False,
     ) -> None:
         """Sign in now instead of at the first request.
 
-        Without ``pick_account`` or ``reauthenticate`` this is the first request's token, so
-        the check of what the tenant has granted (see :meth:`granted_scopes`) runs here too.
+        Without ``pick_account``, ``reauthenticate`` or ``consent`` this is the first request's
+        token, so the check of what the tenant has granted (see :meth:`granted_scopes`) runs
+        here too.
 
         Args:
             pick_account: Show the account picker, even when a cached token or account
@@ -175,12 +181,17 @@ class GraphClient(ResourceClient):
                 the configured user is refused.
             reauthenticate: Have Entra ask for the password again; see
                 :meth:`ResourceClient.login`.
+            consent: Have Entra show its consent screen for the scopes again; see
+                :meth:`ResourceClient.login`.
             fresh: After the sign-in and the check, ask Entra for a new token even when a
                 usable one is cached; see :meth:`ResourceClient.login`.
         """
-        if pick_account or reauthenticate:
+        if pick_account or reauthenticate or consent:
             await super().login(
-                pick_account=pick_account, reauthenticate=reauthenticate, fresh=fresh
+                pick_account=pick_account,
+                reauthenticate=reauthenticate,
+                consent=consent,
+                fresh=fresh,
             )
             return
         await self._token()

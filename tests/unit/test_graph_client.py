@@ -129,6 +129,19 @@ async def test_reauthenticating_skips_the_consent_check_and_asks_again(
     ]
 
 
+async def test_asking_for_consent_skips_the_check_and_shows_the_consent_screen(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    scripted(fake_msal, held=("User.Read.All",))
+
+    await GraphClient(auth, scopes=["User.Read.All"]).login(consent=True)
+
+    # The scopes are granted, so only prompt=consent gets Entra to show the screen again.
+    assert [(c.method, c.scopes, c.kwargs.get("prompt")) for c in fake_msal.calls] == [
+        ("interactive", [USERS], "consent")
+    ]
+
+
 # ---------------------------------------------------------------------------- clouds
 
 

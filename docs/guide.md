@@ -41,6 +41,13 @@ for a customer whose Conditional Access policy finds the old one too old (AADSTS
 AADSTS70043). It signs in in the browser even with `broker=True`, because the broker cannot
 be told to ask again.
 
+Pass `consent=True` to have Entra show its consent screen for the client's scopes again, even
+when they are consented already and a token is cached or the browser is still signed in. An
+administrator sees "Consent on behalf of your organization" there. Use it for a tenant where
+only the signed-in user has consented, so the scopes are granted tenant-wide and a sign-in
+from another tenant through `get_tenant_context()` can use them. The broker ignores the
+request, so it signs in in the browser even with `broker=True`.
+
 Pass `fresh=True` to ask Entra for a new token even when a usable one is cached. That proves
 the sign-in works now, not when the cached token was issued: a Conditional Access policy may
 have started refusing the refresh token since. A context that may prompt opens the window if
