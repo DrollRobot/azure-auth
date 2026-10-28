@@ -1222,4 +1222,3 @@ def _restore_consent(cache_path: Path, *, may_remove: Callable[[], bool]) -> Non
         for scope in sorted(stripped.removed):
             waited = _run(_wait_until_refused(auth, scope))
             print(f"  took {scope} out of the grants; Entra refused it after {waited:.0f}s")
-    print(f"consent baseline: exactly {' '.join(sorted(BASELINE_SCOPES))}")
