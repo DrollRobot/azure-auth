@@ -7,10 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-28 - Consent on request
+
 ### Added
 
-- `login(consent=True)` makes Entra show its consent screen again, cached token or not, so an
-  administrator can consent on behalf of the organization where only their own consent exists.
+- `login(consent=True)` makes Entra show its consent screen again, cached token or not.
 
 ## [0.8.0] - 2026-10-26 - Resilient tenant lookup
 
