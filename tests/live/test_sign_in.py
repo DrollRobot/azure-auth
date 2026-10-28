@@ -178,20 +178,24 @@ async def test_reauthenticating_asks_for_the_password_again() -> None:
 
 
 @needs_user
+@needs_graph
 @pytest.mark.interactive
 async def test_asking_for_consent_shows_the_consent_screen_again() -> None:
     """``login(consent=True)`` opens the window and Entra shows its consent screen again.
 
-    The scopes are consented already, so without ``prompt=consent`` a still signed-in browser
-    would finish the page by itself. That the screen is shown is for the person to see; the
-    test checks that Entra takes the request and a token for the configured user comes back.
-    Azure PowerShell and a memory cache of its own, as in the reauthenticating test.
+    The scope is consented already (``User.Read`` is in the baseline), so without
+    ``prompt=consent`` a still signed-in browser would finish the page by itself. That the
+    screen is shown is for the person to see; the test checks that Entra takes the request and
+    a token for the configured user comes back. Microsoft Graph Command Line Tools and a
+    memory cache of its own: Azure PowerShell will not do, because Entra refuses
+    ``prompt=consent`` for a first-party application and a first-party resource it has
+    preauthorized, with AADSTS65002 (seen 2026-10-28), and shows no consent screen for them.
     """
     walkthrough(sign_in_step("browser"), "Consent screen: click Accept.")
     auth = AuthContext(
         TENANT, username=USERNAME, browser=SIGN_IN_BROWSER, browser_timeout=SIGN_IN_TIMEOUT_SECONDS
     )
-    async with ArmClient(auth) as client:
+    async with GraphClient(auth, scopes=["User.Read"]) as client:
         await client.login(consent=True)
         token = await auth.aio.acquire_token(client.scopes, client_id=client.client_id)
 
