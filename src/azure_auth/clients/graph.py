@@ -183,8 +183,8 @@ class GraphClient(ResourceClient):
                 :meth:`ResourceClient.login`.
             consent: Have Entra show its consent screen for the scopes again; see
                 :meth:`ResourceClient.login`.
-            fresh: After the sign-in and the check, ask Entra for a new token even when a
-                usable one is cached; see :meth:`ResourceClient.login`.
+            fresh: After the sign-in and the check, ask Entra for a new token when a cached
+                one answered; see :meth:`ResourceClient.login`.
         """
         if pick_account or reauthenticate or consent:
             await super().login(
@@ -195,7 +195,7 @@ class GraphClient(ResourceClient):
             )
             return
         await self._token()
-        if fresh:
+        if fresh and not self._auth._issued_by_entra(self._scopes, self._client_id):
             await self._token(force_refresh=True)
 
     async def granted_scopes(self) -> frozenset[str]:

@@ -239,10 +239,13 @@ class ResourceClient:
                 still signed-in browser could sign in by itself. An administrator sees
                 "Consent on behalf of your organization" there, for a tenant where only the
                 signed-in user has consented; see :meth:`azure_auth.AuthContext.login`.
-            fresh: Ask Entra for a new token even when a usable one is cached. That proves
-                the sign-in works now, not when the cached token was issued: a Conditional
-                Access policy may have started refusing the refresh token since. A context
-                that may prompt opens the sign-in window if Entra refuses; one from
+            fresh: Ask Entra for a new token when a cached one answered the sign-in. That
+                proves the sign-in works now, not when the cached token was issued: a
+                Conditional Access policy may have started refusing the refresh token
+                since. A token Entra issued in this sign-in, through the window or the
+                refresh token, is that proof already and is not asked for again: Entra can
+                refuse a refresh for a second or two after a consent it has just taken. A
+                context that may prompt opens the sign-in window if Entra refuses; one from
                 :meth:`~azure_auth.AuthContext.get_tenant_context` raises the refusal. For
                 checking sign-ins ahead of the work, when the token is used later.
         """
@@ -253,7 +256,7 @@ class ResourceClient:
             reauthenticate=reauthenticate,
             consent=consent,
         )
-        if fresh:
+        if fresh and not self._auth._issued_by_entra(self._scopes, self._client_id):
             await self._token(force_refresh=True)
 
     async def aclose(self) -> None:

@@ -11,7 +11,7 @@ from azure_auth import AuthContext
 from azure_auth._sync import ArmClient, ArmError
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
-from tests.fakes import FakeLookup, FakeMsal, token_result
+from tests.fakes import IDP, FakeLookup, FakeMsal, error_result, token_result
 from tests.http import Recorder, ok
 
 pytestmark = pytest.mark.unit
@@ -233,6 +233,50 @@ def test_fresh_login_asks_entra_even_with_a_cached_token(
     # The sign-in as before, then the token again, from Entra rather than the cache.
     assert fake_msal.methods() == ["silent", "silent"]
     assert [bool(call.kwargs.get("force_refresh")) for call in fake_msal.calls] == [False, True]
+
+
+def test_fresh_login_trusts_a_token_the_refresh_token_just_got(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    fake_msal.accounts = [{"username": "admin@contoso.com", "home_account_id": "uid.utid"}]
+    fake_msal.silent = lambda call: token_result(token_source=IDP)
+
+    ArmClient(auth).login(fresh=True)
+
+    # Entra issued the token in this sign-in, which is the proof fresh is after.
+    assert fake_msal.methods() == ["silent"]
+
+
+def test_fresh_login_asks_entra_again_for_a_token_it_issued_earlier(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    fake_msal.accounts = [{"username": "admin@contoso.com", "home_account_id": "uid.utid"}]
+    fake_msal.silent = lambda call: token_result(token_source=IDP)
+    arm = ArmClient(auth)
+
+    arm.login()
+    arm.login(fresh=True)
+
+    # The second sign-in was answered from the context's memory, so Entra is asked again.
+    assert fake_msal.methods() == ["silent", "silent"]
+    assert [bool(call.kwargs.get("force_refresh")) for call in fake_msal.calls] == [False, True]
+
+
+@pytest.mark.regression
+def test_a_sign_in_that_just_consented_is_not_asked_to_consent_again(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    # Entra refuses the refresh token for a second or two after taking a consent (measured
+    # 2026-10-28). A new token asked for right after the sign-in window would open a second
+    # window with the same consent screen.
+    fake_msal.accounts = [{"username": "admin@contoso.com", "home_account_id": "uid.utid"}]
+    fake_msal.silent = lambda call: error_result(
+        "invalid_grant", "AADSTS65001", suberror="consent_required", error_codes=[65001]
+    )
+
+    ArmClient(auth).login(fresh=True)
+
+    assert fake_msal.methods() == ["silent", "interactive"]
 
 
 def test_reauthenticating_asks_for_the_password_even_with_a_cached_token(

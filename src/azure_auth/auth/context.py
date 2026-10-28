@@ -74,6 +74,10 @@ _DEFAULT_BROWSER_TIMEOUT_SECONDS = 120
 
 _TokenKey = tuple[str, frozenset[str]]
 
+# MSAL's ``token_source`` for a token Entra issued in that request, through a sign-in or the
+# refresh token; the others are its cache and the Windows broker, which has a cache of its own.
+_SOURCE_ENTRA = "identity_provider"
+
 # The broker's status for a person who closed its sign-in window (seen live 2026-09-29).
 _BROKER_CANCELLED_STATUS = "Status_UserCanceled"
 
@@ -388,6 +392,8 @@ class AuthContext:
         self._apps: dict[tuple[str, bool], Any] = {}
         self._locks: dict[_TokenKey, threading.Lock] = {}
         self._recent_tokens: dict[_TokenKey, AccessTokenInfo] = {}
+        # Whether the token last returned for a key came from Entra, or from a cache.
+        self._from_entra: dict[_TokenKey, bool] = {}
         self._tenant_contexts: dict[str, AuthContext] = {}
         self._lookups: dict[str, Tenant] = {}
         self._guard = threading.Lock()
@@ -712,11 +718,24 @@ class AuthContext:
             raise ValueError("App flows need a client_id; first-party client ids cannot be used")
         return AZURE_POWERSHELL_CLIENT_ID
 
+    def _token_key(self, scopes: Iterable[str], client_id: str | None) -> _TokenKey:
+        """Return the key a token request is remembered under.
+
+        Args:
+            scopes: Scopes the token is requested for.
+            client_id: Client id the token is requested with.
+
+        Returns:
+            The resolved client id and the set of scopes.
+        """
+        return (self.resolve_client_id(client_id), frozenset(scopes))
+
     def _recent_token(self, scopes: Iterable[str], client_id: str | None) -> AccessTokenInfo | None:
         """Return a still-fresh token this context fetched recently, without locking.
 
         These tokens are kept in this context's memory, in front of the MSAL token cache,
-        so a fresh token is returned without asking MSAL.
+        so a fresh token is returned without asking MSAL. A caller that returns it notes
+        that the cache answered (:meth:`_issued_by_entra`).
 
         Args:
             scopes: Scopes the token was requested for.
@@ -725,11 +744,29 @@ class AuthContext:
         Returns:
             The token, or ``None`` when there is none or it is close to expiry.
         """
-        key = (self.resolve_client_id(client_id), frozenset(scopes))
-        info = self._recent_tokens.get(key)
+        info = self._recent_tokens.get(self._token_key(scopes, client_id))
         if info is not None and info.expires_on - time.time() > _REFRESH_MARGIN_SECONDS:
             return info
         return None
+
+    def _issued_by_entra(self, scopes: Iterable[str], client_id: str | None) -> bool:
+        """Say whether the token last returned for ``scopes`` came from Entra.
+
+        MSAL reports where each token came from (``token_source``): Entra itself, through a
+        sign-in or the refresh token, or a cache. A token this context returned from its
+        own memory counts as cached too. A token Entra just issued proves the sign-in works
+        now; only a cached one needs that proved separately (``login(fresh=True)`` on a
+        client).
+
+        Args:
+            scopes: Scopes the token was requested for.
+            client_id: Client id the token was requested with.
+
+        Returns:
+            ``True`` when Entra issued the token in the last request for it; ``False`` when
+            a cache answered, or nothing was requested yet.
+        """
+        return self._from_entra.get(self._token_key(scopes, client_id), False)
 
     def _acquire(
         self,
@@ -764,13 +801,14 @@ class AuthContext:
         if not scope_list:
             raise ValueError("At least one scope is required")
         resolved = self.resolve_client_id(client_id)
-        key: _TokenKey = (resolved, frozenset(scope_list))
+        key = self._token_key(scope_list, resolved)
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
         with lock:
             if not (claims or force_refresh or pick_account or reauthenticate or consent):
                 recent = self._recent_token(scope_list, resolved)
                 if recent is not None:
+                    self._from_entra[key] = False
                     return recent
             if self.is_app_flow:
                 result = self._acquire_for_app(resolved, scope_list, claims, force_refresh)
@@ -791,6 +829,7 @@ class AuthContext:
                 token_type=str(result.get("token_type", "Bearer")),
             )
             self._recent_tokens[key] = info
+            self._from_entra[key] = result.get("token_source") == _SOURCE_ENTRA
             return info
 
     def _app(self, client_id: str, *, use_broker: bool = False) -> Any:
@@ -1268,6 +1307,7 @@ class AsyncAuthContext:
         if not (claims or force_refresh):
             recent = self._sync._recent_token(scopes, client_id)
             if recent is not None:
+                self._sync._from_entra[self._sync._token_key(scopes, client_id)] = False
                 return recent
         return await asyncio.to_thread(
             self._sync.acquire_token,
@@ -1297,6 +1337,7 @@ class AsyncAuthContext:
         if not force_refresh:
             recent = self._sync._recent_token(scopes, client_id)
             if recent is not None:
+                self._sync._from_entra[self._sync._token_key(scopes, client_id)] = False
                 return recent
         return await asyncio.to_thread(
             self._sync.acquire_token_silently,

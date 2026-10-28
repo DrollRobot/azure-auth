@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `login(fresh=True)` no longer asks Entra for a second token when the sign-in itself got one
+  from Entra. Entra can refuse a refresh for a second or two after taking a consent, and the
+  refusal opened a second window with the same consent screen.
+
 ## [0.9.0] - 2026-10-28 - Consent on request
 
 ### Added

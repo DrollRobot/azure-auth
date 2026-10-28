@@ -1029,6 +1029,27 @@ async def test_fresh_login_asks_entra_even_with_a_cached_token(
     ]
 
 
+@pytest.mark.regression
+async def test_a_sign_in_that_just_consented_is_not_asked_to_consent_again(
+    auth: AuthContext, fake_msal: FakeMsal
+) -> None:
+    # Entra refuses the refresh token for a second or two after taking a consent (measured
+    # 2026-10-28). A new token asked for right after the sign-in window would open a second
+    # window with the same consent screen.
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = lambda call: consent_error()
+
+    await GraphClient(auth, scopes=["User.Read.All"]).login(fresh=True)
+
+    # The consent check finds nothing granted, the sign-in window consents, and that is all.
+    assert [(c.method, c.scopes) for c in fake_msal.calls] == [
+        ("silent", [DEFAULT_SCOPE]),
+        ("silent", [DEFAULT_SCOPE]),
+        ("silent", [USERS]),
+        ("interactive", [USERS]),
+    ]
+
+
 async def test_fresh_login_opens_the_browser_when_entra_refuses_the_refresh(
     auth: AuthContext, fake_msal: FakeMsal
 ) -> None:

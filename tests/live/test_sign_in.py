@@ -8,6 +8,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -41,6 +42,7 @@ from tests.live.support import (
     needs_user,
     sign_in_step,
     token_claims,
+    token_scopes,
     token_user,
     walkthrough,
 )
@@ -195,6 +197,48 @@ async def test_asking_for_consent_shows_the_consent_screen_again() -> None:
 
     assert is_test_user(token_user(token.token))
     assert token_claims(token.token)["aud"] == client.resource
+
+
+@needs_user
+@needs_graph
+@pytest.mark.interactive
+@pytest.mark.regression
+async def test_a_sign_in_that_just_consented_is_not_asked_to_consent_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``login(fresh=True)`` on a sign-in that consented in the window opens no second window.
+
+    The baseline does not grant ``CANCEL_SCOPE``, so the window stops at the consent screen,
+    and Accept grants it to this user. Entra refuses the refresh token for a second or two
+    after taking a consent (seen 2026-10-28: AADSTS65001 on the forced refresh right after
+    the window, and the same consent screen in a second window). The token from the window
+    is Entra's own, so ``fresh`` asks for no other. Counted at ``AuthContext._interactive``,
+    where every window opens.
+
+    Memory cache of its own, so nothing here touches the cache the other live tests share.
+    The grant is taken out again after the test.
+    """
+    windows = 0
+    interactive = AuthContext._interactive
+
+    def counted(self: AuthContext, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal windows
+        windows += 1
+        return interactive(self, *args, **kwargs)
+
+    monkeypatch.setattr(AuthContext, "_interactive", counted)
+
+    walkthrough(sign_in_step("browser"), "Consent screen: click Accept.")
+    auth = AuthContext(
+        TENANT, username=USERNAME, browser=SIGN_IN_BROWSER, browser_timeout=SIGN_IN_TIMEOUT_SECONDS
+    )
+    async with GraphClient(auth, scopes=[CANCEL_SCOPE]) as graph:
+        await graph.login(fresh=True)
+        token = await auth.aio.acquire_token(graph.scopes, client_id=graph.client_id)
+
+    assert windows == 1, f"{windows} sign-in windows opened; the consent screen was shown again"
+    assert is_test_user(token_user(token.token))
+    assert CANCEL_SCOPE in token_scopes(token.token)
 
 
 # The two ways a person signs in.

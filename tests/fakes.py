@@ -22,10 +22,26 @@ from azure_auth.clouds import COMMERCIAL, Cloud
 
 Result = dict[str, Any]
 
+# MSAL's ``token_source`` for a token Entra issued in that request.
+IDP = "identity_provider"
+
 
 def token_result(token: str = "token", expires_in: int = 3600, **extra: Any) -> Result:
-    """Build a successful MSAL-style result."""
+    """Build a successful MSAL-style result.
+
+    MSAL says where a token came from in ``token_source``: pass it to script a silent
+    request that Entra answered through the refresh token (``"identity_provider"``). The
+    fake application fills it in otherwise, as MSAL would: a silent request from the
+    cache, a sign-in from Entra.
+    """
     return {"access_token": token, "expires_in": expires_in, "token_type": "Bearer", **extra}
+
+
+def _from(result: Result | None, source: str) -> Result | None:
+    """Fill in ``token_source`` on a successful result that does not say, as MSAL does."""
+    if result and "access_token" in result:
+        return {"token_source": source, **result}
+    return result
 
 
 def error_result(error: str, description: str = "", **extra: Any) -> Result:
@@ -110,12 +126,15 @@ class FakeApp:
     def acquire_token_silent_with_error(
         self, scopes: list[str], account: dict[str, Any], **kwargs: Any
     ) -> Result | None:
-        """Run the scripted silent behaviour."""
-        return self.module.silent(self._record("silent", scopes, {"account": account, **kwargs}))
+        """Run the scripted silent behaviour; its token comes from the cache unless scripted."""
+        call = self._record("silent", scopes, {"account": account, **kwargs})
+        return _from(self.module.silent(call), "cache")
 
     def acquire_token_interactive(self, scopes: list[str], **kwargs: Any) -> Result:
-        """Run the scripted interactive behaviour."""
-        return self.module.interactive(self._record("interactive", scopes, kwargs))
+        """Run the scripted interactive behaviour; its token comes from Entra."""
+        result = _from(self.module.interactive(self._record("interactive", scopes, kwargs)), IDP)
+        assert result is not None
+        return result
 
     def initiate_auth_code_flow(self, scopes: list[str], **kwargs: Any) -> dict[str, Any]:
         """Record the start of an auth code flow and return a flow for it."""
@@ -131,11 +150,16 @@ class FakeApp:
             kwargs.pop("scopes", []),
             {"auth_code_flow": auth_code_flow, "auth_response": auth_response, **kwargs},
         )
-        return self.module.interactive(call)
+        result = _from(self.module.interactive(call), IDP)
+        assert result is not None
+        return result
 
     def acquire_token_for_client(self, scopes: list[str], **kwargs: Any) -> Result:
-        """Run the scripted client credentials behaviour."""
-        return self.module.for_client(self._record("for_client", scopes, kwargs))
+        """Run the scripted client credentials behaviour; its token is cached unless scripted."""
+        call = self._record("for_client", scopes, kwargs)
+        result = _from(self.module.for_client(call), "cache")
+        assert result is not None
+        return result
 
     def remove_tokens_for_client(self) -> None:
         """Count cache purges."""
