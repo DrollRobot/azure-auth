@@ -458,6 +458,7 @@ AuthError(error, error_codes, suberror, correlation_id, trace_id, claims)
 ├── AccountSelectionRequired
 ├── CertificateUnavailable
 ├── CacheEncryptionUnavailable
+├── CacheFileEmpty(path)
 ├── BrokerUnavailable
 ├── TenantNotFound(tenant)
 └── AmbiguousTenant(tenant, candidates)
