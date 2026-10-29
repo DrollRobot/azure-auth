@@ -48,12 +48,14 @@ only the signed-in user has consented, so the scopes are granted tenant-wide and
 from another tenant through `get_tenant_context()` can use them. The broker ignores the
 request, so it signs in in the browser even with `broker=True`.
 
-Pass `fresh=True` to ask Entra for a new token even when a usable one is cached. That proves
-the sign-in works now, not when the cached token was issued: a Conditional Access policy may
-have started refusing the refresh token since. A context that may prompt opens the window if
-Entra refuses; one from `get_tenant_context()` raises the refusal. Use it when checking
-sign-ins ahead of the work, where a cached token that cannot be renewed would fail later,
-after the moment for a prompt has passed.
+Pass `fresh=True` to ask Entra for a new token when a cached one answered the sign-in. That
+proves the sign-in works now, not when the cached token was issued: a Conditional Access
+policy may have started refusing the refresh token since. A token Entra issued in the sign-in
+itself, through the window or the refresh token, is that proof already and is not asked for
+again. A context that may prompt opens the window if Entra refuses; one from
+`get_tenant_context()` raises the refusal. Use it when checking sign-ins ahead of the work,
+where a cached token that cannot be renewed would fail later, after the moment for a prompt
+has passed.
 
 `username` selects the cached account and pre-fills the sign-in page. If somebody else signs
 in, the context raises `AuthError`, because their tokens would never be found again.
