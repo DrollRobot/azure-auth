@@ -7,13 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-29 - httpx2 and own exceptions
+
 ### Changed
 
-- **Breaking:** `httpx` is replaced by `httpx2`; a `transport=` must be an `httpx2` transport.
-  TLS certificates are checked against the operating system's trust store.
-- **Breaking:** network failures raise `NetworkError` and Key Vault errors raise
-  `KeyVaultError`, in place of `httpx2`, `requests` and Azure SDK exceptions.
-  `Tenant.lookup()` raises `NetworkError` for an unreachable host it needed.
+- **Breaking:** `httpx2` replaces `httpx`; `transport=` takes an `httpx2` transport. TLS is
+  checked against the OS trust store.
+- **Breaking:** Network failures raise `NetworkError` and Key Vault errors `KeyVaultError`,
+  never `httpx2`, `requests` or Azure SDK exceptions.
 
 ## [0.9.1] - 2026-10-28 - Single consent screen
 
@@ -182,7 +183,8 @@ Also included, but not yet verified: application sign-in with a secret or certif
 Windows broker, clients for Azure Resource Manager, Exchange Online, Security & Compliance
 and Key Vault, blocking versions of every client, and GDAP access to managed tenants.
 
-[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/DrollRobot/azure-auth/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/DrollRobot/azure-auth/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/DrollRobot/azure-auth/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/DrollRobot/azure-auth/compare/v0.7.0...v0.8.0
