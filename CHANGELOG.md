@@ -7,11 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-28 - Single consent screen
+
 ### Fixed
 
-- `login(fresh=True)` no longer asks Entra for a second token when the sign-in itself got one
-  from Entra. Entra can refuse a refresh for a second or two after taking a consent, and the
-  refusal opened a second window with the same consent screen.
+- `login(fresh=True)` no longer shows the consent screen a second time.
 
 ## [0.9.0] - 2026-10-28 - Consent on request
 
@@ -174,7 +174,10 @@ Also included, but not yet verified: application sign-in with a secret or certif
 Windows broker, clients for Azure Resource Manager, Exchange Online, Security & Compliance
 and Key Vault, blocking versions of every client, and GDAP access to managed tenants.
 
-[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/DrollRobot/azure-auth/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/DrollRobot/azure-auth/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/DrollRobot/azure-auth/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/DrollRobot/azure-auth/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/DrollRobot/azure-auth/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/DrollRobot/azure-auth/compare/v0.5.1...v0.6.0
