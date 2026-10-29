@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext
@@ -64,7 +64,7 @@ def test_requests_go_to_the_resource_manager_of_the_contexts_cloud(
 
     ArmClient(auth, transport=recorder.transport).get(GROUP, api_version="2021-04-01")
 
-    assert recorder.requests[0].url.host == httpx.URL(cloud.arm).host
+    assert recorder.requests[0].url.host == httpx2.URL(cloud.arm).host
     assert fake_msal.calls[0].scopes == [f"{cloud.arm}/.default"]
     assert fake_msal.apps[0].client_id == AZURE_POWERSHELL_CLIENT_ID
 
@@ -210,7 +210,7 @@ def test_wait_times_out(auth: AuthContext, sleeps: list[float]) -> None:
 
 def test_operation_url_on_another_host_is_refused(auth: AuthContext, sleeps: list[float]) -> None:
     recorder = Recorder(
-        [httpx.Response(202, headers={"Azure-AsyncOperation": "https://evil.example/op"})]
+        [httpx2.Response(202, headers={"Azure-AsyncOperation": "https://evil.example/op"})]
     )
     arm = ArmClient(auth, transport=recorder.transport)
 

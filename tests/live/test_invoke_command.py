@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext, ExchangeClient, InvokeCommandError, IppsClient
@@ -160,7 +160,7 @@ async def test_cmdlet_failures_carry_the_cmdlets_own_reason(user_auth: AuthConte
     ``error.details``; the client puts that reason first, after the cmdlet's name.
 
     An unknown cmdlet is stranger: a 403 whose body is NUL bytes, declared ``gzip`` and not
-    gzip at all. Until the client read bodies itself, that surfaced as an ``httpx``
+    gzip at all. Until the client read bodies itself, that surfaced as an ``httpx2``
     decoding error and the 403 was lost. Now it is an error like the others, with a message
     that says what the empty answer means.
     """
@@ -264,9 +264,9 @@ async def test_ipps_runs_a_cmdlet_through_the_regional_host(user_auth: AuthConte
             await ipps.run("Get-NoSuchCmdlet")
 
     assert isinstance(labels, list)
-    host = httpx.URL(ipps.base_url).host
+    host = httpx2.URL(ipps.base_url).host
     assert host != user_auth.tenant.cloud.ipps_host
-    domain = httpx.URL(ipps.resource).host
+    domain = httpx2.URL(ipps.resource).host
     assert host.endswith(f".{domain}"), f"no regional host was taken: {host}"
     error = unknown.value
     assert (error.status, error.code) == (403, "Forbidden")
@@ -294,7 +294,7 @@ def test_the_blocking_ipps_client_runs_a_cmdlet(cache_path: Path) -> None:
         ensure_sign_in(ipps)
         labels = ipps.run("Get-Label")
     assert isinstance(labels, list)
-    assert httpx.URL(ipps.base_url).host.endswith(f".{httpx.URL(ipps.resource).host}")
+    assert httpx2.URL(ipps.base_url).host.endswith(f".{httpx2.URL(ipps.resource).host}")
 
 
 # Exchange's directory is replicated, and a request may land on any domain controller. An

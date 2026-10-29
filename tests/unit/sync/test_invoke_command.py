@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext, Tenant
@@ -193,12 +193,12 @@ def test_an_unknown_cmdlet_is_an_error_and_not_a_decoding_failure(
     auth: AuthContext,
 ) -> None:
     # What Exchange answers an unknown cmdlet with (measured 2026-09-25): 403, a body of NUL
-    # bytes, and a Content-Encoding it does not honour. httpx cannot decode that.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    # bytes, and a Content-Encoding it does not honour. httpx2 cannot decode that.
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             403,
             headers={"Content-Encoding": "gzip", "request-id": "req-1"},
-            stream=httpx.ByteStream(b"\x00" * 8),
+            stream=httpx2.ByteStream(b"\x00" * 8),
         )
 
     exchange = ExchangeClient(auth, transport=Recorder(handler).transport)
@@ -215,7 +215,7 @@ def test_an_unknown_cmdlet_is_an_error_and_not_a_decoding_failure(
 
 def test_a_blank_403_body_is_explained(auth: AuthContext) -> None:
     exchange = ExchangeClient(
-        auth, transport=Recorder([httpx.Response(403, content=b"\x00\x00")]).transport
+        auth, transport=Recorder([httpx2.Response(403, content=b"\x00\x00")]).transport
     )
 
     with pytest.raises(InvokeCommandError, match="cmdlet it does not know") as caught:
@@ -228,9 +228,9 @@ def test_a_blank_403_body_is_explained(auth: AuthContext) -> None:
 
 def test_an_undecodable_success_is_still_an_error(auth: AuthContext) -> None:
     # A 200 whose body cannot be decoded is not a result; the caller must hear about it.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, headers={"Content-Encoding": "gzip"}, stream=httpx.ByteStream(b"not gzip")
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200, headers={"Content-Encoding": "gzip"}, stream=httpx2.ByteStream(b"not gzip")
         )
 
     exchange = ExchangeClient(auth, transport=Recorder(handler).transport)
@@ -291,9 +291,9 @@ def test_ipps_follows_the_regional_redirect_with_its_token(
 ) -> None:
     regional = f"https://nam12b.{IPPS_HOST}"
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.host == IPPS_HOST:
-            return httpx.Response(302, headers={"Location": f"{regional}/adminapi/beta/x"})
+            return httpx2.Response(302, headers={"Location": f"{regional}/adminapi/beta/x"})
         return ok({"value": [{"Name": "label"}]})
 
     recorder = Recorder(handler)
@@ -349,7 +349,7 @@ def test_ipps_app_flow_given_a_guid_asks_exchange_for_the_domain_once(
 def test_ipps_ignores_a_redirect_to_a_foreign_host_name(auth: AuthContext) -> None:
     recorder = Recorder(
         lambda request: (
-            httpx.Response(302, headers={"Location": "https://evil.example/adminapi"})
+            httpx2.Response(302, headers={"Location": "https://evil.example/adminapi"})
             if request.url.host == IPPS_HOST
             else ok({"value": ["regional"]})
         )
@@ -365,7 +365,7 @@ def test_ipps_ignores_a_redirect_to_a_foreign_host_name(auth: AuthContext) -> No
 @pytest.mark.parametrize("location", ["/adminapi/elsewhere", f"https://nam12b.{IPPS_HOST}/x"])
 def test_redirect_that_cannot_be_followed_is_an_error(auth: AuthContext, location: str) -> None:
     # Every host keeps redirecting, so even the regional retry ends in a redirect.
-    recorder = Recorder(lambda request: httpx.Response(302, headers={"Location": location}))
+    recorder = Recorder(lambda request: httpx2.Response(302, headers={"Location": location}))
     ipps = IppsClient(auth, transport=recorder.transport)
 
     with pytest.raises(InvokeCommandError) as caught:
@@ -407,16 +407,16 @@ def test_ipps_follows_the_contexts_cloud(fake_msal: FakeMsal, cloud: Cloud) -> N
 
     ipps.run("Get-Label")
 
-    assert recorder.requests[0].url.host == cloud.ipps_host == httpx.URL(cloud.ipps).host
+    assert recorder.requests[0].url.host == cloud.ipps_host == httpx2.URL(cloud.ipps).host
     assert fake_msal.calls[0].scopes == [f"{cloud.ipps}/.default"]
 
 
 def test_dod_ipps_starts_at_l5_with_a_token_for_the_bare_host(fake_msal: FakeMsal) -> None:
     domain = "ps.compliance.protection.office365.us"
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.host == f"l5.{domain}":
-            return httpx.Response(302, headers={"Location": f"https://gov01.{domain}/adminapi"})
+            return httpx2.Response(302, headers={"Location": f"https://gov01.{domain}/adminapi"})
         return ok({"value": [{"Name": "label"}]})
 
     recorder = Recorder(handler)

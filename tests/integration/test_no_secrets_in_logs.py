@@ -1,4 +1,4 @@
-"""No secret reaches a log at DEBUG, through the real MSAL, Azure SDK and ``httpx`` code.
+"""No secret reaches a log at DEBUG, through the real MSAL, Azure SDK and ``httpx2`` code.
 
 Each test runs the package against fake Entra ID, Key Vault and resource servers, captures
 every record of every logger at DEBUG (:mod:`tests.logs`), and looks for each secret the run
@@ -6,7 +6,7 @@ handled: client secrets, client assertions, private keys, access and refresh tok
 Vault secret values and secret cmdlet parameters.
 
 MSAL and the Azure SDK send their requests through ``requests``; a session whose adapters
-answer like the services stands in for the network. The resource clients get an ``httpx``
+answer like the services stands in for the network. The resource clients get an ``httpx2``
 mock transport, as in the unit tests.
 """
 

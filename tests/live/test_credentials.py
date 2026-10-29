@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext, AuthError, ExchangeClient, GraphClient, IppsClient
@@ -160,7 +160,7 @@ async def test_ipps_runs_a_cmdlet_as_an_app() -> None:
         labels = await ipps.run("Get-Label")
 
     assert isinstance(labels, list)
-    assert httpx.URL(ipps.base_url).host.endswith(f".{httpx.URL(ipps.resource).host}")
+    assert httpx2.URL(ipps.base_url).host.endswith(f".{httpx2.URL(ipps.resource).host}")
 
 
 @needs_app

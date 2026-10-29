@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 
 from azure_auth.auth.errors import AmbiguousTenant, AuthError, TenantNotFound
 from azure_auth.clouds import CHINA, CLOUDS, COMMERCIAL, US_GOV, Cloud, get_cloud
@@ -212,7 +212,7 @@ class Tenant:
         *,
         clouds: Iterable[Cloud | str] | None = None,
         timeout: float = 30.0,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx2.BaseTransport | None = None,
     ) -> Tenant:
         """Look up any tenant by GUID or domain name, without signing in.
 
@@ -243,7 +243,7 @@ class Tenant:
                 the order to ask them. All of them by default. A tenant in a cloud left out
                 is found only if another cloud's host happens to know it.
             timeout: Timeout for each request, in seconds.
-            transport: Custom ``httpx`` transport, mainly for tests.
+            transport: Custom ``httpx2`` transport, mainly for tests.
 
         Returns:
             The tenant, with ``domain`` set when ``name`` is a domain name.
@@ -264,16 +264,16 @@ class Tenant:
         asked = _lookup_clouds(clouds)
         domain = None if as_guid(name) else name.lower()
         found: list[Tenant] = []
-        unreached: dict[Cloud, httpx.TransportError] = {}
+        unreached: dict[Cloud, httpx2.TransportError] = {}
         with (
-            httpx.Client(timeout=timeout, transport=transport) as client,
+            httpx2.Client(timeout=timeout, transport=transport) as client,
             ThreadPoolExecutor(len(asked), thread_name_prefix="tenant-lookup") as pool,
         ):
             answers = [pool.submit(_fetch, client, known, name, domain) for known in asked]
             for known, answer in zip(asked, answers, strict=True):
                 try:
                     tenant = answer.result()
-                except httpx.TransportError as error:
+                except httpx2.TransportError as error:
                     _LOGGER.warning(
                         "The %s sign-in host did not answer the lookup of %s (%s: %s); "
                         "going on without it",
@@ -356,7 +356,7 @@ def _describe(asked: tuple[Cloud, ...]) -> str:
     return f"the {names} cloud" if len(asked) == 1 else f"the {names} clouds"
 
 
-def _fetch(client: httpx.Client, cloud: Cloud, name: str, domain: str | None) -> Tenant | None:
+def _fetch(client: httpx2.Client, cloud: Cloud, name: str, domain: str | None) -> Tenant | None:
     """Ask one cloud's sign-in host for a tenant's OpenID Connect configuration.
 
     Args:
@@ -370,11 +370,11 @@ def _fetch(client: httpx.Client, cloud: Cloud, name: str, domain: str | None) ->
 
     Raises:
         AuthError: If the host answers anything but the configuration or "no such tenant".
-        httpx.TransportError: If the host cannot be reached or does not answer in time.
+        httpx2.TransportError: If the host cannot be reached or does not answer in time.
     """
     url = f"{cloud.authority_host.rstrip('/')}/{name}/v2.0/.well-known/openid-configuration"
     response = client.get(url)
-    if response.status_code == httpx.codes.OK:
+    if response.status_code == httpx2.codes.OK:
         return Tenant.from_oidc(response.json(), domain=domain)
     try:
         error = response.json().get("error")
@@ -382,7 +382,7 @@ def _fetch(client: httpx.Client, cloud: Cloud, name: str, domain: str | None) ->
         error = None
     # Entra answers 400 invalid_tenant for a name it does not hold (AADSTS90002) and for a
     # GUID it does not know (AADSTS900021).
-    if response.status_code == httpx.codes.BAD_REQUEST and error == "invalid_tenant":
+    if response.status_code == httpx2.codes.BAD_REQUEST and error == "invalid_tenant":
         return None
     raise AuthError(
         f"Lookup of {name} at {url} answered {response.status_code}: {response.text[:300]}"

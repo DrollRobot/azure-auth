@@ -79,7 +79,7 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 import keyring
 import pytest
 
@@ -463,7 +463,7 @@ def ensure_sign_in(client: ResourceClient | BlockingResourceClient) -> None:
     ensure_token(client.auth, client.scopes, client.client_id)
 
 
-class Recording(httpx.AsyncBaseTransport):
+class Recording(httpx2.AsyncBaseTransport):
     """A real network transport that records every request it sends.
 
     The client builds its request URL and headers internally; this is the only place they
@@ -476,11 +476,11 @@ class Recording(httpx.AsyncBaseTransport):
         Args:
             *drop: Header names to remove from every request before it is sent.
         """
-        self._inner = httpx.AsyncHTTPTransport()
+        self._inner = httpx2.AsyncHTTPTransport()
         self._drop = {name.lower() for name in drop}
-        self.requests: list[httpx.Request] = []
+        self.requests: list[httpx2.Request] = []
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """Send the request over the network, minus the dropped headers, and record it.
 
         Args:
@@ -507,7 +507,7 @@ GDAP_CMDLETS = frozenset({"Get-OrganizationConfig", "Get-Label"})
 GDAP_READS = frozenset({"Mailbox"})
 
 
-class ReadOnlyCmdlets(httpx.BaseTransport, httpx.AsyncBaseTransport):
+class ReadOnlyCmdlets(httpx2.BaseTransport, httpx2.AsyncBaseTransport):
     """A transport that sends only ``GDAP_CMDLETS`` through ``InvokeCommand``, and ``GDAP_READS``.
 
     The GDAP tests only read, so they can run against any customer tenant. A test that calls
@@ -520,17 +520,17 @@ class ReadOnlyCmdlets(httpx.BaseTransport, httpx.AsyncBaseTransport):
         requests: Every request it let through, in order.
     """
 
-    def __init__(self, inner: httpx.MockTransport | None = None) -> None:
+    def __init__(self, inner: httpx2.MockTransport | None = None) -> None:
         """Send over the network, or through ``inner``.
 
         Args:
             inner: A mock transport to send through instead, for testing the guard itself.
         """
-        self._sync: httpx.BaseTransport = inner or httpx.HTTPTransport()
-        self._async: httpx.AsyncBaseTransport = inner or httpx.AsyncHTTPTransport()
-        self.requests: list[httpx.Request] = []
+        self._sync: httpx2.BaseTransport = inner or httpx2.HTTPTransport()
+        self._async: httpx2.AsyncBaseTransport = inner or httpx2.AsyncHTTPTransport()
+        self.requests: list[httpx2.Request] = []
 
-    def _check(self, request: httpx.Request) -> None:
+    def _check(self, request: httpx2.Request) -> None:
         """Fail the test, with the request unsent, unless it runs a listed cmdlet or read.
 
         A read is a GET whose path ends in a listed collection: ``.../Mailbox``, with any
@@ -566,7 +566,7 @@ class ReadOnlyCmdlets(httpx.BaseTransport, httpx.AsyncBaseTransport):
             )
         self.requests.append(request)
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         """Check the request, then send it (blocking clients).
 
         Args:
@@ -578,7 +578,7 @@ class ReadOnlyCmdlets(httpx.BaseTransport, httpx.AsyncBaseTransport):
         self._check(request)
         return self._sync.handle_request(request)
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """Check the request, then send it (asynchronous clients).
 
         Args:
@@ -804,7 +804,7 @@ def tenant_domain(cache_path: Path) -> str:
     scopes = [f"{graph}/.default"]
     ensure_token(auth, scopes)
     token = auth.acquire_token(scopes)
-    me = httpx.get(
+    me = httpx2.get(
         f"{graph}/v1.0/me",
         params={"$select": "userPrincipalName"},
         headers={"Authorization": f"Bearer {token.token}"},

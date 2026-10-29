@@ -14,7 +14,7 @@ from __future__ import annotations
 import base64
 import json
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext, ExchangeClient, Tenant
@@ -151,7 +151,7 @@ TENANT_GUID = "11111111-2222-3333-4444-555555555555"
 INVOKE_COMMAND = f"https://outlook.office365.com/adminapi/beta/{TENANT_GUID}/InvokeCommand"
 
 
-def invoke_command(cmdlet: str) -> httpx.Request:
+def invoke_command(cmdlet: str) -> httpx2.Request:
     """Build the request an Exchange client sends to run a cmdlet.
 
     Args:
@@ -161,7 +161,7 @@ def invoke_command(cmdlet: str) -> httpx.Request:
         The request.
     """
     body = {"CmdletInput": {"CmdletName": cmdlet, "Parameters": {}}}
-    return httpx.Request("POST", INVOKE_COMMAND, json=body)
+    return httpx2.Request("POST", INVOKE_COMMAND, json=body)
 
 
 def test_the_read_only_guard_sends_a_listed_cmdlet() -> None:
@@ -181,7 +181,7 @@ def test_the_read_only_guard_sends_a_listed_read(path: str) -> None:
     recorder = Recorder([ok({"value": []})])
     guard = ReadOnlyCmdlets(recorder.transport)
     response = guard.handle_request(
-        httpx.Request("GET", INVOKE_COMMAND.replace("InvokeCommand", path))
+        httpx2.Request("GET", INVOKE_COMMAND.replace("InvokeCommand", path))
     )
     assert response.status_code == 200
     assert len(recorder.requests) == len(guard.requests) == 1
@@ -193,20 +193,20 @@ def test_the_read_only_guard_sends_a_listed_read(path: str) -> None:
         invoke_command("Set-OrganizationConfig"),
         invoke_command("Remove-Mailbox"),
         invoke_command("Get-Mailbox"),
-        httpx.Request("POST", INVOKE_COMMAND, content=b"not json"),
-        httpx.Request("POST", INVOKE_COMMAND, json={"CmdletInput": {"CmdletName": ["Get-X"]}}),
-        httpx.Request("GET", INVOKE_COMMAND),
-        httpx.Request(
+        httpx2.Request("POST", INVOKE_COMMAND, content=b"not json"),
+        httpx2.Request("POST", INVOKE_COMMAND, json={"CmdletInput": {"CmdletName": ["Get-X"]}}),
+        httpx2.Request("GET", INVOKE_COMMAND),
+        httpx2.Request(
             "POST",
             INVOKE_COMMAND.replace("InvokeCommand", "Other"),
             json={"CmdletInput": {"CmdletName": "Get-OrganizationConfig"}},
         ),
-        httpx.Request("GET", INVOKE_COMMAND.replace("InvokeCommand", "CasMailbox")),
-        httpx.Request("GET", INVOKE_COMMAND.replace("InvokeCommand", "Mailbox('dXNlcg==')")),
-        httpx.Request(
+        httpx2.Request("GET", INVOKE_COMMAND.replace("InvokeCommand", "CasMailbox")),
+        httpx2.Request("GET", INVOKE_COMMAND.replace("InvokeCommand", "Mailbox('dXNlcg==')")),
+        httpx2.Request(
             "GET", INVOKE_COMMAND.replace("InvokeCommand", "Mailbox('dXNlcg==')/MailboxPermission")
         ),
-        httpx.Request("POST", INVOKE_COMMAND.replace("InvokeCommand", "Mailbox")),
+        httpx2.Request("POST", INVOKE_COMMAND.replace("InvokeCommand", "Mailbox")),
     ],
     ids=[
         "write",
@@ -222,7 +222,7 @@ def test_the_read_only_guard_sends_a_listed_read(path: str) -> None:
         "post-to-a-collection",
     ],
 )
-def test_the_read_only_guard_refuses_anything_else_unsent(request_: httpx.Request) -> None:
+def test_the_read_only_guard_refuses_anything_else_unsent(request_: httpx2.Request) -> None:
     recorder = Recorder([ok()])
     guard = ReadOnlyCmdlets(recorder.transport)
     with pytest.raises(pytest.fail.Exception, match="refused to send"):

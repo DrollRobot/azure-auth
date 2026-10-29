@@ -11,7 +11,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, ClassVar
 
-import httpx
+import httpx2
 
 from azure_auth.auth.context import AuthContext
 from azure_auth.clients.base import ResourceClient, retry_delay
@@ -45,7 +45,7 @@ class ArmClient(ResourceClient):
         timeout: float = 100.0,
         max_retries: int = 3,
         max_retry_wait: float = 120.0,
-        transport: httpx.AsyncBaseTransport | None = None,
+        transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
         """Create the client. No network call is made.
 
@@ -56,7 +56,7 @@ class ArmClient(ResourceClient):
             timeout: Timeout for each HTTP request, in seconds.
             max_retries: How often a throttled request is retried.
             max_retry_wait: Longest wait before one retry, in seconds.
-            transport: Custom ``httpx`` transport, mainly for tests.
+            transport: Custom ``httpx2`` transport, mainly for tests.
         """
         super().__init__(
             auth,
@@ -79,7 +79,7 @@ class ArmClient(ResourceClient):
         params: Mapping[str, Any] | None = None,
         json: Any = None,
         headers: Mapping[str, str] | None = None,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         """Send a request with its ``api-version`` and return the raw response.
 
         Use this when the response headers matter, for example to pass the response of a
@@ -205,7 +205,7 @@ class ArmClient(ResourceClient):
 
     async def wait(
         self,
-        response: httpx.Response,
+        response: httpx2.Response,
         *,
         timeout: float = 1800.0,
         poll_interval: float | None = None,
@@ -233,7 +233,7 @@ class ArmClient(ResourceClient):
         operation_url = response.headers.get("Azure-AsyncOperation")
         location_url = response.headers.get("Location")
 
-        def delay(latest: httpx.Response) -> float:
+        def delay(latest: httpx2.Response) -> float:
             if poll_interval is not None:
                 return poll_interval
             if "Retry-After" in latest.headers:
@@ -259,9 +259,9 @@ class ArmClient(ResourceClient):
                 return self._json(await self.request("GET", location_url))
             return status
 
-        if response.status_code == httpx.codes.ACCEPTED and location_url:
+        if response.status_code == httpx2.codes.ACCEPTED and location_url:
             latest = response
-            while latest.status_code == httpx.codes.ACCEPTED:
+            while latest.status_code == httpx2.codes.ACCEPTED:
                 if time.monotonic() > deadline:
                     raise TimeoutError(f"Operation still running after {timeout} s")
                 await asyncio.sleep(delay(latest))
@@ -270,7 +270,7 @@ class ArmClient(ResourceClient):
 
         return self._json(response)
 
-    def _operation_error(self, response: httpx.Response, status: Mapping[str, Any]) -> ArmError:
+    def _operation_error(self, response: httpx2.Response, status: Mapping[str, Any]) -> ArmError:
         """Build the exception for a failed long-running operation.
 
         Args:

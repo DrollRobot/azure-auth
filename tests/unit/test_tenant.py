@@ -10,7 +10,7 @@ import logging
 import threading
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AmbiguousTenant, AuthError, Tenant, TenantNotFound
@@ -64,11 +64,11 @@ COM, US, CN = "login.microsoftonline.com", "login.microsoftonline.us", "login.ch
 
 
 # A host that cannot be reached: the handler raises what the real transport would.
-SILENT = httpx.ReadTimeout("timed out")
+SILENT = httpx2.ReadTimeout("timed out")
 
 
 def by_host(
-    answers: dict[str, dict[str, Any] | httpx.Response | Exception | None],
+    answers: dict[str, dict[str, Any] | httpx2.Response | Exception | None],
 ) -> Recorder:
     """Answer the lookup per sign-in host.
 
@@ -76,11 +76,11 @@ def by_host(
     and an exception is raised as the transport would when the host cannot be reached.
     """
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         answer = answers[request.url.host]
         if isinstance(answer, Exception):
             raise answer
-        if isinstance(answer, httpx.Response):
+        if isinstance(answer, httpx2.Response):
             return answer
         return ok(answer) if answer is not None else ok(NOT_FOUND, status=400)
 
@@ -197,7 +197,7 @@ def test_an_unknown_tenant_is_not_found_anywhere() -> None:
 
 
 def test_an_unexpected_answer_is_an_error_not_a_miss() -> None:
-    recorder = Recorder(lambda request: httpx.Response(500, text="upstream failure"))
+    recorder = Recorder(lambda request: httpx2.Response(500, text="upstream failure"))
     with pytest.raises(AuthError, match="answered 500: upstream failure"):
         Tenant.lookup("contoso.com", transport=recorder.transport)
 
@@ -237,7 +237,7 @@ def test_the_hosts_are_asked_at_the_same_time() -> None:
     # request would wait for ever (here, until the barrier breaks and fails the test).
     asked = threading.Barrier(3, timeout=5)
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         asked.wait()
         return ok(COMMERCIAL_OIDC)
 
@@ -266,7 +266,7 @@ def test_a_host_that_does_not_answer_is_skipped(caplog: pytest.LogCaptureFixture
     assert "ReadTimeout: timed out" in record.message
 
 
-@pytest.mark.parametrize("error", [SILENT, httpx.ConnectError("blocked")])
+@pytest.mark.parametrize("error", [SILENT, httpx2.ConnectError("blocked")])
 def test_a_connection_that_fails_is_a_host_that_does_not_answer(error: Exception) -> None:
     recorder = by_host({COM: error, US: DOD_OIDC, CN: None})
     assert Tenant.lookup("army.example", transport=recorder.transport).cloud is US_GOV_DOD
@@ -307,7 +307,7 @@ def test_the_named_clouds_own_host_not_answering_is_an_error() -> None:
 
 
 def test_an_unexpected_answer_still_fails_the_lookup_whatever_the_other_hosts_say() -> None:
-    recorder = by_host({COM: COMMERCIAL_OIDC, US: SILENT, CN: httpx.Response(500, text="boom")})
+    recorder = by_host({COM: COMMERCIAL_OIDC, US: SILENT, CN: httpx2.Response(500, text="boom")})
     with pytest.raises(AuthError, match="answered 500: boom"):
         Tenant.lookup("contoso.com", transport=recorder.transport)
 

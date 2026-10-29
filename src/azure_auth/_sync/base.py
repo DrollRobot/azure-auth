@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from types import TracebackType
 from typing import Any, ClassVar, Self
 
-import httpx
+import httpx2
 from azure.core.credentials import AccessTokenInfo
 
 from azure_auth.auth.context import AuthContext
@@ -50,7 +50,7 @@ def claims_from_challenge(header: str | None) -> str | None:
         return None
 
 
-def retry_delay(response: httpx.Response, attempt: int, max_wait: float) -> float:
+def retry_delay(response: httpx2.Response, attempt: int, max_wait: float) -> float:
     """Decide how long to wait before retrying a throttled request.
 
     Args:
@@ -104,7 +104,7 @@ class ResourceClient:
         timeout: float = 100.0,
         max_retries: int = 3,
         max_retry_wait: float = 120.0,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx2.BaseTransport | None = None,
     ) -> None:
         """Create the client. No network call is made.
 
@@ -121,7 +121,7 @@ class ResourceClient:
             timeout: Timeout for each HTTP request, in seconds.
             max_retries: How often a throttled request (429, 503) is retried.
             max_retry_wait: Longest wait before one retry, in seconds.
-            transport: Custom ``httpx`` transport, mainly for tests.
+            transport: Custom ``httpx2`` transport, mainly for tests.
 
         Raises:
             ValueError: If an app flow has no client id, or is given delegated scopes.
@@ -131,10 +131,10 @@ class ResourceClient:
         self._resource = resource.rstrip("/")
         self._client_id = self._resolve_client_id(client_id)
         self._scopes = self._resolve_scopes(scopes)
-        self._base_url = httpx.URL(base_url.rstrip("/") + "/")
+        self._base_url = httpx2.URL(base_url.rstrip("/") + "/")
         self._max_retries = max_retries
         self._max_retry_wait = max_retry_wait
-        self._http = httpx.Client(timeout=timeout, transport=transport)
+        self._http = httpx2.Client(timeout=timeout, transport=transport)
 
     # ------------------------------------------------------------------ configuration
 
@@ -301,7 +301,7 @@ class ResourceClient:
             self._scopes, client_id=self._client_id, claims=claims, force_refresh=force_refresh
         )
 
-    def _url(self, url: str) -> httpx.URL:
+    def _url(self, url: str) -> httpx2.URL:
         """Resolve a request URL and make sure the token may be sent to it.
 
         Args:
@@ -315,7 +315,7 @@ class ResourceClient:
         """
         target = self._base_url.join(url.lstrip("/") if "://" not in url else url)
         trusted = target.scheme == "https" and self._is_trusted_host(target.host)
-        # Credentials in the URL would make httpx replace the bearer token with basic auth.
+        # Credentials in the URL would make httpx2 replace the bearer token with basic auth.
         if not trusted or target.userinfo:
             raise ValueError(f"Refusing to send a token for {self._resource} to {target}")
         return target
@@ -339,7 +339,7 @@ class ResourceClient:
         params: Mapping[str, Any] | None = None,
         json: Any = None,
         headers: Mapping[str, str] | None = None,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         """Send an authenticated request and return the successful response.
 
         Throttled requests (429, 503) are retried, honouring ``Retry-After``. A 401 is
@@ -377,15 +377,15 @@ class ResourceClient:
             response = self._http.send(request, stream=True)
             try:
                 response.read()
-            except httpx.DecodingError as exc:
+            except httpx2.DecodingError as exc:
                 # Exchange answers an unknown cmdlet with a 403 whose body is declared gzip
-                # but is not (measured 2026-09-25). httpx cannot decode that, and without this
+                # but is not (measured 2026-09-25). httpx2 cannot decode that, and without this
                 # the caller would get a transport error in place of the status that was
                 # actually sent. The status and headers are in hand; only the body is lost.
                 raise self._error(response, undecodable=exc) from exc
             finally:
                 response.close()
-            if response.status_code == httpx.codes.UNAUTHORIZED and not challenged:
+            if response.status_code == httpx2.codes.UNAUTHORIZED and not challenged:
                 challenged = True
                 claims = claims_from_challenge(response.headers.get("WWW-Authenticate"))
                 force_refresh = claims is None
@@ -394,12 +394,12 @@ class ResourceClient:
                 retries += 1
                 time.sleep(retry_delay(response, retries, self._max_retry_wait))
                 continue
-            if response.status_code >= httpx.codes.BAD_REQUEST:
+            if response.status_code >= httpx2.codes.BAD_REQUEST:
                 raise self._error(response)
             return response
 
     def _error(
-        self, response: httpx.Response, *, undecodable: Exception | None = None
+        self, response: httpx2.Response, *, undecodable: Exception | None = None
     ) -> ResourceError:
         """Build the exception for an error response.
 
@@ -443,7 +443,7 @@ class ResourceClient:
         )
 
     @staticmethod
-    def _json(response: httpx.Response) -> Any:
+    def _json(response: httpx2.Response) -> Any:
         """Decode a response body.
 
         Args:

@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 from azure.mgmt.resource.subscriptions import SubscriptionClient
 from azure.mgmt.resource.subscriptions.aio import SubscriptionClient as AsyncSubscriptionClient
@@ -142,7 +142,7 @@ async def test_wait_follows_a_long_running_operation_to_its_result(
         f"arm what-if: answered {started.status_code} with {' and '.join(polled) or 'no poll URL'},"
         f" Retry-After {retry_after}; result after {waited:.0f}s"
     )
-    if started.status_code != httpx.codes.ACCEPTED:
+    if started.status_code != httpx2.codes.ACCEPTED:
         pytest.skip(f"What-If answered {started.status_code} at once; nothing to wait for")
     assert result["status"] == "Succeeded", result
     assert result["properties"]["changes"] == [], result

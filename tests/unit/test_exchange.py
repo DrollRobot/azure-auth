@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext
@@ -347,9 +347,9 @@ async def test_a_read_follows_the_regional_redirect_with_its_token(auth: AuthCon
     home = "outlook.office365.com"
     regional = f"nam12.{home}"
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.host == home:
-            return httpx.Response(302, headers={"Location": f"https://{regional}/adminapi/x"})
+            return httpx2.Response(302, headers={"Location": f"https://{regional}/adminapi/x"})
         return ok({"value": [{"n": 1}]})
 
     recorder = Recorder(handler)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext
@@ -55,7 +55,7 @@ async def test_get_token_and_get_token_info_hand_the_sdk_one_usable_token(
     assert "CP1" in claims.get("xms_cc", []), claims.get("xms_cc")
     print(f"token credential: issued for {(claims['exp'] - claims['iat']) / 60:.0f} minutes")
 
-    async with httpx.AsyncClient() as http:
+    async with httpx2.AsyncClient() as http:
         me = await http.get(
             f"{graph}/v1.0/me",
             params={"$select": "userPrincipalName"},

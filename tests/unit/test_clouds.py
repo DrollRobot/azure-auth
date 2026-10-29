@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth.clouds import CHINA, CLOUDS, COMMERCIAL, US_GOV, US_GOV_DOD, get_cloud
@@ -43,7 +43,7 @@ def test_dod_security_and_compliance_is_sent_to_l5_but_issued_for_the_bare_host(
 
 def test_every_cloud_signs_in_at_one_of_its_own_hosts() -> None:
     for cloud in CLOUDS:
-        assert httpx.URL(cloud.authority_host).host in cloud.login_hosts
+        assert httpx2.URL(cloud.authority_host).host in cloud.login_hosts
 
 
 def test_graph_command_line_tools_is_missing_only_from_china() -> None:

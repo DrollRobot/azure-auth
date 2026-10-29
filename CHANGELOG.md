@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `httpx` is replaced by `httpx2`; a `transport=` must be an `httpx2` transport.
+  TLS certificates are checked against the operating system's trust store.
+
 ## [0.9.1] - 2026-10-28 - Single consent screen
 
 ### Fixed

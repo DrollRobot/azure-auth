@@ -11,7 +11,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, ClassVar, Literal
 
-import httpx
+import httpx2
 from azure.core.credentials import AccessTokenInfo
 
 from azure_auth.auth.context import AuthContext
@@ -97,7 +97,7 @@ class GraphClient(ResourceClient):
         timeout: float = 100.0,
         max_retries: int = 3,
         max_retry_wait: float = 120.0,
-        transport: httpx.AsyncBaseTransport | None = None,
+        transport: httpx2.AsyncBaseTransport | None = None,
         grant_when_possible: bool = False,
         wait_for_grant: bool = True,
     ) -> None:
@@ -115,7 +115,7 @@ class GraphClient(ResourceClient):
             timeout: Timeout for each HTTP request, in seconds.
             max_retries: How often a throttled request is retried.
             max_retry_wait: Longest wait before one retry, in seconds.
-            transport: Custom ``httpx`` transport, mainly for tests.
+            transport: Custom ``httpx2`` transport, mainly for tests.
             grant_when_possible: When the tenant has not granted some of ``scopes``, add the
                 missing ones to the application's tenant-wide grant there, provided the
                 application already holds ``DelegatedPermissionGrant.ReadWrite.All`` in that

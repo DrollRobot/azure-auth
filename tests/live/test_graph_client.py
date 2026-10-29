@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext, ConsentRequired, GraphClient, GraphError
@@ -61,7 +61,7 @@ REPLICATION_TIMEOUT = 120.0
 POLL_SECONDS = 5.0
 
 
-class StatusCounter(httpx.AsyncBaseTransport):
+class StatusCounter(httpx2.AsyncBaseTransport):
     """A real network transport that counts the status of every response.
 
     A client retries a throttled request itself, so a 429 that was waited out never reaches
@@ -71,8 +71,8 @@ class StatusCounter(httpx.AsyncBaseTransport):
     """
 
     def __init__(self) -> None:
-        """Wrap the default ``httpx`` network transport."""
-        self._inner = httpx.AsyncHTTPTransport()
+        """Wrap the default ``httpx2`` network transport."""
+        self._inner = httpx2.AsyncHTTPTransport()
         self.statuses: collections.Counter[int] = collections.Counter()
         self.retry_after: list[str | None] = []
 
@@ -81,7 +81,7 @@ class StatusCounter(httpx.AsyncBaseTransport):
         """How many responses were 429 or 503, the statuses the client retries."""
         return self.statuses[429] + self.statuses[503]
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """Send the request over the network and count the response's status.
 
         A throttled response also has its ``Retry-After`` recorded, ``None`` when the header

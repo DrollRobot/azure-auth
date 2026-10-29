@@ -26,7 +26,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext, ExchangeClient, GraphClient, InteractionRequired
@@ -56,7 +56,7 @@ CHALLENGE_TIMEOUT_SECONDS = 15 * 60
 CHALLENGE_POLL_SECONDS = 10.0
 
 
-class ChallengeWatcher(httpx.AsyncBaseTransport):
+class ChallengeWatcher(httpx2.AsyncBaseTransport):
     """A real network transport that sees the 401 the client answers, and calls the person.
 
     The client retries a challenged request itself, so the 401 never reaches the test. This
@@ -67,13 +67,13 @@ class ChallengeWatcher(httpx.AsyncBaseTransport):
     """
 
     def __init__(self) -> None:
-        """Wrap the default ``httpx`` network transport."""
-        self._inner = httpx.AsyncHTTPTransport()
+        """Wrap the default ``httpx2`` network transport."""
+        self._inner = httpx2.AsyncHTTPTransport()
         self.statuses: collections.Counter[int] = collections.Counter()
         self.challenges: list[str | None] = []
         self.challenged_at: float | None = None
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """Send the request over the network and record the response's status.
 
         Args:
@@ -84,7 +84,7 @@ class ChallengeWatcher(httpx.AsyncBaseTransport):
         """
         response = await self._inner.handle_async_request(request)
         self.statuses[response.status_code] += 1
-        if response.status_code == httpx.codes.UNAUTHORIZED:
+        if response.status_code == httpx2.codes.UNAUTHORIZED:
             self.challenges.append(response.headers.get("WWW-Authenticate"))
             if self.challenged_at is None:
                 self.challenged_at = time.monotonic()
@@ -218,7 +218,7 @@ async def test_a_revoked_sessions_challenge_is_answered_by_a_new_sign_in(
             except InteractionRequired as error:
                 pytest.fail(f"the credential's claims request needed a sign-in: {error}")
             assert sdk_token.token != revoked.token
-            async with httpx.AsyncClient() as http:
+            async with httpx2.AsyncClient() as http:
                 response = await http.get(
                     f"{graph_url}/v1.0/me",
                     params={"$select": "id"},

@@ -2,7 +2,7 @@
 
 The integration tests (``tests/integration/test_no_secrets_in_logs.py``) cover the code paths
 against fakes. These add what only real services and connections log: the network libraries
-under MSAL, the Azure SDK and ``httpx``, and whatever Entra ID and the services send back.
+under MSAL, the Azure SDK and ``httpx2``, and whatever Entra ID and the services send back.
 
 Each test captures every record of every logger at DEBUG (:mod:`tests.logs`), then looks for
 each secret it handled. No secret is printed: a failure names the kind and where it was logged.

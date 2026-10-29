@@ -23,7 +23,7 @@ import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, ClassVar
 
-import httpx
+import httpx2
 
 from azure_auth._sync.base import ResourceClient
 from azure_auth.auth.context import AuthContext
@@ -133,7 +133,7 @@ class InvokeCommandClient(ResourceClient):
         timeout: float = 300.0,
         max_retries: int = 3,
         max_retry_wait: float = 120.0,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx2.BaseTransport | None = None,
     ) -> None:
         """Create the client. No network call is made.
 
@@ -149,7 +149,7 @@ class InvokeCommandClient(ResourceClient):
             timeout: Timeout for each HTTP request, in seconds. Cmdlets can be slow.
             max_retries: How often a throttled request is retried.
             max_retry_wait: Longest wait before one retry, in seconds.
-            transport: Custom ``httpx`` transport, mainly for tests.
+            transport: Custom ``httpx2`` transport, mainly for tests.
         """
         resource, host = self.service(auth.tenant.cloud)
         super().__init__(
@@ -166,7 +166,7 @@ class InvokeCommandClient(ResourceClient):
         self._host = host
         # Regional hosts are subdomains of the resource's host, which is not always the host
         # requests start at: DoD sends them to l5.<resource host>.
-        self._domain = httpx.URL(resource).host
+        self._domain = httpx2.URL(resource).host
         self._anchor_mailbox = anchor_mailbox
         self._transport = transport
         self._page_size = page_size
@@ -227,10 +227,10 @@ class InvokeCommandClient(ResourceClient):
         headers: Mapping[str, str] | None = None,
         cmdlet: str | None = None,
         paged: bool = True,
-    ) -> httpx.Response:
+    ) -> httpx2.Response:
         """Send one request to the admin API, following a regional redirect by hand.
 
-        ``httpx`` drops the ``Authorization`` header when a redirect changes the host, and
+        ``httpx2`` drops the ``Authorization`` header when a redirect changes the host, and
         Security & Compliance answers the first call with a redirect to a regional host. So
         the redirect is read here, the regional host becomes the new base URL, and the
         request is sent again with its token.
@@ -266,11 +266,11 @@ class InvokeCommandClient(ResourceClient):
             sent["X-CmdletName"] = cmdlet
         response = self.request(method, url, json=json, headers=sent)
         location = response.headers.get("Location")
-        if response.status_code == httpx.codes.FOUND and location:
-            region = httpx.URL(location).host.split(".", 1)[0]
+        if response.status_code == httpx2.codes.FOUND and location:
+            region = httpx2.URL(location).host.split(".", 1)[0]
             if region and not self._base_url.host.startswith(f"{region}."):
-                self._base_url = httpx.URL(f"https://{region}.{self._domain}/")
-                target = httpx.URL(url) if "://" in url else None
+                self._base_url = httpx2.URL(f"https://{region}.{self._domain}/")
+                target = httpx2.URL(url) if "://" in url else None
                 retry_url = str(target.copy_with(host=self._base_url.host)) if target else url
                 response = self.request(method, retry_url, json=json, headers=sent)
         if response.is_redirect:
@@ -279,7 +279,7 @@ class InvokeCommandClient(ResourceClient):
         return response
 
     def _error(
-        self, response: httpx.Response, *, undecodable: Exception | None = None
+        self, response: httpx2.Response, *, undecodable: Exception | None = None
     ) -> ResourceError:
         """Build the exception for a failed request, with the service's own reason up front.
 
@@ -312,7 +312,7 @@ class InvokeCommandClient(ResourceClient):
         subject = cmdlet or f"{response.request.method} {response.request.url.path}"
         if reasons:
             reason = " ".join(reasons)
-        elif error.status == httpx.codes.FORBIDDEN and _is_blank(error.body):
+        elif error.status == httpx2.codes.FORBIDDEN and _is_blank(error.body):
             reason = (
                 "Exchange sent no error body, which is how it refuses a cmdlet it does not "
                 "know or the account's Exchange roles do not allow; check the cmdlet name "
@@ -328,7 +328,7 @@ class InvokeCommandClient(ResourceClient):
             body=error.body,
         )
 
-    def _note_warnings(self, response: httpx.Response, page: dict[str, Any]) -> None:
+    def _note_warnings(self, response: httpx2.Response, page: dict[str, Any]) -> None:
         """Collect the warnings a response carries into :attr:`last_warnings`.
 
         The PowerShell module reads warnings from the ``X-Warnings`` header. Every live

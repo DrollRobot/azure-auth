@@ -23,7 +23,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import (
@@ -100,7 +100,7 @@ def reference_tenant(cloud: Cloud) -> Tenant:
     return Tenant.lookup(domain)
 
 
-def challenge(response: httpx.Response) -> dict[str, str]:
+def challenge(response: httpx2.Response) -> dict[str, str]:
     """Read the fields of a ``WWW-Authenticate: Bearer`` challenge."""
     return dict(_CHALLENGE_FIELD.findall(response.headers.get("WWW-Authenticate", "")))
 
@@ -167,7 +167,7 @@ def test_a_tenant_that_does_not_exist_is_not_found(tenant: str) -> None:
         Tenant.lookup(tenant)
 
 
-class _Blocking(httpx.HTTPTransport):
+class _Blocking(httpx2.HTTPTransport):
     """The real transport, with some hosts made unreachable, as a blocking network would.
 
     It also records the host of every request, blocked or not.
@@ -179,11 +179,11 @@ class _Blocking(httpx.HTTPTransport):
         self.blocked: list[str] = []
         self.asked: list[str] = []
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         self.asked.append(request.url.host)
         if request.url.host in self.hosts:
             self.blocked.append(str(request.url))
-            raise httpx.ConnectTimeout("blocked by the test", request=request)
+            raise httpx2.ConnectTimeout("blocked by the test", request=request)
         return super().handle_request(request)
 
 
@@ -292,7 +292,7 @@ def test_every_service_in_the_table_trusts_its_clouds_sign_in(cloud: Cloud) -> N
     invoke = f"/adminapi/beta/{tenant.id}/InvokeCommand"
     body = {"CmdletInput": {"CmdletName": "Get-OrganizationConfig"}}
 
-    with httpx.Client(timeout=30) as http:
+    with httpx2.Client(timeout=30) as http:
         answers = {
             "graph": http.get(f"{graph.base_url}/organization"),
             "arm": http.get(f"{arm.base_url}/subscriptions", params={"api-version": "2022-12-01"}),
@@ -310,7 +310,7 @@ def test_every_service_in_the_table_trusts_its_clouds_sign_in(cloud: Cloud) -> N
     expected_app = {"graph": GRAPH_APP_ID, "exchange": EXCHANGE_APP_ID, "ipps": IPPS_APP_ID}
     for service, response in answers.items():
         fields = challenge(response)
-        signs_in_at = httpx.URL(fields.get("authorization_uri", "")).host
+        signs_in_at = httpx2.URL(fields.get("authorization_uri", "")).host
         print(f"{cloud.name} {service}: {response.request.url.host} trusts {signs_in_at}")
         assert response.status_code == 401, f"{service}: {response.status_code}"
         assert signs_in_at in cloud.login_hosts, f"{service} trusts {signs_in_at}"
@@ -329,7 +329,7 @@ def test_the_first_party_applications_in_the_table_are_the_ones_published(cloud:
     made_up = "11111111-2222-3333-4444-555555555555"
     defaults = (GRAPH_CLI_CLIENT_ID, AZURE_POWERSHELL_CLIENT_ID, EXCHANGE_POWERSHELL_CLIENT_ID)
     url = f"{cloud.authority_host}/organizations/oauth2/v2.0/devicecode"
-    with httpx.Client(timeout=30) as http:
+    with httpx2.Client(timeout=30) as http:
         published = {
             client_id
             for client_id in (*defaults, made_up)
@@ -381,7 +381,7 @@ def test_the_sign_in_library_sets_up_in_every_cloud(domain: str, cloud: Cloud) -
         auth.acquire_token([f"{cloud.arm}/.default"])
 
     (app,) = auth._apps.values()
-    assert httpx.URL(app.authority.token_endpoint).host in cloud.login_hosts
+    assert httpx2.URL(app.authority.token_endpoint).host in cloud.login_hosts
 
 
 @pytest.mark.parametrize(
@@ -455,7 +455,7 @@ def test_an_app_sign_in_reaches_its_clouds_token_server(
         auth.acquire_token([f"{auth.tenant.cloud.graph}/.default"])
 
     (app,) = auth._apps.values()
-    assert httpx.URL(app.authority.token_endpoint).host in auth.tenant.cloud.login_hosts
+    assert httpx2.URL(app.authority.token_endpoint).host in auth.tenant.cloud.login_hosts
 
 
 # ---------------------------------------------------------------------------- signed in
@@ -528,7 +528,7 @@ async def test_a_user_given_the_wrong_cloud_is_refused() -> None:
             await graph.get("/me", params={"$select": "id"})
 
     assert claims["aud"] == wrong.graph
-    assert httpx.URL(claims["iss"]).host in live_cloud().login_hosts
+    assert httpx2.URL(claims["iss"]).host in live_cloud().login_hosts
     assert (caught.value.status, caught.value.code) == (401, "InvalidAuthenticationToken")
     assert "InvalidCloudInstance" in str(caught.value)
 
@@ -592,4 +592,4 @@ async def test_a_discovered_context_runs_compliance_cmdlets_in_its_cloud(
         labels = await ipps.run("Get-Label")
 
     assert isinstance(labels, list)
-    assert httpx.URL(ipps.base_url).host.endswith(f".{httpx.URL(auth.tenant.cloud.ipps).host}")
+    assert httpx2.URL(ipps.base_url).host.endswith(f".{httpx2.URL(auth.tenant.cloud.ipps).host}")

@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from azure_auth import AuthContext, AuthError, ConsentRequired, InteractionRequired
@@ -224,7 +224,7 @@ def test_error_response_becomes_graph_error(auth: AuthContext) -> None:
 
 def test_non_json_error_keeps_the_text(auth: AuthContext) -> None:
     graph = GraphClient(
-        auth, transport=Recorder([httpx.Response(502, text="Bad gateway")]).transport
+        auth, transport=Recorder([httpx2.Response(502, text="Bad gateway")]).transport
     )
     with pytest.raises(GraphError) as caught:
         graph.get("/users")
@@ -266,14 +266,14 @@ def test_throttling_gives_up_after_max_retries(auth: AuthContext, sleeps: list[f
 
 def test_retry_delay_understands_dates_and_caps_the_wait() -> None:
     soon = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=30)
-    dated = httpx.Response(429, headers={"Retry-After": email.utils.format_datetime(soon)})
+    dated = httpx2.Response(429, headers={"Retry-After": email.utils.format_datetime(soon)})
     assert 25 <= retry_delay(dated, 1, 120) <= 30
     naive = soon.strftime("%a, %d %b %Y %H:%M:%S -0000")
-    assert 25 <= retry_delay(httpx.Response(429, headers={"Retry-After": naive}), 1, 120) <= 30
-    assert retry_delay(httpx.Response(429, headers={"Retry-After": "600"}), 1, 120) == 120
-    assert retry_delay(httpx.Response(429, headers={"Retry-After": "soon"}), 3, 120) == 8
-    assert retry_delay(httpx.Response(429), 10, 120) == 30
-    assert retry_delay(httpx.Response(429, headers={"Retry-After": "-5"}), 1, 120) == 0
+    assert 25 <= retry_delay(httpx2.Response(429, headers={"Retry-After": naive}), 1, 120) <= 30
+    assert retry_delay(httpx2.Response(429, headers={"Retry-After": "600"}), 1, 120) == 120
+    assert retry_delay(httpx2.Response(429, headers={"Retry-After": "soon"}), 3, 120) == 8
+    assert retry_delay(httpx2.Response(429), 10, 120) == 30
+    assert retry_delay(httpx2.Response(429, headers={"Retry-After": "-5"}), 1, 120) == 0
 
 
 # ---------------------------------------------------------------------------- 401 handling
@@ -355,7 +355,7 @@ def test_token_is_never_sent_to_another_host(auth: AuthContext, url: str) -> Non
 
 
 def test_batch_is_chunked_and_order_is_restored(auth: AuthContext) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         import json
 
         items = json.loads(request.content)["requests"]
@@ -417,13 +417,13 @@ def test_a_customer_under_several_relationships_is_listed_once(auth: AuthContext
 def test_a_body_the_service_mislabels_is_reported_with_its_status(
     auth: AuthContext,
 ) -> None:
-    # A body declared gzip that is not gzip: httpx raises DecodingError while reading it. The
+    # A body declared gzip that is not gzip: httpx2 raises DecodingError while reading it. The
     # status and headers arrived, and the caller gets those rather than a transport error.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
             502,
             headers={"Content-Encoding": "gzip", "request-id": "req-9"},
-            stream=httpx.ByteStream(b"<html>bad gateway</html>"),
+            stream=httpx2.ByteStream(b"<html>bad gateway</html>"),
         )
 
     graph = GraphClient(auth, transport=Recorder(handler).transport)
@@ -514,7 +514,7 @@ class GrantTenant:
             return consent_error()
         raise AssertionError(f"unexpected scopes {call.scopes}")
 
-    def handle(self, request: httpx.Request) -> httpx.Response:
+    def handle(self, request: httpx2.Request) -> httpx2.Response:
         """Answer a Graph request the way the tenant would."""
         path = request.url.path
         if path.endswith("/servicePrincipals"):
@@ -533,7 +533,7 @@ class GrantTenant:
         raise AssertionError(f"unexpected request {request.method} {request.url}")
 
     @property
-    def patches(self) -> list[httpx.Request]:
+    def patches(self) -> list[httpx2.Request]:
         """The PATCH requests sent so far."""
         return [request for request in self.recorder.requests if request.method == "PATCH"]
 
