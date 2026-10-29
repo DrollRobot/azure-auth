@@ -17,6 +17,7 @@ from azure.core.credentials import AccessTokenInfo
 
 from azure_auth.auth.context import AuthContext
 from azure_auth.clients.errors import ResourceError
+from azure_auth.errors import network_error
 
 _RESERVED_SCOPES = frozenset({"openid", "profile", "offline_access"})
 _RETRY_STATUSES = frozenset({429, 503})
@@ -311,9 +312,13 @@ class ResourceClient:
             The absolute URL.
 
         Raises:
-            ValueError: If the URL points at a host this client does not trust.
+            ValueError: If the URL is not a valid one, or points at a host this client does
+                not trust.
         """
-        target = self._base_url.join(url.lstrip("/") if "://" not in url else url)
+        try:
+            target = self._base_url.join(url.lstrip("/") if "://" not in url else url)
+        except httpx2.InvalidURL as exc:
+            raise ValueError(f"Not a valid URL: {url!r} ({exc})") from exc
         trusted = target.scheme == "https" and self._is_trusted_host(target.host)
         # Credentials in the URL would make httpx2 replace the bearer token with basic auth.
         if not trusted or target.userinfo:
@@ -358,6 +363,9 @@ class ResourceClient:
 
         Raises:
             ResourceError: (the subclass in ``ERROR_CLASS``) for an error response.
+            NetworkError: If the host cannot be reached, or the connection fails or times
+                out before the whole response has arrived.
+            ValueError: If the URL is not a valid one, or points at another host.
         """
         target = self._url(url)
         retries = 0
@@ -374,7 +382,10 @@ class ResourceClient:
                 json=json,
                 headers={**(headers or {}), "Authorization": f"Bearer {token.token}"},
             )
-            response = await self._http.send(request, stream=True)
+            try:
+                response = await self._http.send(request, stream=True)
+            except httpx2.TransportError as exc:
+                raise network_error(f"{method} {target}", exc) from exc
             try:
                 await response.aread()
             except httpx2.DecodingError as exc:
@@ -383,6 +394,8 @@ class ResourceClient:
                 # the caller would get a transport error in place of the status that was
                 # actually sent. The status and headers are in hand; only the body is lost.
                 raise self._error(response, undecodable=exc) from exc
+            except httpx2.TransportError as exc:
+                raise network_error(f"{method} {target}", exc) from exc
             finally:
                 await response.aclose()
             if response.status_code == httpx2.codes.UNAUTHORIZED and not challenged:

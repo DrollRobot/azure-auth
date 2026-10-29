@@ -7,8 +7,17 @@ from pathlib import Path
 
 import httpx2
 import pytest
+import requests
+from cryptography.hazmat.primitives.serialization import Encoding
 
-from azure_auth import AuthContext, AuthError, ExchangeClient, GraphClient, IppsClient
+from azure_auth import (
+    AuthContext,
+    AuthError,
+    ExchangeClient,
+    GraphClient,
+    IppsClient,
+    NetworkError,
+)
 from azure_auth.sync import GraphClient as BlockingGraphClient
 from tests.certs import make_certificate
 from tests.live.support import (
@@ -202,3 +211,24 @@ def test_an_app_token_is_kept_on_disk_until_a_refresh_is_forced(tmp_path: Path) 
 
     assert cached.token == issued.token
     assert refreshed.token != issued.token
+
+
+@needs_app
+def test_a_token_request_whose_tls_handshake_fails_is_a_network_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sign-in that cannot complete its TLS handshake with Entra raises NetworkError.
+
+    MSAL's HTTP library is told to trust only a certificate the test made, so Entra's real
+    certificate is refused, as behind a TLS-inspecting proxy whose root is not trusted.
+    """
+    auth = live_app_auth()
+    bundle = tmp_path / "untrusted-root.pem"
+    bundle.write_bytes(make_certificate().certificate.public_bytes(Encoding.PEM))
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle))
+
+    expected = r"A token request for tenant .* failed: SSLError"
+    with pytest.raises(NetworkError, match=expected) as caught:
+        auth.acquire_token([f"{auth.tenant.cloud.graph}/.default"], force_refresh=True)
+
+    assert isinstance(caught.value.__cause__, requests.exceptions.SSLError)

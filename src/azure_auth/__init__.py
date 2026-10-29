@@ -40,9 +40,11 @@ from azure_auth.clients import (
     GraphError,
     InvokeCommandError,
     IppsClient,
+    KeyVaultError,
     ResourceError,
 )
 from azure_auth.clouds import Cloud
+from azure_auth.errors import NetworkError
 
 __all__ = [
     "AccountSelectionRequired",
@@ -64,6 +66,8 @@ __all__ = [
     "InteractionRequired",
     "InvokeCommandError",
     "IppsClient",
+    "KeyVaultError",
+    "NetworkError",
     "ResourceError",
     "Tenant",
     "TenantNotFound",

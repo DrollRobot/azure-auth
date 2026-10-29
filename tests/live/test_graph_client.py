@@ -16,7 +16,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from azure_auth import AuthContext, ConsentRequired, GraphClient, GraphError
+from azure_auth import AuthContext, ConsentRequired, GraphClient, GraphError, NetworkError
 from azure_auth.sync import GraphClient as BlockingGraphClient
 from tests.live.support import (
     UNGRANTED_SCOPE,
@@ -102,6 +102,24 @@ class StatusCounter(httpx2.AsyncBaseTransport):
     async def aclose(self) -> None:
         """Close the wrapped transport."""
         await self._inner.aclose()
+
+
+@needs_user
+async def test_a_request_that_gets_no_answer_in_time_is_a_network_error(
+    user_auth: AuthContext,
+) -> None:
+    """A request to Graph that times out raises NetworkError, not the HTTP library's error.
+
+    No TLS handshake completes in a millisecond. The token comes first, from MSAL, which the
+    timeout does not apply to.
+    """
+    async with GraphClient(user_auth, scopes=["Application.Read.All"], timeout=0.001) as graph:
+        ensure_sign_in(graph)
+        with pytest.raises(NetworkError) as caught:
+            await graph.get("/organization")
+
+    assert str(caught.value).startswith(f"GET {graph.base_url}/organization failed: ")
+    assert isinstance(caught.value.__cause__, httpx2.TimeoutException)
 
 
 @needs_user

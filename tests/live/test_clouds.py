@@ -35,6 +35,7 @@ from azure_auth import (
     GraphError,
     InteractionRequired,
     IppsClient,
+    NetworkError,
     Tenant,
     TenantNotFound,
 )
@@ -204,7 +205,7 @@ def test_a_tenant_behind_a_host_that_cannot_be_reached_is_an_error_not_a_miss() 
     domain, _, _ = REFERENCE_TENANTS["china"]
     transport = _Blocking("login.microsoftonline.com", "login.chinacloudapi.cn")
 
-    with pytest.raises(AuthError, match="could not be reached") as caught:
+    with pytest.raises(NetworkError, match="could not be reached") as caught:
         Tenant.lookup(domain, transport=transport)
 
     assert not isinstance(caught.value, TenantNotFound)
@@ -214,8 +215,10 @@ def test_a_tenant_behind_a_host_that_cannot_be_reached_is_an_error_not_a_miss() 
 def test_no_host_answering_in_time_is_an_error() -> None:
     # No TLS handshake completes in a millisecond, so every host times out.
     domain, _, _ = REFERENCE_TENANTS["commercial"]
-    with pytest.raises(AuthError, match="could not be reached"):
+    with pytest.raises(NetworkError, match="could not be reached") as caught:
         Tenant.lookup(domain, timeout=0.001)
+
+    assert isinstance(caught.value.__cause__, httpx2.TimeoutException)
 
 
 def test_only_the_chosen_clouds_are_asked() -> None:
@@ -240,7 +243,7 @@ def test_the_named_clouds_own_host_decides_when_another_cannot_be_reached() -> N
 
     with pytest.raises(TenantNotFound, match="the Commercial cloud"):
         Tenant.lookup(missing, COMMERCIAL, transport=transport)
-    with pytest.raises(AuthError, match="could not be reached") as caught:
+    with pytest.raises(NetworkError, match="could not be reached") as caught:
         Tenant.lookup(missing, CHINA, transport=transport)
 
     assert not isinstance(caught.value, TenantNotFound)

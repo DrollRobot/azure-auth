@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from typing import Any
 
 import httpx2
@@ -40,6 +40,20 @@ class Recorder:
     def urls(self) -> list[str]:
         """Return the URL of every recorded request."""
         return [str(request.url) for request in self.requests]
+
+
+class Dropped(httpx2.SyncByteStream, httpx2.AsyncByteStream):
+    """A response body whose connection drops after its first bytes."""
+
+    def __iter__(self) -> Iterator[bytes]:
+        """Yield the first bytes, then fail as a reset connection does."""
+        yield b'{"value": ['
+        raise httpx2.ReadError("connection reset by the test")
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        """Yield the first bytes, then fail as a reset connection does."""
+        yield b'{"value": ['
+        raise httpx2.ReadError("connection reset by the test")
 
 
 def ok(

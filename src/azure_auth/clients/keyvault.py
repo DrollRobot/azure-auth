@@ -1,18 +1,32 @@
 """Thin wrapper over the Azure Key Vault SDK clients.
 
 The Azure SDK does the work; this wrapper only wires an :class:`~azure_auth.AuthContext` into
-it and exposes the handful of calls that authentication code tends to need. For anything
-else, use the SDK clients directly with ``credential=auth.aio``.
+it and exposes the handful of calls that authentication code tends to need. Its calls raise
+:class:`~azure_auth.KeyVaultError` and :class:`~azure_auth.NetworkError` in place of the
+Azure SDK's exceptions. For anything else, use the SDK clients directly with
+``credential=auth.aio``; they raise the Azure SDK's own exceptions.
 
 Needs the ``keyvault`` extra: ``pip install azure-auth[keyvault]``.
 """
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from types import TracebackType
-from typing import Self
+from typing import Any, Self
+
+from azure.core.exceptions import (
+    AzureError,
+    HttpResponseError,
+    ServiceRequestError,
+    ServiceResponseError,
+)
 
 from azure_auth.auth.context import AuthContext
+from azure_auth.clients.errors import KeyVaultError
+from azure_auth.errors import network_error
 
 try:
     from azure.keyvault.certificates.aio import CertificateClient
@@ -23,6 +37,66 @@ except ImportError as exc:  # pragma: no cover (exercised only without the extra
     raise ImportError(
         "KeyVaultClient needs the 'keyvault' extra: pip install azure-auth[keyvault]"
     ) from exc
+
+
+def _vault_error(error: HttpResponseError) -> KeyVaultError:
+    """Translate the Azure SDK's exception for an error status from the vault.
+
+    Args:
+        error: The exception, carrying the vault's response.
+
+    Returns:
+        The exception to raise, with the status, the vault's error code, its request id and
+        the decoded response body.
+    """
+    # The SDK types the response as a minimal protocol; every response it raises with has
+    # headers, and a request with a method and a URL.
+    response: Any = error.response
+    status = error.status_code or 0
+    code = error.error.code if error.error else None
+    detail = error.error.message if error.error else error.reason
+    request_id = body = None
+    summary = str(status)
+    if response is not None:
+        summary = f"{response.request.method} {response.request.url} -> {status}"
+        request_id = response.headers.get("x-ms-request-id")
+        try:
+            body = response.text()
+        except AzureError:  # the body was never read
+            body = None
+        else:
+            with suppress(ValueError):
+                body = json.loads(body)
+    message = ": ".join(str(part) for part in (code, detail) if part)
+    return KeyVaultError(
+        f"{summary} {message}".rstrip(),
+        status=status,
+        code=code,
+        request_id=request_id,
+        body=body,
+    )
+
+
+@contextmanager
+def _translated(vault_url: str) -> Iterator[None]:
+    """Raise this package's exceptions in place of the Azure SDK's, for the calls inside.
+
+    Args:
+        vault_url: URL of the vault, for the message of a network failure.
+
+    Yields:
+        Nothing; the calls run in the ``with`` block.
+
+    Raises:
+        KeyVaultError: If the vault answered with an error status.
+        NetworkError: If the vault could not be reached, or did not answer.
+    """
+    try:
+        yield
+    except HttpResponseError as exc:
+        raise _vault_error(exc) from exc
+    except (ServiceRequestError, ServiceResponseError) as exc:
+        raise network_error(f"A request to {vault_url}", exc) from exc
 
 
 class KeyVaultClient:
@@ -64,10 +138,12 @@ class KeyVaultClient:
 
         Raises:
             ValueError: If the secret has no value.
-            azure.core.exceptions.ResourceNotFoundError: If the vault has no such secret, or
+            KeyVaultError: If the vault refuses, such as with status 404 for no such secret or
                 no such version of it.
+            NetworkError: If the vault could not be reached.
         """
-        secret = await self._secrets.get_secret(name, version)
+        with _translated(self._vault_url):
+            secret = await self._secrets.get_secret(name, version)
         if secret.value is None:
             raise ValueError(f"Secret {name!r} has no value")
         return secret.value
@@ -84,11 +160,15 @@ class KeyVaultClient:
 
         Raises:
             ValueError: If the certificate has no content.
+            KeyVaultError: If the vault refuses, such as with status 404 for no such
+                certificate.
+            NetworkError: If the vault could not be reached.
         """
-        if version:
-            certificate = await self._certificates.get_certificate_version(name, version)
-        else:
-            certificate = await self._certificates.get_certificate(name)
+        with _translated(self._vault_url):
+            if version:
+                certificate = await self._certificates.get_certificate_version(name, version)
+            else:
+                certificate = await self._certificates.get_certificate(name)
         if certificate.cer is None:
             raise ValueError(f"Certificate {name!r} has no content")
         return bytes(certificate.cer)
@@ -126,9 +206,14 @@ class KeyVaultClient:
 
         Returns:
             The signature.
+
+        Raises:
+            KeyVaultError: If the vault refuses, such as with status 404 for no such key.
+            NetworkError: If the vault could not be reached.
         """
         client = self._crypto_client(key_name, version)
-        result = await client.sign(SignatureAlgorithm(algorithm), digest)
+        with _translated(self._vault_url):
+            result = await client.sign(SignatureAlgorithm(algorithm), digest)
         return bytes(result.signature)
 
     async def verify(
@@ -151,9 +236,14 @@ class KeyVaultClient:
 
         Returns:
             Whether the signature is valid.
+
+        Raises:
+            KeyVaultError: If the vault refuses, such as with status 404 for no such key.
+            NetworkError: If the vault could not be reached.
         """
         client = self._crypto_client(key_name, version)
-        result = await client.verify(SignatureAlgorithm(algorithm), digest, signature)
+        with _translated(self._vault_url):
+            result = await client.verify(SignatureAlgorithm(algorithm), digest, signature)
         return bool(result.is_valid)
 
     async def aclose(self) -> None:

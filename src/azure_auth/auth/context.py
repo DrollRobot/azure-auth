@@ -25,8 +25,10 @@ from types import TracebackType
 from typing import Any, Self
 
 import msal
+import requests
 from azure.core.credentials import AccessToken, AccessTokenInfo, TokenRequestOptions
 from msal import BrowserInteractionTimeoutError, TokenCache
+from msal.exceptions import MsalServiceError
 
 # Not exported from msal. The only way to choose a browser per sign-in on Windows, where
 # acquire_token_interactive always uses the default; see .local/DECISIONS.md.
@@ -53,6 +55,7 @@ from azure_auth.auth.errors import (
 from azure_auth.auth.tenant import MULTI_TENANT_AUTHORITIES, Tenant, as_guid
 from azure_auth.clouds import Cloud, get_cloud
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
+from azure_auth.errors import network_error
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -339,6 +342,8 @@ class AuthContext:
             TenantNotFound: If the lookup finds no such tenant.
             AmbiguousTenant: If the lookup finds a different tenant in each of two clouds;
                 look it up with :meth:`Tenant.lookup` and the cloud of the one you mean.
+            NetworkError: If the lookup finds no tenant and a sign-in host that might know it
+                could not be reached.
             AuthError: If the lookup gets an answer it cannot use.
         """
         if not tenant:
@@ -478,7 +483,8 @@ class AuthContext:
             calls return the same object.
 
         Raises:
-            TenantNotFound, AuthError: From looking a domain name up, in this cloud.
+            TenantNotFound, NetworkError, AuthError: From looking a domain name up, in this
+                cloud.
         """
         guid = as_guid(tenant)
         found = None
@@ -587,6 +593,7 @@ class AuthContext:
             InteractionRequired: If the user must sign in and this context may not prompt.
             ConsentRequired: If consent is missing in the tenant.
             AuthError: For any other failure.
+            NetworkError: If Entra ID could not be reached.
         """
         return self._acquire(scopes, client_id, claims, force_refresh, pick_account=False)
 
@@ -631,6 +638,7 @@ class AuthContext:
                 ``consent`` is set.
             InteractionRequired: If this context came from :meth:`get_tenant_context` and the
                 user must sign in.
+            NetworkError: If Entra ID could not be reached.
         """
         if pick_account + reauthenticate + consent > 1:
             raise ValueError("Only one of pick_account, reauthenticate and consent can be set")
@@ -691,6 +699,7 @@ class AuthContext:
             InteractionRequired: If the user would have to sign in.
             ConsentRequired: If consent is missing in the tenant.
             AuthError: For any other failure.
+            NetworkError: If Entra ID could not be reached.
         """
         return self._acquire(
             scopes, client_id, None, force_refresh, pick_account=False, silent_only=True
@@ -810,19 +819,31 @@ class AuthContext:
                 if recent is not None:
                     self._from_entra[key] = False
                     return recent
-            if self.is_app_flow:
-                result = self._acquire_for_app(resolved, scope_list, claims, force_refresh)
-            else:
-                result = self._acquire_for_user(
-                    resolved,
-                    scope_list,
-                    claims,
-                    force_refresh,
-                    pick_account,
-                    reauthenticate=reauthenticate,
-                    consent=consent,
-                    silent_only=silent_only,
-                )
+            # MSAL sends its requests with ``requests`` and lets that library's exceptions
+            # through: a failed connection, and an error status from Entra where MSAL has no
+            # answer to read (a 5xx for a token, any for the tenant's configuration). An error
+            # status MSAL holds back to throttle a retry is its own MsalServiceError (msal 1.39
+            # ``oauth2.py``, ``authority.py``, ``throttled_http_client.py``).
+            try:
+                if self.is_app_flow:
+                    result = self._acquire_for_app(resolved, scope_list, claims, force_refresh)
+                else:
+                    result = self._acquire_for_user(
+                        resolved,
+                        scope_list,
+                        claims,
+                        force_refresh,
+                        pick_account,
+                        reauthenticate=reauthenticate,
+                        consent=consent,
+                        silent_only=silent_only,
+                    )
+            except (requests.HTTPError, MsalServiceError) as exc:
+                raise AuthError(
+                    f"Entra ID failed a token request for tenant {self._tenant}: {exc}"
+                ) from exc
+            except requests.RequestException as exc:
+                raise network_error(f"A token request for tenant {self._tenant}", exc) from exc
             info = AccessTokenInfo(
                 str(result["access_token"]),
                 int(time.time()) + int(result.get("expires_in", 0)),

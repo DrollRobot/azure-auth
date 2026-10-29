@@ -8,6 +8,8 @@
 
 ::: azure_auth.auth.errors
 
+::: azure_auth.errors
+
 ::: azure_auth.auth.credentials
 
 ::: azure_auth.auth.cache

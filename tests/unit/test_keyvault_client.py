@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from azure.core.exceptions import HttpResponseError, ResourceNotFoundError, ServiceRequestError
 
-from azure_auth import AuthContext
+from azure_auth import AuthContext, InteractionRequired, KeyVaultError, NetworkError
 from azure_auth.clients.keyvault import KeyVaultClient
 from tests.fakes import FakeMsal, tenant_guid
 
@@ -17,9 +20,13 @@ VAULT = "https://contoso.vault.azure.net"
 
 
 class FakeSdkClient:
-    """Stands in for SecretClient, CertificateClient and CryptographyClient."""
+    """Stands in for SecretClient, CertificateClient and CryptographyClient.
+
+    Every call raises ``failure`` when a test sets one, as the SDK raises its exceptions.
+    """
 
     created: list[FakeSdkClient]
+    failure: Exception | None
 
     def __init__(self, target: str, credential: Any) -> None:
         self.target = target
@@ -28,24 +35,29 @@ class FakeSdkClient:
         self.closed = False
         FakeSdkClient.created.append(self)
 
+    def _called(self, *call: Any) -> None:
+        self.calls.append(call)
+        if FakeSdkClient.failure is not None:
+            raise FakeSdkClient.failure
+
     async def get_secret(self, name: str, version: str | None) -> Any:
-        self.calls.append(("get_secret", name, version))
+        self._called("get_secret", name, version)
         return SimpleNamespace(value=None if name == "empty" else f"value-of-{name}")
 
     async def get_certificate(self, name: str) -> Any:
-        self.calls.append(("get_certificate", name))
+        self._called("get_certificate", name)
         return SimpleNamespace(cer=None if name == "empty" else bytearray(b"latest"))
 
     async def get_certificate_version(self, name: str, version: str) -> Any:
-        self.calls.append(("get_certificate_version", name, version))
+        self._called("get_certificate_version", name, version)
         return SimpleNamespace(cer=bytearray(b"pinned"))
 
     async def sign(self, algorithm: Any, digest: bytes) -> Any:
-        self.calls.append(("sign", algorithm.value, digest))
+        self._called("sign", algorithm.value, digest)
         return SimpleNamespace(signature=bytearray(b"signature"))
 
     async def verify(self, algorithm: Any, digest: bytes, signature: bytes) -> Any:
-        self.calls.append(("verify", algorithm.value, digest, signature))
+        self._called("verify", algorithm.value, digest, signature)
         return SimpleNamespace(is_valid=signature == b"signature")
 
     async def close(self) -> None:
@@ -55,6 +67,7 @@ class FakeSdkClient:
 @pytest.fixture
 def vault(monkeypatch: pytest.MonkeyPatch, fake_msal: FakeMsal) -> KeyVaultClient:
     FakeSdkClient.created = []
+    FakeSdkClient.failure = None
     for name in ("SecretClient", "CertificateClient", "CryptographyClient"):
         monkeypatch.setattr(f"azure_auth.clients.keyvault.{name}", FakeSdkClient)
     return KeyVaultClient(AuthContext("tenant", username="admin@contoso.com"), f"{VAULT}/")
@@ -109,3 +122,91 @@ async def test_closing_closes_every_sdk_client(vault: KeyVaultClient) -> None:
     async with vault:
         await vault.sign("signing", "RS256", b"digest")
     assert [client.closed for client in FakeSdkClient.created] == [True, True, True]
+
+
+# ---------------------------------------------------------------------------- errors
+
+# Every call the wrapper makes into the SDK.
+CALLS: dict[str, Callable[[KeyVaultClient], Any]] = {
+    "get_secret": lambda vault: vault.get_secret("missing"),
+    "get_certificate": lambda vault: vault.get_certificate("missing"),
+    "get_certificate_version": lambda vault: vault.get_certificate("missing", "v1"),
+    "sign": lambda vault: vault.sign("missing", "PS256", b"digest"),
+    "verify": lambda vault: vault.verify("missing", "PS256", b"digest", b"signature"),
+}
+
+MISSING = {
+    "error": {
+        "code": "SecretNotFound",
+        "message": "A secret with (name/id) missing was not found in this key vault.",
+    }
+}
+
+
+def vault_answer(status: int, reason: str, text: str) -> Any:
+    """Build the response the SDK raises its exception with."""
+    return SimpleNamespace(
+        status_code=status,
+        reason=reason,
+        headers={"x-ms-request-id": "req-7"},
+        request=SimpleNamespace(method="GET", url=f"{VAULT}/secrets/missing"),
+        text=lambda encoding=None: text,
+    )
+
+
+@pytest.mark.parametrize("call", CALLS)
+async def test_a_refusal_from_the_vault_is_a_key_vault_error(
+    vault: KeyVaultClient, call: str
+) -> None:
+    refusal = ResourceNotFoundError(response=vault_answer(404, "Not Found", json.dumps(MISSING)))
+    FakeSdkClient.failure = refusal
+
+    with pytest.raises(KeyVaultError) as caught:
+        await CALLS[call](vault)
+
+    error = caught.value
+    assert str(error) == (
+        f"GET {VAULT}/secrets/missing -> 404 SecretNotFound: "
+        "A secret with (name/id) missing was not found in this key vault."
+    )
+    assert (error.status, error.code, error.request_id) == (404, "SecretNotFound", "req-7")
+    assert error.body == MISSING
+    assert error.__cause__ is refusal
+
+
+async def test_a_refusal_without_an_error_body_keeps_the_status_and_the_text(
+    vault: KeyVaultClient,
+) -> None:
+    FakeSdkClient.failure = HttpResponseError(
+        response=vault_answer(502, "Bad Gateway", "<html>bad gateway</html>")
+    )
+
+    with pytest.raises(KeyVaultError) as caught:
+        await vault.get_secret("db-password")
+
+    assert str(caught.value) == f"GET {VAULT}/secrets/missing -> 502 Bad Gateway"
+    assert (caught.value.status, caught.value.code) == (502, None)
+    assert caught.value.body == "<html>bad gateway</html>"
+
+
+@pytest.mark.parametrize("call", CALLS)
+async def test_a_vault_out_of_reach_is_a_network_error(vault: KeyVaultClient, call: str) -> None:
+    dropped = ServiceRequestError("Cannot connect to host contoso.vault.azure.net:443")
+    FakeSdkClient.failure = dropped
+
+    with pytest.raises(NetworkError) as caught:
+        await CALLS[call](vault)
+
+    assert str(caught.value) == f"A request to {VAULT} failed: ServiceRequestError: {dropped}"
+    assert caught.value.__cause__ is dropped
+
+
+async def test_a_sign_in_error_reaches_the_caller_unchanged(vault: KeyVaultClient) -> None:
+    # The SDK asks the context for a token, and lets the context's exceptions through.
+    refusal = InteractionRequired("sign in", tenant_id="tenant")
+    FakeSdkClient.failure = refusal
+
+    with pytest.raises(InteractionRequired) as caught:
+        await vault.get_secret("db-password")
+
+    assert caught.value is refusal

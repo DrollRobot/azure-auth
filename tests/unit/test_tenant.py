@@ -13,7 +13,7 @@ from typing import Any
 import httpx2
 import pytest
 
-from azure_auth import AmbiguousTenant, AuthError, Tenant, TenantNotFound
+from azure_auth import AmbiguousTenant, AuthError, NetworkError, Tenant, TenantNotFound
 from azure_auth.clouds import CHINA, COMMERCIAL, US_GOV, US_GOV_DOD, Cloud
 from tests.http import Recorder, ok
 
@@ -202,6 +202,18 @@ def test_an_unexpected_answer_is_an_error_not_a_miss() -> None:
         Tenant.lookup("contoso.com", transport=recorder.transport)
 
 
+def test_an_answer_that_cannot_be_decoded_is_an_error_not_a_miss() -> None:
+    garbled = httpx2.Response(
+        200, headers={"Content-Encoding": "gzip"}, stream=httpx2.ByteStream(b"not gzip")
+    )
+    recorder = by_host({COM: garbled, US: None, CN: None})
+
+    with pytest.raises(AuthError, match="cannot be decoded") as caught:
+        Tenant.lookup("contoso.com", transport=recorder.transport)
+
+    assert isinstance(caught.value.__cause__, httpx2.DecodingError)
+
+
 @pytest.mark.parametrize("tenant", ["", "contoso.com/../x", "a b", "contoso.com?x=1", ".hidden"])
 def test_anything_but_a_tenant_id_or_domain_is_refused_before_a_request(tenant: str) -> None:
     recorder = Recorder([])
@@ -276,7 +288,7 @@ def test_nothing_found_with_a_host_unasked_is_an_error_not_a_miss() -> None:
     # The tenant may well be behind the host that did not answer.
     recorder = by_host({COM: None, US: None, CN: SILENT})
 
-    with pytest.raises(AuthError, match="could not be reached") as caught:
+    with pytest.raises(NetworkError, match="could not be reached") as caught:
         Tenant.lookup("contoso.cn", transport=recorder.transport)
 
     assert not isinstance(caught.value, TenantNotFound)
@@ -286,7 +298,7 @@ def test_nothing_found_with_a_host_unasked_is_an_error_not_a_miss() -> None:
 
 def test_no_host_answering_is_an_error() -> None:
     recorder = by_host({COM: SILENT, US: SILENT, CN: SILENT})
-    with pytest.raises(AuthError, match="could not be reached") as caught:
+    with pytest.raises(NetworkError, match="could not be reached") as caught:
         Tenant.lookup("contoso.com", transport=recorder.transport)
     for host in ("login.microsoftonline.com", "login.microsoftonline.us", CN):
         assert host in str(caught.value)
@@ -302,7 +314,7 @@ def test_the_named_clouds_own_host_settles_not_found() -> None:
 
 def test_the_named_clouds_own_host_not_answering_is_an_error() -> None:
     recorder = by_host({COM: COMMERCIAL_OIDC, US: COMMERCIAL_OIDC, CN: SILENT})
-    with pytest.raises(AuthError, match=r"the China cloud.*could not be reached"):
+    with pytest.raises(NetworkError, match=r"the China cloud.*could not be reached"):
         Tenant.lookup("contoso.cn", CHINA, transport=recorder.transport)
 
 

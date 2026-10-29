@@ -12,14 +12,14 @@ from typing import Any
 import httpx2
 import pytest
 
-from azure_auth import AuthContext, AuthError, ConsentRequired, InteractionRequired
+from azure_auth import AuthContext, AuthError, ConsentRequired, InteractionRequired, NetworkError
 from azure_auth.clients import GraphClient, GraphError
 from azure_auth.clients.base import claims_from_challenge, retry_delay
 from azure_auth.clients.graph import _scopes_in
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import GRAPH_APP_ID, GRAPH_CLI_CLIENT_ID
 from tests.fakes import Call, FakeLookup, FakeMsal, error_result, token_result
-from tests.http import Recorder, fake_jwt, ok
+from tests.http import Dropped, Recorder, fake_jwt, ok
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
@@ -357,6 +357,17 @@ async def test_token_is_never_sent_to_another_host(auth: AuthContext, url: str) 
     assert len(recorder.requests) == 1
 
 
+async def test_a_url_that_is_not_one_is_refused_before_a_request(auth: AuthContext) -> None:
+    recorder = Recorder([])
+    graph = GraphClient(auth, transport=recorder.transport)
+
+    with pytest.raises(ValueError, match="Not a valid URL") as caught:
+        await graph.get("/users\x00")
+
+    assert isinstance(caught.value.__cause__, httpx2.InvalidURL)
+    assert recorder.requests == []
+
+
 # ---------------------------------------------------------------------------- batch
 
 
@@ -440,6 +451,40 @@ async def test_a_body_the_service_mislabels_is_reported_with_its_status(
     assert (caught.value.status, caught.value.request_id) == (502, "req-9")
     assert caught.value.body is None
     assert caught.value.code is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [httpx2.ConnectError("[Errno 11001] getaddrinfo failed"), httpx2.ConnectTimeout("")],
+    ids=["unreachable", "timeout"],
+)
+async def test_a_request_that_gets_no_answer_raises_network_error(
+    auth: AuthContext, error: httpx2.TransportError
+) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        raise error
+
+    graph = GraphClient(auth, transport=Recorder(handler).transport)
+
+    with pytest.raises(NetworkError) as caught:
+        await graph.get("/me")
+
+    assert str(caught.value) == f"GET {GRAPH}/me failed: {type(error).__name__}" + (
+        f": {error}" if str(error) else ""
+    )
+    assert caught.value.__cause__ is error
+
+
+async def test_a_connection_lost_while_the_answer_arrives_raises_network_error(
+    auth: AuthContext,
+) -> None:
+    recorder = Recorder([httpx2.Response(200, stream=Dropped())])
+    graph = GraphClient(auth, transport=recorder.transport)
+
+    with pytest.raises(NetworkError, match="ReadError: connection reset by the test") as caught:
+        await graph.get("/users")
+
+    assert isinstance(caught.value.__cause__, httpx2.ReadError)
 
 
 # ---------------------------------------------------------------------------- grant when possible

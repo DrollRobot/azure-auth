@@ -10,10 +10,10 @@ import uuid
 from pathlib import Path
 
 import pytest
-from azure.core.exceptions import ResourceNotFoundError
+from azure.core.exceptions import ResourceNotFoundError, ServiceRequestError
 from azure.keyvault.secrets.aio import SecretClient
 
-from azure_auth import AuthContext
+from azure_auth import AuthContext, KeyVaultError, NetworkError
 from azure_auth.clients.keyvault import KeyVaultClient
 from azure_auth.sync.keyvault import KeyVaultClient as BlockingKeyVaultClient
 from tests.live.support import (
@@ -56,11 +56,30 @@ async def test_a_secret_is_read_by_name_and_by_version(user_auth: AuthContext) -
 
 @needs_user
 async def test_a_missing_secret_is_not_found(user_auth: AuthContext) -> None:
-    """A name the vault does not hold raises the SDK's not-found error, as documented."""
+    """A name the vault does not hold raises KeyVaultError with the vault's 404 and code."""
     sign_in_to_vault(user_auth)
     async with KeyVaultClient(user_auth, KEYVAULT_URL) as vault:
-        with pytest.raises(ResourceNotFoundError):
+        with pytest.raises(KeyVaultError) as caught:
             await vault.get_secret(f"azure-auth-missing-{uuid.uuid4().hex}")
+
+    assert (caught.value.status, caught.value.code) == (404, "SecretNotFound")
+    assert caught.value.request_id
+    assert isinstance(caught.value.__cause__, ResourceNotFoundError)
+
+
+@needs_user
+async def test_a_vault_that_does_not_exist_is_a_network_error(user_auth: AuthContext) -> None:
+    """A vault name that resolves to no host raises NetworkError, before any sign-in.
+
+    The SDK's first request to a vault carries no token, to learn its tenant, so the failed
+    name lookup is the first thing that happens.
+    """
+    url = f"https://azure-auth-{uuid.uuid4().hex[:12]}.vault.azure.net"
+    async with KeyVaultClient(user_auth, url) as vault:
+        with pytest.raises(NetworkError, match=f"A request to {url} failed") as caught:
+            await vault.get_secret(KEYVAULT_SECRET_NAME or "any")
+
+    assert isinstance(caught.value.__cause__, ServiceRequestError)
 
 
 @needs_user

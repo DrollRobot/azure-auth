@@ -46,6 +46,7 @@ import httpx2
 
 from azure_auth.auth.errors import AmbiguousTenant, AuthError, TenantNotFound
 from azure_auth.clouds import CHINA, CLOUDS, COMMERCIAL, US_GOV, Cloud, get_cloud
+from azure_auth.errors import NetworkError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -255,9 +256,10 @@ class Tenant:
                 the word of the hosts that answered.
             AmbiguousTenant: If the id or name is a different tenant in each of two clouds
                 and ``cloud`` does not say which.
-            AuthError: If no tenant was found and a host that might know it could not be
-                reached; if a sign-in host answers something unexpected; or if the tenant's
-                cloud is not a known one.
+            NetworkError: If no tenant was found and a host that might know it could not be
+                reached.
+            AuthError: If a sign-in host answers something unexpected, or the tenant's cloud
+                is not a known one.
         """
         if not _TENANT_PATTERN.fullmatch(name):
             raise ValueError(f"Not a tenant id or domain name: {name!r}")
@@ -302,7 +304,7 @@ class Tenant:
                     f"{c.name} ({urlsplit(c.authority_host).hostname}): {e}"
                     for c, e in unreached.items()
                 )
-                raise AuthError(
+                raise NetworkError(
                     f"{message} by the sign-in hosts that answered, and the rest could not be "
                     f"reached: {silent}"
                 ) from next(reversed(unreached.values()))
@@ -373,7 +375,12 @@ def _fetch(client: httpx2.Client, cloud: Cloud, name: str, domain: str | None) -
         httpx2.TransportError: If the host cannot be reached or does not answer in time.
     """
     url = f"{cloud.authority_host.rstrip('/')}/{name}/v2.0/.well-known/openid-configuration"
-    response = client.get(url)
+    try:
+        response = client.get(url)
+    except httpx2.DecodingError as exc:
+        raise AuthError(
+            f"Lookup of {name} at {url} answered with a body that cannot be decoded: {exc}"
+        ) from exc
     if response.status_code == httpx2.codes.OK:
         return Tenant.from_oidc(response.json(), domain=domain)
     try:

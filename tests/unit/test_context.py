@@ -8,12 +8,15 @@ import threading
 import time
 import uuid
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import msal_extensions
 import pytest
+import requests
 from msal import BrowserInteractionTimeoutError, TokenCache
+from msal.exceptions import MsalServiceError
 
 from azure_auth import (
     AccountSelectionRequired,
@@ -22,6 +25,7 @@ from azure_auth import (
     BrokerUnavailable,
     ConsentRequired,
     InteractionRequired,
+    NetworkError,
     Tenant,
     TenantNotFound,
 )
@@ -426,6 +430,79 @@ def test_app_flow_error_is_mapped(fake_msal: FakeMsal) -> None:
     auth = AuthContext("tenant", client_id="app", client_secret="s3cret")
     with pytest.raises(AuthError, match="invalid_client: bad secret"):
         auth.get_token(ARM_SCOPE)
+
+
+# ---------------------------------------------------------------------------- MSAL's exceptions
+
+
+def failing(error: Exception) -> Callable[[Call], Result]:
+    """Script an MSAL call that raises ``error``, as MSAL lets its HTTP library's through."""
+
+    def call(_: Call) -> Result:
+        raise error
+
+    return call
+
+
+def context_for(flow: str) -> AuthContext:
+    if flow == "app":
+        return AuthContext(TENANT, client_id="app", client_secret="s3cret")
+    return user_context()
+
+
+@pytest.mark.parametrize("flow", ["user", "app"])
+def test_entra_out_of_reach_is_a_network_error(fake_msal: FakeMsal, flow: str) -> None:
+    dropped = requests.ConnectionError("Max retries exceeded with url: /oauth2/v2.0/token")
+    fake_msal.interactive = fake_msal.for_client = failing(dropped)
+
+    with pytest.raises(NetworkError) as caught:
+        context_for(flow).get_token(ARM_SCOPE)
+
+    assert str(caught.value) == (
+        f"A token request for tenant {TENANT} failed: ConnectionError: {dropped}"
+    )
+    assert caught.value.__cause__ is dropped
+
+
+def test_a_silent_request_out_of_reach_does_not_open_the_browser(fake_msal: FakeMsal) -> None:
+    fake_msal.accounts = [ACCOUNT]
+    fake_msal.silent = failing(requests.ConnectTimeout("timed out"))
+
+    with pytest.raises(NetworkError, match="ConnectTimeout: timed out"):
+        user_context().acquire_token([ARM_SCOPE], force_refresh=True)
+
+    assert fake_msal.methods() == ["silent"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        requests.HTTPError("503 Server Error: Service Unavailable for url: /token"),
+        MsalServiceError("HTTP Error: 503", error=None, error_description=None),
+    ],
+    ids=["requests", "throttled"],
+)
+@pytest.mark.parametrize("flow", ["user", "app"])
+def test_an_error_status_msal_cannot_read_is_an_auth_error(
+    fake_msal: FakeMsal, flow: str, error: Exception
+) -> None:
+    fake_msal.interactive = fake_msal.for_client = failing(error)
+
+    with pytest.raises(AuthError, match=f"Entra ID failed a token request .*: {error}") as caught:
+        context_for(flow).get_token(ARM_SCOPE)
+
+    assert caught.value.__cause__ is error
+
+
+@pytest.mark.anyio
+async def test_the_async_context_raises_the_same_network_error(fake_msal: FakeMsal) -> None:
+    dropped = requests.ConnectionError("unreachable")
+    fake_msal.interactive = failing(dropped)
+
+    with pytest.raises(NetworkError) as caught:
+        await user_context().aio.acquire_token([ARM_SCOPE])
+
+    assert caught.value.__cause__ is dropped
 
 
 @pytest.mark.regression

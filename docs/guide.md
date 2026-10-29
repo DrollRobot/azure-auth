@@ -181,7 +181,7 @@ auth = AuthContext(Tenant("organizations", COMMERCIAL), username="someone@contos
 No single sign-in host knows every tenant, so the lookup asks all three and takes as long
 as the slowest answer. A host that cannot be reached, or does not answer in time, is skipped
 with a warning (logger `azure_auth.auth.tenant`), and the hosts that did answer decide. When
-they find nothing and a host was skipped, the lookup raises `AuthError` rather than
+they find nothing and a host was skipped, the lookup raises `NetworkError` rather than
 `TenantNotFound`, since the tenant may live behind the host that did not answer.
 
 A cloud none of your tenants is in can be left out, by constant or by name, on the lookup
@@ -464,8 +464,16 @@ AuthError(error, error_codes, suberror, correlation_id, trace_id, claims)
 ResourceError(status, code, request_id, body)
 ├── GraphError
 ├── ArmError
-└── InvokeCommandError
+├── InvokeCommandError
+└── KeyVaultError
+NetworkError
 ```
+
+Network failures and error answers come as these exceptions, never as those of `httpx2`, of
+`requests` under MSAL, or of the Azure SDK; the original is chained as `__cause__`, so a
+traceback still shows it. A host that cannot be reached, a failed TLS handshake or a timeout
+raises `NetworkError`, from a token request and a resource call alike. An error status raises
+`AuthError` from Entra ID and the client's `ResourceError` from a resource.
 
 MSAL result dictionaries never reach your code. An error made from Entra's answer keeps its
 message whole, and its details in the fields on `AuthError`: the OAuth `error`, the AADSTS
@@ -601,8 +609,9 @@ async with KeyVaultClient(auth, "https://contoso.vault.azure.net") as vault:
     signature = await vault.sign("signing-key", "PS256", digest)
 ```
 
-This is a thin wrapper over the Azure SDK. For anything else use the SDK clients directly
-with `credential=auth.aio`.
+This is a thin wrapper over the Azure SDK. Its calls raise `KeyVaultError` and
+`NetworkError`, not the SDK's exceptions. For anything else use the SDK clients directly with
+`credential=auth.aio`; those raise the SDK's own exceptions.
 
 ## Blocking clients
 

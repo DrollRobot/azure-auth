@@ -14,7 +14,13 @@ from azure_auth._sync.exchange import ExchangeClient
 from azure_auth._sync.graph import GraphClient
 from azure_auth._sync.invoke_command import InvokeCommandClient
 from azure_auth._sync.ipps import IppsClient
-from azure_auth.clients.errors import ArmError, GraphError, InvokeCommandError, ResourceError
+from azure_auth.clients.errors import (
+    ArmError,
+    GraphError,
+    InvokeCommandError,
+    KeyVaultError,
+    ResourceError,
+)
 
 __all__ = [
     "ArmClient",
@@ -25,6 +31,7 @@ __all__ = [
     "InvokeCommandClient",
     "InvokeCommandError",
     "IppsClient",
+    "KeyVaultError",
     "ResourceClient",
     "ResourceError",
 ]

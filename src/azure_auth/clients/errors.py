@@ -50,3 +50,10 @@ class ArmError(ResourceError):
 
 class InvokeCommandError(ResourceError):
     """Exchange Online or Security & Compliance rejected a cmdlet invocation."""
+
+
+class KeyVaultError(ResourceError):
+    """Azure Key Vault rejected a request, such as for a secret it does not hold.
+
+    The Azure SDK's own exception is chained as ``__cause__``.
+    """

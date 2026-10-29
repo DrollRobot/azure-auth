@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from azure_auth.clients.arm import ArmClient
 from azure_auth.clients.base import ResourceClient
-from azure_auth.clients.errors import ArmError, GraphError, InvokeCommandError, ResourceError
+from azure_auth.clients.errors import (
+    ArmError,
+    GraphError,
+    InvokeCommandError,
+    KeyVaultError,
+    ResourceError,
+)
 from azure_auth.clients.exchange import ExchangeClient
 from azure_auth.clients.graph import GraphClient
 from azure_auth.clients.invoke_command import InvokeCommandClient
@@ -23,6 +29,7 @@ __all__ = [
     "InvokeCommandClient",
     "InvokeCommandError",
     "IppsClient",
+    "KeyVaultError",
     "ResourceClient",
     "ResourceError",
 ]
