@@ -434,7 +434,7 @@ def ensure_token(auth: AuthContext, scopes: Sequence[str], client_id: str | None
         scopes: The scopes the test's requests will need.
         client_id: The client id they will be made with; the context's default when omitted.
     """
-    with walkthrough_if_waiting(sign_in_step("WAM" if auth._broker else "browser")):
+    with walkthrough_if_waiting(sign_in_step("WAM" if auth._given.broker else "browser")):
         auth.acquire_token(scopes, client_id=client_id)
     auth.flush_cache()
 

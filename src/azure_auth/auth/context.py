@@ -20,6 +20,7 @@ import threading
 import time
 import webbrowser
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -241,6 +242,43 @@ def _build_credential(
     return None
 
 
+@dataclass(frozen=True)
+class _Given:
+    """What a context was built with, as the context uses it.
+
+    The constructor's arguments, each in the form the rest of the context works with: the
+    credential as an object, the cache built, the browser as a command. Frozen, so a context
+    from :meth:`AuthContext.get_tenant_context` shares its parent's by reference: the child
+    differs from the parent in its tenant and in whether it may prompt, in nothing it was
+    given.
+
+    Attributes:
+        tenant: The tenant as given, a string to look up or a :class:`Tenant`.
+        client_id: The client id, or ``None``.
+        username: The user principal name of a user flow, or ``None``.
+        credential: The app flow's credential, or ``None`` for a user flow.
+        cache: The MSAL token cache every application of the context writes to.
+        broker: Whether to use the Windows authentication broker.
+        broker_fallback: Whether the browser may stand in for a broker that cannot be used.
+        browser_timeout: Seconds a browser sign-in waits for the person.
+        browser: The browser command, or ``None`` for the system default.
+        before_browser_opens: Called right before each browser window opens, or ``None``.
+        lookup_clouds: The clouds whose sign-in hosts lookups ask, or ``None`` for all.
+    """
+
+    tenant: str | Tenant
+    client_id: str | None
+    username: str | None
+    credential: AppCredential | None
+    cache: Any
+    broker: bool
+    broker_fallback: bool
+    browser_timeout: float
+    browser: tuple[str, ...] | None
+    before_browser_opens: Callable[[], object] | None
+    lookup_clouds: tuple[Cloud, ...] | None
+
+
 class AuthContext:
     """Credentials, cache and account for one tenant.
 
@@ -373,22 +411,25 @@ class AuthContext:
             if before_browser_opens is not None:
                 raise ValueError("before_browser_opens is only available for user flows")
 
-        self._client_id = client_id
-        self._username = username
-        self._app_credential = credential
-        self._cache = build_cache(cache, cache_path)
-        self._broker = broker
-        self._broker_fallback = broker_fallback
-        self._browser_timeout = browser_timeout
-        self._browser = None if browser is None else _browser_command(browser)
-        self._before_browser_opens = before_browser_opens
-        self._lookup_clouds = _lookup_clouds(lookup_clouds)
+        self._given = _Given(
+            tenant=tenant,
+            client_id=client_id,
+            username=username,
+            credential=credential,
+            cache=build_cache(cache, cache_path),
+            broker=broker,
+            broker_fallback=broker_fallback,
+            browser_timeout=browser_timeout,
+            browser=None if browser is None else _browser_command(browser),
+            before_browser_opens=before_browser_opens,
+            lookup_clouds=_lookup_clouds(lookup_clouds),
+        )
         self._can_prompt = True
         self._home = self
         self._tenant = (
             tenant
             if isinstance(tenant, Tenant)
-            else Tenant.lookup(tenant, clouds=self._lookup_clouds)
+            else Tenant.lookup(tenant, clouds=self._given.lookup_clouds)
         )
         self._init_state()
 
@@ -423,17 +464,17 @@ class AuthContext:
     @property
     def client_id(self) -> str | None:
         """The client id given to this context, if any."""
-        return self._client_id
+        return self._given.client_id
 
     @property
     def username(self) -> str | None:
         """The user principal name of a user flow, or ``None`` for an app flow."""
-        return self._username
+        return self._given.username
 
     @property
     def is_app_flow(self) -> bool:
         """Whether this context authenticates as an application."""
-        return self._app_credential is not None
+        return self._given.credential is not None
 
     @property
     def home(self) -> AuthContext:
@@ -492,7 +533,7 @@ class AuthContext:
             found = self._lookups.get(tenant.lower())
             if found is None:
                 found = self._lookups[tenant.lower()] = Tenant.lookup(
-                    tenant, self._tenant.cloud, clouds=self._lookup_clouds
+                    tenant, self._tenant.cloud, clouds=self._given.lookup_clouds
                 )
             guid = found.id
         if guid == self._tenant.id:
@@ -502,16 +543,7 @@ class AuthContext:
             if context is None:
                 context = AuthContext.__new__(AuthContext)
                 context._tenant = found or Tenant(guid, self._tenant.cloud)
-                context._client_id = self._client_id
-                context._username = self._username
-                context._app_credential = self._app_credential
-                context._cache = self._cache
-                context._broker = self._broker
-                context._broker_fallback = self._broker_fallback
-                context._browser_timeout = self._browser_timeout
-                context._browser = self._browser
-                context._before_browser_opens = self._before_browser_opens
-                context._lookup_clouds = self._lookup_clouds
+                context._given = self._given
                 context._can_prompt = False
                 context._home = self._home
                 context._init_state()
@@ -668,8 +700,8 @@ class AuthContext:
             CacheFileEmpty: If the cache file is there but empty, which no process can decrypt.
             OSError: If the file could not be written. The changes stay for the next call.
         """
-        if isinstance(self._cache, DiskTokenCache):
-            self._cache.flush()
+        if isinstance(self._given.cache, DiskTokenCache):
+            self._given.cache.flush()
 
     def acquire_token_silently(
         self,
@@ -720,7 +752,7 @@ class AuthContext:
         Raises:
             ValueError: If an app flow has no client id.
         """
-        resolved = client_id or self._client_id
+        resolved = client_id or self._given.client_id
         if resolved:
             return resolved
         if self.is_app_flow:
@@ -867,14 +899,14 @@ class AuthContext:
         key = (client_id, use_broker)
         app = self._apps.get(key)
         if app is None:
-            if self._app_credential is not None:
+            if self._given.credential is not None:
                 app = msal.ConfidentialClientApplication(
                     client_id,
-                    client_credential=self._app_credential.msal_client_credential(
+                    client_credential=self._given.credential.msal_client_credential(
                         client_id=client_id, token_endpoint=self.token_endpoint
                     ),
                     authority=self.authority,
-                    token_cache=self._cache,
+                    token_cache=self._given.cache,
                     client_capabilities=_CLIENT_CAPABILITIES,
                 )
             elif use_broker:
@@ -883,7 +915,7 @@ class AuthContext:
                 app = msal.PublicClientApplication(
                     client_id,
                     authority=self.authority,
-                    token_cache=self._cache,
+                    token_cache=self._given.cache,
                     client_capabilities=_CLIENT_CAPABILITIES,
                     enable_broker_on_windows=True,
                     enable_pii_log=True,
@@ -892,7 +924,7 @@ class AuthContext:
                 app = msal.PublicClientApplication(
                     client_id,
                     authority=self.authority,
-                    token_cache=self._cache,
+                    token_cache=self._given.cache,
                     client_capabilities=_CLIENT_CAPABILITIES,
                 )
             with self._guard:
@@ -931,11 +963,11 @@ class AuthContext:
             BrokerUnavailable: If the broker was requested, cannot be used, and
                 ``broker_fallback`` is off.
         """
-        if not self._broker:
+        if not self._given.broker:
             return False
         if _broker_installed():
             return True
-        if not self._broker_fallback:
+        if not self._given.broker_fallback:
             raise BrokerUnavailable(
                 "The authentication broker needs Windows and the 'broker' extra "
                 "(pip install azure-auth[broker])"
@@ -965,10 +997,10 @@ class AuthContext:
         """
         homes = {
             (entry.get("home_account_id"), entry.get("environment")): entry
-            for entry in self._cache.search(TokenCache.CredentialType.ACCOUNT)
+            for entry in self._given.cache.search(TokenCache.CredentialType.ACCOUNT)
             if entry.get("realm") == str(entry.get("home_account_id") or "").rpartition(".")[2]
         }
-        username = (self._username or "").lower()
+        username = (self._given.username or "").lower()
         accounts = []
         for account in app.get_accounts():
             home = homes.get((account.get("home_account_id"), account.get("environment")))
@@ -1016,7 +1048,7 @@ class AuthContext:
             accounts = self._accounts(app)
             if len(accounts) > 1:
                 raise AccountSelectionRequired(
-                    f"{len(accounts)} cached accounts match {self._username!r}"
+                    f"{len(accounts)} cached accounts match {self._given.username!r}"
                 )
             if accounts:
                 result = app.acquire_token_silent_with_error(
@@ -1116,35 +1148,35 @@ class AuthContext:
                 result = broker_app.acquire_token_interactive(
                     scopes,
                     prompt=prompt,
-                    login_hint=self._username,
+                    login_hint=self._given.username,
                     claims_challenge=claims,
                     parent_window_handle=broker_app.CONSOLE_WINDOW_HANDLE,
                 )
             except Exception as exc:
-                if not self._broker_fallback:
+                if not self._given.broker_fallback:
                     raise BrokerUnavailable(f"The authentication broker failed: {exc}") from exc
                 _LOGGER.warning("Authentication broker failed (%s); using the browser", exc)
             else:
                 if not _broker_failed(result):
                     return dict(result)
-                if not self._broker_fallback:
+                if not self._given.broker_fallback:
                     raise BrokerUnavailable(
                         f"The authentication broker failed: {result.get('error_description')}"
                     )
                 _LOGGER.warning("Authentication broker failed; using the browser")
 
         app = self._app(client_id, use_broker=False)
-        if self._before_browser_opens is not None:
-            self._before_browser_opens()
-        if self._browser is not None:
-            return self._browser_sign_in(app, scopes, claims, prompt, self._browser)
+        if self._given.before_browser_opens is not None:
+            self._given.before_browser_opens()
+        if self._given.browser is not None:
+            return self._browser_sign_in(app, scopes, claims, prompt, self._given.browser)
         try:
             result = app.acquire_token_interactive(
                 scopes,
                 prompt=prompt,
-                login_hint=self._username,
+                login_hint=self._given.username,
                 claims_challenge=claims,
-                timeout=self._browser_timeout,
+                timeout=self._given.browser_timeout,
             )
         except BrowserInteractionTimeoutError as exc:
             raise self._browser_timeout_error() from exc
@@ -1184,14 +1216,14 @@ class AuthContext:
                 scopes,
                 redirect_uri=f"http://localhost:{receiver.get_port()}",
                 prompt=prompt,
-                login_hint=self._username,
+                login_hint=self._given.username,
                 claims_challenge=claims,
                 response_mode="form_post",
             )
             response = receiver.get_auth_response(
                 auth_uri=flow["auth_uri"],
                 state=flow["state"],
-                timeout=self._browser_timeout,
+                timeout=self._given.browser_timeout,
                 browser_name=name,
             )
         if response is None:
@@ -1205,7 +1237,7 @@ class AuthContext:
             The error, naming ``browser_timeout``.
         """
         return AuthError(
-            f"The browser sign-in was not completed within {self._browser_timeout:g} "
+            f"The browser sign-in was not completed within {self._given.browser_timeout:g} "
             "seconds. The window was closed, nobody answered it, or the sign-in page stopped "
             "at an error that never returns to the application, such as a Conditional "
             "Access block."
@@ -1222,9 +1254,10 @@ class AuthContext:
                 because cached accounts are selected by username.
         """
         signed_in = (result.get("id_token_claims") or {}).get("preferred_username")
-        if signed_in and self._username and signed_in.lower() != self._username.lower():
+        expected = self._given.username
+        if signed_in and expected and signed_in.lower() != expected.lower():
             raise AuthError(
-                f"Signed in as {signed_in!r}, but this context is configured for {self._username!r}"
+                f"Signed in as {signed_in!r}, but this context is configured for {expected!r}"
             )
 
 

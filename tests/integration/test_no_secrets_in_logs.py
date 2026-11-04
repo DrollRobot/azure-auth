@@ -372,7 +372,7 @@ async def test_refreshing_a_user_token_logs_no_token(
     recorder = Recorder([ok({"id": "1"})])
     with all_logs_at_debug() as records:
         auth = AuthContext(Tenant(TENANT, COMMERCIAL), username=USER)
-        auth._cache.add(
+        auth._given.cache.add(
             {
                 "client_id": GRAPH_CLI_CLIENT_ID,
                 "scope": [f"{GRAPH}/User.Read"],

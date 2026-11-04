@@ -98,7 +98,7 @@ def test_construction_makes_no_msal_application(fake_msal: FakeMsal) -> None:
 def test_repr_does_not_reveal_the_secret() -> None:
     auth = AuthContext("tenant", client_id="app", client_secret="s3cret")
     assert "s3cret" not in repr(auth)
-    assert "s3cret" not in repr(auth._app_credential)
+    assert "s3cret" not in repr(auth._given.credential)
 
 
 # ---------------------------------------------------------------------------- resolution order
@@ -515,8 +515,8 @@ def test_rejected_certificate_assertion_is_not_retried(fake_msal: FakeMsal) -> N
     with pytest.raises(AuthError, match="invalid_client"):
         auth.get_token(ARM_SCOPE)
 
-    assert isinstance(auth._app_credential, CertStoreCredential)
-    assert auth._app_credential.algorithm == "PS256"
+    assert isinstance(auth._given.credential, CertStoreCredential)
+    assert auth._given.credential.algorithm == "PS256"
     assert fake_msal.methods() == ["for_client"]
 
 
@@ -529,10 +529,33 @@ def test_get_tenant_shares_cache_username_and_credentials() -> None:
 
     assert customer is home.get_tenant_context("CUSTOMER")
     assert customer is not home
-    assert customer._cache is home._cache
+    assert customer._given.cache is home._given.cache
     assert (customer.username, customer.client_id) == (USER, "custom-app")
     assert customer.authority == f"https://login.microsoftonline.com/{CUSTOMER_GUID}"
     assert home.get_tenant_context("partner-tenant") is home
+
+
+def test_a_customer_context_shares_everything_its_home_was_given() -> None:
+    before = lambda: None  # noqa: E731
+    home = user_context(
+        client_id="custom-app",
+        broker=True,
+        broker_fallback=False,
+        browser_timeout=7,
+        browser=["msedge", "--inprivate"],
+        before_browser_opens=before,
+        lookup_clouds=["Commercial"],
+    )
+    customer = home.get_tenant_context("customer")
+
+    assert customer._given is home._given
+    assert customer._given.browser == ("msedge", "--inprivate")
+    assert customer._given.before_browser_opens is before
+    assert (customer._given.broker, customer._given.broker_fallback) == (True, False)
+    assert customer._given.browser_timeout == 7
+    assert customer._given.lookup_clouds == (COMMERCIAL,)
+    assert customer.tenant != home.tenant
+    assert customer._can_prompt is False
 
 
 def test_a_directly_built_context_is_its_own_home() -> None:
@@ -673,8 +696,8 @@ def test_app_flow_get_tenant_gets_its_own_assertion_audience(fake_msal: FakeMsal
         seen.append(token_endpoint)
         return "assertion"
 
-    assert isinstance(auth._app_credential, CertStoreCredential)
-    auth._app_credential.build_assertion = record  # type: ignore[method-assign]
+    assert isinstance(auth._given.credential, CertStoreCredential)
+    auth._given.credential.build_assertion = record  # type: ignore[method-assign]
 
     auth.get_token(ARM_SCOPE)
     auth.get_tenant_context("customer").get_token(ARM_SCOPE)
@@ -1355,7 +1378,7 @@ def test_a_broker_falling_back_uses_the_chosen_browser(
 def test_a_customer_keeps_the_chosen_browser() -> None:
     auth = user_context(browser=["msedge", "--inprivate"])
 
-    assert auth.get_tenant_context(CUSTOMER)._browser == ("msedge", "--inprivate")
+    assert auth.get_tenant_context(CUSTOMER)._given.browser == ("msedge", "--inprivate")
 
 
 def test_browser_is_rejected_for_app_flows() -> None:
@@ -1472,7 +1495,7 @@ def test_a_customer_keeps_before_browser_opens() -> None:
 
     auth = user_context(before_browser_opens=before)
 
-    assert auth.get_tenant_context(CUSTOMER)._before_browser_opens is before
+    assert auth.get_tenant_context(CUSTOMER)._given.before_browser_opens is before
 
 
 def test_before_browser_opens_is_rejected_for_app_flows() -> None:
@@ -1506,7 +1529,7 @@ def cache_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 def _store(auth: AuthContext, token: str) -> None:
     """Record a token in a context's cache, as MSAL does after a token response."""
-    auth._cache.add(
+    auth._given.cache.add(
         {
             "client_id": "app",
             "scope": ["https://graph.microsoft.com/.default"],
@@ -1549,7 +1572,7 @@ def test_flush_cache_has_nothing_to_do_for_the_memory_cache() -> None:
 
     auth.flush_cache()
 
-    found = auth._cache.search(TokenCache.CredentialType.ACCESS_TOKEN)
+    found = auth._given.cache.search(TokenCache.CredentialType.ACCESS_TOKEN)
     assert [entry["secret"] for entry in found] == ["kept"]
 
 
