@@ -265,7 +265,7 @@ async def test_gdap_reads_a_customers_exchange_without_prompting(
     assert claims["email"].lower().startswith(f"user_{home_id}@")
 
     request = guard.requests[0]
-    assert customer.tenant.id in request.url.path
+    assert customer.tenant.guid in request.url.path
     assert request.headers["X-AnchorMailbox"] == f"APP:{SYSTEM_MAILBOX}@{customer.tenant.id}"
 
     assert len(config) == 1

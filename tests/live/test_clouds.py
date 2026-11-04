@@ -137,7 +137,7 @@ def test_a_tenant_is_found_in_its_cloud_by_domain_and_by_id(
     domain: str, cloud: Cloud, sub_scope: str | None
 ) -> None:
     by_domain = Tenant.lookup(domain)
-    by_id = Tenant.lookup(by_domain.id)
+    by_id = Tenant.lookup(by_domain.guid)
 
     assert by_domain.cloud is cloud
     assert by_domain.region_sub_scope == sub_scope
@@ -558,7 +558,7 @@ async def test_a_discovered_context_reaches_graph_in_its_cloud(cache_path: Path)
         token = await auth.aio.acquire_token(graph.scopes, client_id=graph.client_id)
         organization = await graph.get_all("/organization", params={"$select": "id"})
 
-    tenant_guid = live_tenant().id
+    tenant_guid = live_tenant().guid
     assert auth.tenant.cloud == live_cloud()
     assert graph.base_url.startswith(auth.tenant.cloud.graph)
     assert token_claims(token.token)["tid"] == tenant_guid

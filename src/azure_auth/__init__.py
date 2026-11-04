@@ -29,6 +29,7 @@ from azure_auth.auth import (
     CertificateUnavailable,
     ConsentRequired,
     InteractionRequired,
+    ManagedIdentityUnavailable,
     Tenant,
     TenantNotFound,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "InvokeCommandError",
     "IppsClient",
     "KeyVaultError",
+    "ManagedIdentityUnavailable",
     "NetworkError",
     "ResourceError",
     "Tenant",

@@ -199,7 +199,7 @@ class InvokeCommandClient(ResourceClient):
         """
         if self._tenant_guid is None:
             token = self._credential.acquire_token(self._scopes, client_id=self._client_id)
-            self._tenant_guid = tenant_id_from_token(token.token) or self._auth.tenant.id
+            self._tenant_guid = tenant_id_from_token(token.token) or self._auth.tenant.guid
         return self._tenant_guid
 
     def _anchor(self, tenant: str) -> str:

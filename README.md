@@ -14,6 +14,7 @@ The high-level goals of this package.
 - Support delegated user and application auth.
 - For delegated user, support interactive browser auth.
 - For applications, supports secret and certificate auth. (including TMP-bound certs)
+- On Azure hosts, supports managed identity auth.
 - Provides clients for Graph, Exchange, IPPS, Azure (ARM) and Keyvault.
 - Support for the Exchange REST endpoints.
 - Azure auth object from this library can be passed to Azure SDKs.

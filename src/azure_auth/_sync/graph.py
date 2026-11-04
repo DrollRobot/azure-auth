@@ -343,7 +343,7 @@ class GraphClient(ResourceClient):
         Returns:
             The error, naming the application, the tenant, what is granted and what is not.
         """
-        tenant = self._auth.tenant.id
+        tenant = self._auth.tenant.guid
         if granted:
             message = (
                 f"Tenant {tenant} has not granted {', '.join(missing)} to application "

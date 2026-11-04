@@ -24,6 +24,7 @@ A context runs exactly one flow, decided by its arguments.
 | App, PEM | `client_id=`, `certificate_pem=`, `private_key_pem=`, optional `certificate_password=` |
 | App, PFX | `client_id=`, `certificate_pfx=` (bytes or path), optional `certificate_password=` |
 | App, Windows certificate store | `client_id=`, `certificate_thumbprint=`, optional `certificate_store="LocalMachine"` |
+| Managed identity | `managed_identity=True`, `tenant=` or `cloud=`, optional `client_id=` for a user-assigned identity |
 
 Secrets and key material are only held in memory. Load them from Key Vault or a keyring, not
 from source or a plain-text file.
@@ -103,6 +104,45 @@ The broker's errors give Entra's reason, such as `AADSTS65001` for missing conse
 context turns on the broker's PII logging. That switch is for the whole Python process: the
 broker's DEBUG log records (logger `msal.broker`) then name the user and the account. Tokens
 stay masked.
+
+### Managed identity
+
+On an Azure host, a process can sign in as the host's managed identity: no secret, no
+certificate, nothing on disk. The host's identity endpoint issues the tokens.
+
+```python
+auth = AuthContext(tenant_id, managed_identity=True, client_id=identity_client_id)
+auth.acquire_token_silently(
+    ["https://vault.azure.net/.default"]
+)  # fails now if the identity is missing
+
+async with KeyVaultClient(auth, "https://contoso.vault.azure.net") as vault:
+    password = await vault.get_secret("service-password")
+```
+
+- `client_id=` names a user-assigned identity. Leave it out for the system-assigned identity;
+  its client id is then read from the first token. Nothing is read from the environment to
+  choose the identity.
+- `tenant=` is looked up as for every flow. `cloud=` in its place skips the lookup: an identity
+  has tokens for its own tenant only, so the tenant is never needed to get one, and the
+  clients need the cloud for their hosts. `auth.tenant.id` is then `None` until the first
+  token names the tenant. Give the tenant when in doubt.
+- Hosts: Container Apps and their jobs, App Service and Functions (`IDENTITY_ENDPOINT`),
+  virtual machines and scale sets (instance metadata), Azure Arc, Service Fabric and Azure
+  Machine Learning. msal finds the endpoint from the host's own variables.
+- Tokens are for one resource at a time, as `<resource>/.default`. Every client asks that way
+  already; delegated scopes raise `ValueError`.
+- Off Azure, the flow fails within two seconds with `ManagedIdentityUnavailable`, an
+  `AuthError`. An endpoint that refuses (a client id not assigned to the host, no identity)
+  raises `AuthError` naming the identity, the endpoint and its reason. An endpoint the host
+  advertises that does not answer raises `NetworkError`. Nothing falls back to another flow.
+- A token proves the identity exists and is on the host, not that it holds a role: a
+  missing role shows as the resource's 403 (`KeyVaultError`, `GraphError`...).
+- `get_tenant_context()` raises `ValueError` for any tenant but the identity's own, and a
+  vault in another tenant fails with an `AuthError` that says so.
+- On a virtual machine with exactly one user-assigned identity, Azure may answer a
+  system-assigned request with that identity's token.
+- `cache="disk"` works but gains nothing: the endpoint is on the host.
 
 ## Clouds
 
@@ -460,6 +500,7 @@ AuthError(error, error_codes, suberror, correlation_id, trace_id, claims)
 ├── CacheEncryptionUnavailable
 ├── CacheFileEmpty(path)
 ├── BrokerUnavailable
+├── ManagedIdentityUnavailable
 ├── TenantNotFound(tenant)
 └── AmbiguousTenant(tenant, candidates)
 ResourceError(status, code, request_id, body)

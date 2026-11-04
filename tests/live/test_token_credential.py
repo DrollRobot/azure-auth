@@ -65,7 +65,7 @@ async def test_get_token_and_get_token_info_hand_the_sdk_one_usable_token(
     assert is_test_user(me.json()["userPrincipalName"])
 
     info = user_auth.get_token_info(
-        scope, options={"tenant_id": user_auth.tenant.id, "enable_cae": True}
+        scope, options={"tenant_id": user_auth.tenant.guid, "enable_cae": True}
     )
     assert info.token_type == "Bearer"
     assert (info.token, info.expires_on) == (token.token, token.expires_on)

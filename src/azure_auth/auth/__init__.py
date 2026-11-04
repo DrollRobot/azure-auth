@@ -13,6 +13,7 @@ from azure_auth.auth.errors import (
     CertificateUnavailable,
     ConsentRequired,
     InteractionRequired,
+    ManagedIdentityUnavailable,
     TenantNotFound,
 )
 from azure_auth.auth.tenant import Tenant
@@ -29,6 +30,7 @@ __all__ = [
     "CertificateUnavailable",
     "ConsentRequired",
     "InteractionRequired",
+    "ManagedIdentityUnavailable",
     "Tenant",
     "TenantNotFound",
 ]

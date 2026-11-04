@@ -2,7 +2,8 @@
 
 An :class:`AuthContext` holds one tenant (with its cloud), one set of credentials, one token
 cache and (for user flows) one account. It creates MSAL applications on demand, one per client id,
-because the Microsoft first-party client ids differ per resource.
+because the Microsoft first-party client ids differ per resource. A managed identity context
+holds no credential at all: the Azure host it runs on issues its tokens.
 
 The context implements the Azure SDK ``TokenCredential`` protocol, and its :attr:`aio`
 attribute implements ``AsyncTokenCredential``, so any ``azure-*`` SDK client accepts it as
@@ -12,8 +13,11 @@ attribute implements ``AsyncTokenCredential``, so any ``azure-*`` SDK client acc
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import importlib.util
+import json
 import logging
 import sys
 import threading
@@ -29,11 +33,14 @@ import msal
 import requests
 from azure.core.credentials import AccessToken, AccessTokenInfo, TokenRequestOptions
 from msal import BrowserInteractionTimeoutError, TokenCache
+from msal import managed_identity as msal_managed_identity
 from msal.exceptions import MsalServiceError
 
 # Not exported from msal. The only way to choose a browser per sign-in on Windows, where
 # acquire_token_interactive always uses the default; see .local/DECISIONS.md.
 from msal.oauth2cli.authcode import AuthCodeReceiver
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from azure_auth.auth import cng
 from azure_auth.auth.cache import CacheKind, DiskTokenCache, build_cache
@@ -48,6 +55,7 @@ from azure_auth.auth.errors import (
     AuthError,
     BrokerUnavailable,
     InteractionRequired,
+    ManagedIdentityUnavailable,
     broker_status,
     entra_error_codes,
     error_from_msal_result,
@@ -77,6 +85,28 @@ _CLIENT_CAPABILITIES = ["CP1"]
 _DEFAULT_BROWSER_TIMEOUT_SECONDS = 120
 
 _TokenKey = tuple[str, frozenset[str]]
+
+# The client id a managed identity's tokens are remembered under. The identity endpoint takes
+# no client id for a system-assigned identity, and a user-assigned identity's is fixed, so one
+# key serves the flow.
+_MANAGED_IDENTITY_KEY = "managed-identity"
+
+# The identity endpoint is on the host itself (``localhost``, or the link-local instance
+# metadata address), so it answers at once or not at all: a short wait to connect tells a host
+# without an endpoint from one with. The read timeout covers the endpoint asking Entra ID.
+_IDENTITY_CONNECT_TIMEOUT_SECONDS = 2.0
+_IDENTITY_READ_TIMEOUT_SECONDS = 10.0
+_IMDS_HOST = "169.254.169.254"
+
+# What each of msal's identity endpoints is called in messages.
+_IDENTITY_SOURCES: dict[int, str] = {
+    id(msal_managed_identity.APP_SERVICE): "App Service (IDENTITY_ENDPOINT)",
+    id(msal_managed_identity.SERVICE_FABRIC): "Service Fabric (IDENTITY_ENDPOINT)",
+    id(msal_managed_identity.MACHINE_LEARNING): "Azure Machine Learning (MSI_ENDPOINT)",
+    id(msal_managed_identity.AZURE_ARC): "Azure Arc",
+    id(msal_managed_identity.CLOUD_SHELL): "Cloud Shell",
+    id(msal_managed_identity.DEFAULT_TO_VM): f"instance metadata ({_IMDS_HOST})",
+}
 
 # MSAL's ``token_source`` for a token Entra issued in that request, through a sign-in or the
 # refresh token; the others are its cache and the Windows broker, which has a cache of its own.
@@ -242,6 +272,115 @@ def _build_credential(
     return None
 
 
+class _IdentitySession(requests.Session):
+    """The session a managed identity's token requests go through.
+
+    msal sends through whatever session it is given and sets no timeout, and a plain
+    ``requests.Session`` waits for ever; off Azure, the instance metadata address never
+    answers. This session puts a timeout on every request, retries a throttled or failing
+    answer twice, honouring ``Retry-After``, and never retries a connection that could not be
+    made. It ignores the environment's proxy settings: the endpoint is on the host itself.
+    """
+
+    def __init__(self) -> None:
+        """Create the session."""
+        super().__init__()
+        self.trust_env = False
+        retry = Retry(
+            total=2,
+            connect=0,
+            read=0,
+            status=2,
+            status_forcelist=(429, 500, 502, 503, 504),
+            backoff_factor=0.5,
+            allowed_methods=frozenset({"GET"}),
+            respect_retry_after_header=True,
+            raise_on_status=False,
+        )
+        self.mount("https://", HTTPAdapter(max_retries=retry))
+        self.mount("http://", HTTPAdapter(max_retries=retry))
+
+    def request(
+        self, method: str | bytes, url: str | bytes, *args: Any, **kwargs: Any
+    ) -> requests.Response:
+        """Send a request, with the endpoint's timeout unless the caller set one.
+
+        Args:
+            method: HTTP method.
+            url: The URL.
+            *args: ``requests.Session.request`` arguments.
+            **kwargs: ``requests.Session.request`` arguments.
+
+        Returns:
+            The response.
+        """
+        kwargs.setdefault(
+            "timeout", (_IDENTITY_CONNECT_TIMEOUT_SECONDS, _IDENTITY_READ_TIMEOUT_SECONDS)
+        )
+        return super().request(method, url, *args, **kwargs)
+
+
+def _managed_identity_http_client() -> requests.Session:
+    """Create the session a managed identity client sends through.
+
+    Returns:
+        An :class:`_IdentitySession`. Tests replace this function to answer the endpoint.
+    """
+    return _IdentitySession()
+
+
+def _identity_source_name() -> str:
+    """Name the identity endpoint msal would use on this host.
+
+    Returns:
+        The endpoint's name, for messages.
+    """
+    source = msal_managed_identity.get_managed_identity_source()
+    return _IDENTITY_SOURCES.get(id(source), "managed identity")
+
+
+def _resource_from_scopes(scopes: Sequence[str]) -> str:
+    """Turn a token request's scopes into the resource the identity endpoint takes.
+
+    Args:
+        scopes: The scopes requested.
+
+    Returns:
+        The resource: the one scope without its ``/.default``. A trailing slash before it
+        stays, so ``https://management.core.windows.net//.default`` gives the resource with
+        the slash it is registered with.
+
+    Raises:
+        ValueError: If there is not exactly one scope, or it is not ``<resource>/.default``.
+    """
+    suffix = "/.default"
+    if len(scopes) != 1 or not scopes[0].endswith(suffix) or len(scopes[0]) == len(suffix):
+        raise ValueError(
+            "A managed identity gets a token for one resource at a time, requested as "
+            f"'<resource>/.default'; got {list(scopes)!r}"
+        )
+    return scopes[0][: -len(suffix)]
+
+
+def _token_claims(token: str) -> dict[str, Any]:
+    """Read the claims of an access token, without validating it.
+
+    Args:
+        token: A JWT access token.
+
+    Returns:
+        The payload's claims, or nothing when the token cannot be decoded.
+    """
+    parts = token.split(".")
+    if len(parts) < 2:  # a JWT is header.payload[.signature]
+        return {}
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except (binascii.Error, ValueError):
+        return {}
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
 @dataclass(frozen=True)
 class _Given:
     """What a context was built with, as the context uses it.
@@ -253,7 +392,10 @@ class _Given:
     given.
 
     Attributes:
-        tenant: The tenant as given, a string to look up or a :class:`Tenant`.
+        tenant: The tenant as given, a string to look up or a :class:`Tenant`; ``None`` for a
+            managed identity given its cloud instead.
+        cloud: The cloud as given, for a managed identity; else ``None``.
+        managed_identity: Whether the context signs in as the host's managed identity.
         client_id: The client id, or ``None``.
         username: The user principal name of a user flow, or ``None``.
         credential: The app flow's credential, or ``None`` for a user flow.
@@ -266,7 +408,9 @@ class _Given:
         lookup_clouds: The clouds whose sign-in hosts lookups ask, or ``None`` for all.
     """
 
-    tenant: str | Tenant
+    tenant: str | Tenant | None
+    cloud: Cloud | None
+    managed_identity: bool
     client_id: str | None
     username: str | None
     credential: AppCredential | None
@@ -282,14 +426,16 @@ class _Given:
 class AuthContext:
     """Credentials, cache and account for one tenant.
 
-    A context runs either a *user flow* (``username`` given, no credential) or an *app flow*
-    (``client_id`` plus a secret or certificate). Authentication is lazy: nothing happens
-    until the first token is requested.
+    A context runs one of three flows: a *user flow* (``username`` given, no credential), an
+    *app flow* (``client_id`` plus a secret or certificate), or a *managed identity flow*
+    (``managed_identity=True``, on an Azure host, with no credential at all). Authentication
+    is lazy: nothing happens until the first token is requested.
 
     Everything known about the tenant is in :attr:`tenant`, a :class:`Tenant`: its GUID, its
     cloud, a domain name and its OpenID Connect configuration. Given a GUID or domain name,
     the context looks the tenant up itself, so a tenant in any Microsoft cloud works without
-    saying which. Given a :class:`Tenant`, it uses it as it is.
+    saying which. Given a :class:`Tenant`, it uses it as it is. A managed identity can be
+    given its cloud instead, and learns its tenant from its first token.
 
     Example:
         >>> auth = AuthContext("contoso.com", username="admin@contoso.com")  # doctest: +SKIP
@@ -298,8 +444,10 @@ class AuthContext:
 
     def __init__(
         self,
-        tenant: str | Tenant,
+        tenant: str | Tenant | None = None,
         *,
+        cloud: Cloud | str | None = None,
+        managed_identity: bool = False,
         client_id: str | None = None,
         username: str | None = None,
         client_secret: str | None = None,
@@ -328,10 +476,25 @@ class AuthContext:
             tenant: Tenant id (GUID) or verified domain name, to look up; or a
                 :class:`Tenant`, used as it is. Build a :class:`Tenant` by hand, with the
                 GUID and the cloud, to skip the lookup; a wrong cloud then fails when used:
-                an app sign-in at once, a user's at the first request.
+                an app sign-in at once, a user's at the first request. Required, except for a
+                managed identity given ``cloud`` instead.
+            cloud: For a managed identity only: the cloud, as a :class:`~azure_auth.Cloud`
+                or its name, in place of ``tenant``. No lookup is made; the tenant's GUID is
+                read from the first token. A managed identity has tokens for its own tenant
+                only, so the GUID is never needed to get one; the clients need the cloud, for
+                their hosts. Give ``tenant`` instead when in doubt: it works for every flow.
+            managed_identity: Sign in as the managed identity of the Azure host this process
+                runs on: a virtual machine, a Container Apps job, App Service, Functions,
+                Azure Arc or Service Fabric. The host's identity endpoint issues the tokens;
+                there is no credential to give and nothing is written to disk. ``client_id``
+                names a user-assigned identity; without it, the host's system-assigned
+                identity is used. Nothing is read from the environment to choose the
+                identity. Tokens are requested for one resource at a time, as
+                ``<resource>/.default``. Never falls back to another flow.
             client_id: Application (client) id. App flows need one, here or on the resource
                 client. For user flows it overrides the first-party default of every
-                resource client.
+                resource client. For a managed identity, the client id of a user-assigned
+                identity; leave it out for the system-assigned identity.
             username: User principal name. Required for user flows; selects the cached
                 account and pre-fills the sign-in page. Not allowed for app flows.
             client_secret: Client secret for an app flow.
@@ -372,9 +535,11 @@ class AuthContext:
         Raises:
             ValueError: If the arguments do not describe exactly one flow, ``browser`` or
                 ``before_browser_opens`` is given for an app flow, ``browser`` names no
-                program, ``lookup_clouds`` is empty or names an unknown cloud, or ``tenant``
+                program, ``lookup_clouds`` is empty or names an unknown cloud, ``tenant``
                 is a multi-tenant authority such as ``organizations``, which has nothing to
-                look up: build its :class:`Tenant` by hand.
+                look up: build its :class:`Tenant` by hand; or a managed identity is given
+                neither ``tenant`` nor ``cloud``, or both, or any sign-in argument, or
+                ``cloud`` is given for another flow.
             CacheEncryptionUnavailable: If ``cache='disk'`` cannot be encrypted here.
             CertificateUnavailable: If a PFX archive cannot be read.
             TenantNotFound: If the lookup finds no such tenant.
@@ -384,7 +549,27 @@ class AuthContext:
                 could not be reached.
             AuthError: If the lookup gets an answer it cannot use.
         """
-        if not tenant:
+        if managed_identity:
+            if tenant is None and cloud is None:
+                raise ValueError("A managed identity needs tenant= or cloud=")
+            if tenant is not None and cloud is not None:
+                raise ValueError("Give a managed identity tenant= or cloud=, not both")
+            if any(
+                value is not None
+                for value in (
+                    client_secret,
+                    certificate_thumbprint,
+                    certificate_pem,
+                    private_key_pem,
+                    certificate_pfx,
+                )
+            ):
+                raise ValueError("A managed identity has no secret or certificate to give")
+        elif cloud is not None:
+            raise ValueError(
+                "cloud= is only for managed_identity=True; a tenant's cloud is looked up"
+            )
+        elif not tenant:
             raise ValueError("tenant is required")
         if isinstance(tenant, str) and tenant.lower() in MULTI_TENANT_AUTHORITIES:
             raise ValueError(
@@ -399,9 +584,20 @@ class AuthContext:
             certificate_pfx=certificate_pfx,
             certificate_password=certificate_password,
         )
-        if credential is None and not username:
+        if managed_identity:
+            if client_id is not None and as_guid(client_id) is None:
+                raise ValueError(f"A managed identity's client id is a GUID; got {client_id!r}")
+            for name, value in (
+                ("username", username),
+                ("broker", broker),
+                ("browser", browser),
+                ("before_browser_opens", before_browser_opens),
+            ):
+                if value:
+                    raise ValueError(f"{name} is not used with a managed identity")
+        elif credential is None and not username:
             raise ValueError("username is required for user flows")
-        if credential is not None:
+        elif credential is not None:
             if username:
                 raise ValueError("username is not used for app flows")
             if broker:
@@ -413,6 +609,8 @@ class AuthContext:
 
         self._given = _Given(
             tenant=tenant,
+            cloud=None if cloud is None else get_cloud(cloud),
+            managed_identity=managed_identity,
             client_id=client_id,
             username=username,
             credential=credential,
@@ -426,15 +624,20 @@ class AuthContext:
         )
         self._can_prompt = True
         self._home = self
-        self._tenant = (
-            tenant
-            if isinstance(tenant, Tenant)
-            else Tenant.lookup(tenant, clouds=self._given.lookup_clouds)
-        )
+        if isinstance(tenant, Tenant):
+            self._tenant = tenant
+        elif tenant is not None:
+            self._tenant = Tenant.lookup(tenant, clouds=self._given.lookup_clouds)
+        elif self._given.cloud is not None:
+            self._tenant = Tenant(None, self._given.cloud)
+        else:  # pragma: no cover (refused above; for the type checker)
+            raise ValueError("tenant is required")
         self._init_state()
 
     def _init_state(self) -> None:
         """Create the per-context mutable state."""
+        # A system-assigned identity's client id, read from its first token.
+        self._identity_client_id: str | None = None
         self._apps: dict[tuple[str, bool], Any] = {}
         self._locks: dict[_TokenKey, threading.Lock] = {}
         self._recent_tokens: dict[_TokenKey, AccessTokenInfo] = {}
@@ -451,20 +654,31 @@ class AuthContext:
         Returns:
             A short description.
         """
-        flow = "app" if self.is_app_flow else "user"
+        if self._given.managed_identity:
+            flow = "managed_identity"
+        else:
+            flow = "app" if self.is_app_flow else "user"
         return f"AuthContext(tenant={self._tenant!r}, flow={flow!r})"
 
     # ------------------------------------------------------------------ properties
 
     @property
     def tenant(self) -> Tenant:
-        """The tenant this context signs in to: its GUID, cloud, domain and OIDC configuration."""
+        """The tenant this context signs in to: its GUID, cloud, domain and OIDC configuration.
+
+        For a managed identity built with ``cloud=``, the GUID is ``None`` until the first
+        token names it.
+        """
         return self._tenant
 
     @property
     def client_id(self) -> str | None:
-        """The client id given to this context, if any."""
-        return self._given.client_id
+        """The client id given to this context, if any.
+
+        For a system-assigned managed identity, the identity's client id once its first token
+        has named it; ``None`` before.
+        """
+        return self._given.client_id or self._identity_client_id
 
     @property
     def username(self) -> str | None:
@@ -473,8 +687,17 @@ class AuthContext:
 
     @property
     def is_app_flow(self) -> bool:
-        """Whether this context authenticates as an application."""
-        return self._given.credential is not None
+        """Whether this context authenticates as an application, not a person.
+
+        ``True`` with a secret or certificate, and for a managed identity: its tokens are
+        app-only too, for ``<resource>/.default`` and never a first-party client id.
+        """
+        return self._given.credential is not None or self._given.managed_identity
+
+    @property
+    def is_managed_identity(self) -> bool:
+        """Whether this context signs in as the Azure host's managed identity."""
+        return self._given.managed_identity
 
     @property
     def home(self) -> AuthContext:
@@ -489,8 +712,12 @@ class AuthContext:
 
     @property
     def authority(self) -> str:
-        """The authority URL for this tenant."""
-        return f"{self._tenant.cloud.authority_host.rstrip('/')}/{self._tenant.id}"
+        """The authority URL for this tenant.
+
+        Raises:
+            AuthError: If the tenant's GUID is not known yet (:attr:`Tenant.guid`).
+        """
+        return f"{self._tenant.cloud.authority_host.rstrip('/')}/{self._tenant.guid}"
 
     @property
     def token_endpoint(self) -> str:
@@ -524,10 +751,19 @@ class AuthContext:
             calls return the same object.
 
         Raises:
+            ValueError: If this context is a managed identity and ``tenant`` is not its own:
+                an identity has tokens for its own tenant only.
             TenantNotFound, NetworkError, AuthError: From looking a domain name up, in this
                 cloud.
         """
         guid = as_guid(tenant)
+        if self._given.managed_identity:
+            if guid is not None and guid == self._tenant.id:
+                return self
+            raise ValueError(
+                f"A managed identity has tokens for its own tenant only ({self._tenant}); "
+                f"it cannot sign in to {tenant!r}"
+            )
         found = None
         if guid is None:
             found = self._lookups.get(tenant.lower())
@@ -535,7 +771,7 @@ class AuthContext:
                 found = self._lookups[tenant.lower()] = Tenant.lookup(
                     tenant, self._tenant.cloud, clouds=self._given.lookup_clouds
                 )
-            guid = found.id
+            guid = found.guid
         if guid == self._tenant.id:
             return self
         with self._guard:
@@ -576,9 +812,14 @@ class AuthContext:
 
         Returns:
             The token and its expiry time.
+
+        Raises:
+            AuthError: If this context is a managed identity and ``tenant_id`` names another
+                tenant: an identity has tokens for its own tenant only.
         """
-        context = self.get_tenant_context(tenant_id or self._tenant.id)
+        context = self._context_for_sdk(tenant_id)
         info = context.acquire_token(scopes, claims=claims)
+        self._check_requested_tenant(tenant_id)
         return AccessToken(info.token, info.expires_on)
 
     def get_token_info(
@@ -595,8 +836,44 @@ class AuthContext:
             The token with its expiry time and type.
         """
         options = options or {}
-        context = self.get_tenant_context(options.get("tenant_id") or self._tenant.id)
-        return context.acquire_token(scopes, claims=options.get("claims"))
+        context = self._context_for_sdk(options.get("tenant_id"))
+        info = context.acquire_token(scopes, claims=options.get("claims"))
+        self._check_requested_tenant(options.get("tenant_id"))
+        return info
+
+    def _context_for_sdk(self, tenant_id: str | None) -> AuthContext:
+        """Pick the context that serves an Azure SDK client's token request.
+
+        Args:
+            tenant_id: The tenant the SDK asks for, if any: Key Vault's challenge names the
+                vault's.
+
+        Returns:
+            :meth:`get_tenant_context` for ``tenant_id``; this context for a managed
+            identity, which has no other tenant to offer, and whose answer is checked against
+            the request afterwards (:meth:`_check_requested_tenant`).
+        """
+        if self._given.managed_identity or not tenant_id:
+            return self
+        return self.get_tenant_context(tenant_id)
+
+    def _check_requested_tenant(self, tenant_id: str | None) -> None:
+        """Refuse an SDK client's request for a tenant a managed identity is not in.
+
+        Args:
+            tenant_id: The tenant the SDK asked for, if any.
+
+        Raises:
+            AuthError: If this context is a managed identity in another tenant.
+        """
+        if not (self._given.managed_identity and tenant_id):
+            return
+        if as_guid(tenant_id) != self._tenant.id:
+            raise AuthError(
+                f"A token for tenant {tenant_id} was asked for, but this managed identity is "
+                f"in tenant {self._tenant.id}. An identity has tokens for its own tenant "
+                "only; the resource is in another tenant."
+            )
 
     def acquire_token(
         self,
@@ -632,7 +909,7 @@ class AuthContext:
     def login(
         self,
         *,
-        client_id: str,
+        client_id: str | None,
         scopes: Iterable[str],
         pick_account: bool = False,
         reauthenticate: bool = False,
@@ -641,10 +918,12 @@ class AuthContext:
         """Sign in now instead of at the first request.
 
         Resource clients call this from their own ``login()`` with their client id and
-        scopes. Calling it is optional, because the first token request signs in anyway.
+        scopes. Calling it is optional, because the first token request signs in anyway. A
+        managed identity gets its token; the other arguments mean nothing to it.
 
         Args:
-            client_id: Client id to sign in to.
+            client_id: Client id to sign in to; ``None`` only for a system-assigned managed
+                identity.
             scopes: Scopes to request.
             pick_account: Show the account picker, even when a cached token or account
                 exists or the broker or browser could sign in by itself. Someone other than
@@ -674,6 +953,9 @@ class AuthContext:
         """
         if pick_account + reauthenticate + consent > 1:
             raise ValueError("Only one of pick_account, reauthenticate and consent can be set")
+        if self._given.managed_identity:
+            # There is nobody to ask anything of; the token is simply got.
+            pick_account = reauthenticate = consent = False
         self._acquire(
             scopes,
             client_id,
@@ -750,11 +1032,16 @@ class AuthContext:
             PowerShell client id.
 
         Raises:
-            ValueError: If an app flow has no client id.
+            ValueError: If an app flow has no client id, or a system-assigned managed
+                identity's is not known yet.
         """
-        resolved = client_id or self._given.client_id
+        resolved = client_id or self.client_id
         if resolved:
             return resolved
+        if self._given.managed_identity:
+            raise ValueError(
+                "A system-assigned managed identity's client id is not known until its first token"
+            )
         if self.is_app_flow:
             raise ValueError("App flows need a client_id; first-party client ids cannot be used")
         return AZURE_POWERSHELL_CLIENT_ID
@@ -767,8 +1054,11 @@ class AuthContext:
             client_id: Client id the token is requested with.
 
         Returns:
-            The resolved client id and the set of scopes.
+            The resolved client id and the set of scopes. A managed identity's tokens are
+            keyed by their scopes alone: the endpoint takes no client id for them.
         """
+        if self._given.managed_identity:
+            return (_MANAGED_IDENTITY_KEY, frozenset(scopes))
         return (self.resolve_client_id(client_id), frozenset(scopes))
 
     def _recent_token(self, scopes: Iterable[str], client_id: str | None) -> AccessTokenInfo | None:
@@ -841,7 +1131,7 @@ class AuthContext:
         scope_list = list(dict.fromkeys(scopes))
         if not scope_list:
             raise ValueError("At least one scope is required")
-        resolved = self.resolve_client_id(client_id)
+        resolved = None if self._given.managed_identity else self.resolve_client_id(client_id)
         key = self._token_key(scope_list, resolved)
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
@@ -857,7 +1147,9 @@ class AuthContext:
             # status MSAL holds back to throttle a retry is its own MsalServiceError (msal 1.39
             # ``oauth2.py``, ``authority.py``, ``throttled_http_client.py``).
             try:
-                if self.is_app_flow:
+                if resolved is None:
+                    result = self._acquire_for_managed_identity(scope_list, claims, force_refresh)
+                elif self.is_app_flow:
                     result = self._acquire_for_app(resolved, scope_list, claims, force_refresh)
                 else:
                     result = self._acquire_for_user(
@@ -952,6 +1244,157 @@ class AuthContext:
         if "access_token" not in result:
             raise error_from_msal_result(result, tenant=self._tenant, scopes=scopes)
         return dict(result)
+
+    def _managed_identity_client(self) -> Any:
+        """Return the memoised MSAL managed identity client.
+
+        Returns:
+            An ``msal.ManagedIdentityClient`` for the configured identity, on this context's
+            cache, declaring ``_CLIENT_CAPABILITIES`` (msal 1.39 passes them on to Service
+            Fabric only).
+        """
+        key = (_MANAGED_IDENTITY_KEY, False)
+        app = self._apps.get(key)
+        if app is None:
+            client_id = self._given.client_id
+            identity = (
+                msal_managed_identity.UserAssignedManagedIdentity(client_id=client_id)
+                if client_id
+                else msal_managed_identity.SystemAssignedManagedIdentity()
+            )
+            app = msal_managed_identity.ManagedIdentityClient(
+                identity,
+                http_client=_managed_identity_http_client(),
+                token_cache=self._given.cache,
+                client_capabilities=_CLIENT_CAPABILITIES,
+            )
+            with self._guard:
+                app = self._apps.setdefault(key, app)
+        return app
+
+    def _acquire_for_managed_identity(
+        self, scopes: list[str], claims: str | None, force_refresh: bool
+    ) -> dict[str, Any]:
+        """Get a token from the host's identity endpoint.
+
+        Args:
+            scopes: The one ``<resource>/.default`` scope.
+            claims: Claims challenge to satisfy; msal then asks the endpoint again.
+            force_refresh: Drop the cached token for the resource first.
+
+        Returns:
+            The successful MSAL result.
+
+        Raises:
+            ValueError: If the scopes are not one ``<resource>/.default``.
+            ManagedIdentityUnavailable: If this host has no identity endpoint.
+            NetworkError: If the host's endpoint could not be reached, or did not answer.
+            AuthError: If the endpoint refused, or the token is for the wrong tenant.
+        """
+        resource = _resource_from_scopes(scopes)
+        app = self._managed_identity_client()
+        if force_refresh:
+            self._forget_managed_identity_tokens(resource)
+        endpoint = f"the {_identity_source_name()} managed identity endpoint"
+        try:
+            result = app.acquire_token_for_client(resource=resource, claims_challenge=claims)
+        except requests.ConnectionError as exc:
+            # A connection that could not be made, including one that timed out.
+            source = msal_managed_identity.get_managed_identity_source()
+            if source is msal_managed_identity.DEFAULT_TO_VM:
+                raise ManagedIdentityUnavailable(
+                    "This host has no managed identity endpoint: no IDENTITY_ENDPOINT or "
+                    f"MSI_ENDPOINT is set, and nothing answered at {_IMDS_HOST} within "
+                    f"{_IDENTITY_CONNECT_TIMEOUT_SECONDS:g} seconds ({type(exc).__name__}). "
+                    "A managed identity works only on an Azure host that has one assigned."
+                ) from exc
+            raise network_error(f"A token request to {endpoint}", exc) from exc
+        except requests.RequestException as exc:
+            raise network_error(f"A token request to {endpoint}", exc) from exc
+        except json.JSONDecodeError as exc:
+            raise ManagedIdentityUnavailable(
+                f"{endpoint[0].upper()}{endpoint[1:]} answered a token request with something "
+                "that is not a token response. This host is not an Azure host with a managed "
+                "identity."
+            ) from exc
+        except msal_managed_identity.ManagedIdentityError as exc:
+            raise AuthError(f"{endpoint[0].upper()}{endpoint[1:]} cannot be used: {exc}") from exc
+        if "access_token" not in result:
+            raise self._managed_identity_refusal(result, resource, endpoint)
+        self._learn_from_token(str(result["access_token"]))
+        return dict(result)
+
+    def _forget_managed_identity_tokens(self, resource: str) -> None:
+        """Drop the cached managed identity tokens for a resource.
+
+        Args:
+            resource: The resource whose tokens are dropped.
+        """
+        cache = self._given.cache
+        for entry in list(
+            cache.search(
+                TokenCache.CredentialType.ACCESS_TOKEN,
+                target=[resource],
+                query={"home_account_id": None},
+            )
+        ):
+            cache.remove_at(entry)
+
+    def _managed_identity_refusal(
+        self, result: dict[str, Any], resource: str, endpoint: str
+    ) -> AuthError:
+        """Build the error for a token the identity endpoint would not issue.
+
+        Args:
+            result: The failed MSAL result.
+            resource: The resource the token was for.
+            endpoint: The endpoint's name, for the message.
+
+        Returns:
+            The error, naming the identity, the endpoint and the resource, leading with the
+            endpoint's own words. msal labels every App Service refusal ``invalid_scope``, a
+            wrong client id included, so the label follows the words rather than leading.
+        """
+        client_id = self._given.client_id
+        identity = "the system-assigned identity"
+        if client_id:
+            identity = f"the user-assigned identity {client_id}"
+        description = str(result.get("error_description") or "").strip()
+        error = str(result.get("error") or "")
+        reason = description or error or "no reason given"
+        if description and error:
+            reason = f"{description} ({error})"
+        refusal = AuthError(
+            f"{endpoint[0].upper()}{endpoint[1:]} refused a token for {resource} for "
+            f"{identity}: {reason}. Check that the identity is assigned to this host and that "
+            "the resource is one it can get tokens for."
+        )
+        return with_entra_answer(refusal, result)
+
+    def _learn_from_token(self, token: str) -> None:
+        """Take what a managed identity's token says about the identity and its tenant.
+
+        Args:
+            token: The access token.
+
+        Raises:
+            AuthError: If the token is for a tenant other than the one this context was built
+                for.
+        """
+        claims = _token_claims(token)
+        tenant_id = as_guid(str(claims.get("tid") or ""))
+        if tenant_id is not None:
+            if self._tenant.id is None:
+                self._tenant = Tenant(tenant_id, self._tenant.cloud)
+            elif self._tenant.id != tenant_id:
+                raise AuthError(
+                    f"This managed identity's tokens are for tenant {tenant_id}, but the "
+                    f"context was built for tenant {self._tenant} ({self._tenant.id}). An "
+                    "identity has tokens for its own tenant only."
+                )
+        app_id = as_guid(str(claims.get("appid") or ""))
+        if app_id is not None and self._identity_client_id is None:
+            self._identity_client_id = app_id
 
     def _broker_usable(self) -> bool:
         """Decide whether to use the Windows broker for this context.
@@ -1070,7 +1513,7 @@ class AuthContext:
                 advised = InteractionRequired(
                     f"{error} Contexts from get_tenant_context() never prompt; call login() on a "
                     "client of the home context (auth.home) first.",
-                    tenant_id=self._tenant.id,
+                    tenant_id=self._tenant.guid,
                     scopes=scopes,
                 )
                 raise with_entra_answer(advised, result)
@@ -1318,8 +1761,9 @@ class AsyncAuthContext:
         Returns:
             The token and its expiry time.
         """
-        context = self.get_tenant_context(tenant_id or self._sync.tenant.id)
+        context = self._sync._context_for_sdk(tenant_id).aio
         info = await context.acquire_token(scopes, claims=claims)
+        self._sync._check_requested_tenant(tenant_id)
         return AccessToken(info.token, info.expires_on)
 
     async def get_token_info(
@@ -1336,8 +1780,10 @@ class AsyncAuthContext:
             The token with its expiry time and type.
         """
         options = options or {}
-        context = self.get_tenant_context(options.get("tenant_id") or self._sync.tenant.id)
-        return await context.acquire_token(scopes, claims=options.get("claims"))
+        context = self._sync._context_for_sdk(options.get("tenant_id")).aio
+        info = await context.acquire_token(scopes, claims=options.get("claims"))
+        self._sync._check_requested_tenant(options.get("tenant_id"))
+        return info
 
     async def acquire_token(
         self,
@@ -1403,7 +1849,7 @@ class AsyncAuthContext:
     async def login(
         self,
         *,
-        client_id: str,
+        client_id: str | None,
         scopes: Sequence[str],
         pick_account: bool = False,
         reauthenticate: bool = False,

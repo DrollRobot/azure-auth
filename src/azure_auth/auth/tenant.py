@@ -86,7 +86,9 @@ class Tenant:
 
     Attributes:
         id: The tenant's GUID. A multi-tenant authority (``common``, ``organizations``,
-            ``consumers``) is the one exception, accepted only when built by hand.
+            ``consumers``) is the one exception, accepted only when built by hand. ``None``
+            for a tenant whose cloud is known and whose GUID is not yet: a managed identity
+            context built with ``cloud=`` has one until its first token names the tenant.
         cloud: The cloud the tenant lives in.
         domain: A domain name of the tenant: the one it was looked up by, or the one found
             when a client needed it. ``None`` until either.
@@ -94,7 +96,7 @@ class Tenant:
             tenant was built by hand.
     """
 
-    id: str
+    id: str | None
     cloud: Cloud
     domain: str | None = None
     oidc: Mapping[str, Any] | None = field(default=None, repr=False)
@@ -105,6 +107,8 @@ class Tenant:
         Raises:
             ValueError: If ``id`` is neither a GUID nor a multi-tenant authority.
         """
+        if self.id is None:
+            return
         guid = as_guid(self.id)
         if guid is not None:
             self.id = guid
@@ -148,9 +152,27 @@ class Tenant:
         """Name the tenant for messages: its domain when known, else its id.
 
         Returns:
-            The domain name or the id.
+            The domain name or the id; for a tenant with neither yet, its cloud.
         """
-        return self.domain or self.id
+        return self.domain or self.id or f"<tenant not yet known, in {self.cloud.name}>"
+
+    @property
+    def guid(self) -> str:
+        """The tenant's id, for the places that need one.
+
+        Returns:
+            :attr:`id`.
+
+        Raises:
+            AuthError: If the id is not known yet: a managed identity context built with
+                ``cloud=`` learns it from its first token.
+        """
+        if self.id is None:
+            raise AuthError(
+                f"The tenant's id is not known yet ({self}): a managed identity learns it "
+                "from its first token"
+            )
+        return self.id
 
     @property
     def region_scope(self) -> str | None:

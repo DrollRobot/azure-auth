@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Managed identity sign-in on Azure hosts: `AuthContext(tenant, managed_identity=True)`,
+  with `cloud=` in place of `tenant`, and `ManagedIdentityUnavailable`.
+
 ## [0.10.0] - 2026-10-29 - httpx2 and own exceptions
 
 ### Changed

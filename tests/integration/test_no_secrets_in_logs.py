@@ -331,6 +331,79 @@ async def test_the_check_finds_what_the_sdk_network_trace_logs(
     assert {"Key Vault secret value", "access token"} <= found.keys()
 
 
+IDENTITY_ENDPOINT = "http://localhost:42356/msi/token"
+IDENTITY_HEADER = "identity-header-" + uuid.uuid4().hex
+
+
+class FakeIdentityEndpoint(requests.adapters.HTTPAdapter):
+    """A Container Apps job's identity endpoint, issuing a new token every time.
+
+    Attributes:
+        access_tokens: Every access token issued.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.access_tokens: list[str] = []
+
+    def send(self, request: requests.PreparedRequest, *args: Any, **kwargs: Any) -> Any:
+        assert request.headers["X-IDENTITY-HEADER"] == IDENTITY_HEADER
+        resource = dict(parse_qsl(urlsplit(request.url or "").query))["resource"]
+        access = fake_jwt(tid=TENANT, appid=CLIENT_ID, aud=resource, uti=uuid.uuid4().hex)
+        self.access_tokens.append(access)
+        return respond(
+            request,
+            200,
+            {
+                "access_token": access,
+                "expires_on": str(2_000_000_000),
+                "resource": resource,
+                "token_type": "Bearer",
+            },
+        )
+
+
+@pytest.fixture
+def identity_endpoint(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeIdentityEndpoint]:
+    """The host's identity endpoint, and the variables that name it to msal."""
+    monkeypatch.setenv("IDENTITY_ENDPOINT", IDENTITY_ENDPOINT)
+    monkeypatch.setenv("IDENTITY_HEADER", IDENTITY_HEADER)
+    monkeypatch.delenv("IDENTITY_SERVER_THUMBPRINT", raising=False)
+    fake = FakeIdentityEndpoint()
+    with requests.Session() as session:
+        session.mount("https://", NoNetwork())
+        session.mount("http://", NoNetwork())
+        session.mount(IDENTITY_ENDPOINT, fake)
+        monkeypatch.setattr(
+            "azure_auth.auth.context._managed_identity_http_client", lambda: session
+        )
+        yield fake
+
+
+async def test_a_managed_identity_reading_a_vault_secret_logs_no_secret(
+    session: requests.Session, identity_endpoint: FakeIdentityEndpoint
+) -> None:
+    transport = AsyncioRequestsTransport(session=session)
+    auth = AuthContext(Tenant(TENANT, COMMERCIAL), managed_identity=True, client_id=CLIENT_ID)
+    with all_logs_at_debug() as records, pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            "azure_auth.clients.keyvault.SecretClient",
+            functools.partial(SecretClient, transport=transport),
+        )
+        async with KeyVaultClient(auth, VAULT) as vault:
+            value = await vault.get_secret("db-password")
+    assert value == VAULT_SECRET
+    assert identity_endpoint.access_tokens
+    assert_no_secrets(
+        records,
+        {
+            "Key Vault secret value": [VAULT_SECRET],
+            "identity header": [IDENTITY_HEADER],
+            "access token": identity_endpoint.access_tokens,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------- MSAL
 
 

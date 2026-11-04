@@ -174,6 +174,16 @@ class BrokerUnavailable(AuthError):
     """The authentication broker was required but cannot be used."""
 
 
+class ManagedIdentityUnavailable(AuthError):
+    """This host has no managed identity endpoint.
+
+    No host variable names one (``IDENTITY_ENDPOINT``, ``MSI_ENDPOINT``), and the instance
+    metadata address every Azure virtual machine answers at did not answer, or answered with
+    something that is not a token response. The process is not running on an Azure host, or
+    on one without an identity assigned.
+    """
+
+
 class TenantNotFound(AuthError):
     """No tenant by that id or domain name exists in the clouds that were asked.
 
@@ -337,7 +347,7 @@ def error_from_msal_result(
         The exception to raise, carrying Entra's answer in its fields
         (:func:`with_entra_answer`). The MSAL dictionary itself is never exposed.
     """
-    tenant_id = tenant.id
+    tenant_id = tenant.guid
     if not result:
         return InteractionRequired(
             f"No cached token for tenant {tenant}; the user must sign in.",

@@ -113,7 +113,8 @@ class ResourceClient:
                 the default scope.
             base_url: Base URL that relative request paths are joined to.
             client_id: Client id for this client. Defaults to the context's client id, then
-                (user flows only) to ``DEFAULT_CLIENT_ID``.
+                (user flows only) to ``DEFAULT_CLIENT_ID``. A managed identity needs none:
+                the host's identity endpoint knows which identity it is.
             scopes: Delegated scopes to request in a user flow; short names are qualified
                 with the resource. Defaults to ``<resource>/.default``. App flows always use
                 ``.default``.
@@ -148,9 +149,13 @@ class ResourceClient:
         return self._resource
 
     @property
-    def client_id(self) -> str:
-        """The client id this client requests tokens with."""
-        return self._client_id
+    def client_id(self) -> str | None:
+        """The client id this client requests tokens with.
+
+        ``None`` for a system-assigned managed identity whose first token has not yet named
+        it; the context's :attr:`~azure_auth.AuthContext.client_id` has it afterwards.
+        """
+        return self._client_id or self._auth.client_id
 
     @property
     def scopes(self) -> tuple[str, ...]:
@@ -162,7 +167,7 @@ class ResourceClient:
         """The base URL that relative request paths are joined to."""
         return str(self._base_url).rstrip("/")
 
-    def _resolve_client_id(self, client_id: str | None) -> str:
+    def _resolve_client_id(self, client_id: str | None) -> str | None:
         """Apply the client id precedence rule.
 
         Args:
@@ -178,6 +183,8 @@ class ResourceClient:
         resolved = client_id or self._auth.client_id
         if resolved:
             return resolved
+        if self._auth.is_managed_identity:
+            return None
         if self._auth.is_app_flow:
             raise ValueError(
                 "App flows need a client_id on the AuthContext or on the client; "
