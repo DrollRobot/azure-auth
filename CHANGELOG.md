@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-04 - Managed identity
+
 ### Added
 
 - Managed identity sign-in on Azure hosts: `AuthContext(tenant, managed_identity=True)`,
@@ -188,7 +190,8 @@ Also included, but not yet verified: application sign-in with a secret or certif
 Windows broker, clients for Azure Resource Manager, Exchange Online, Security & Compliance
 and Key Vault, blocking versions of every client, and GDAP access to managed tenants.
 
-[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/DrollRobot/azure-auth/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/DrollRobot/azure-auth/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/DrollRobot/azure-auth/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/DrollRobot/azure-auth/compare/v0.8.0...v0.9.0
