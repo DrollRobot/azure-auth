@@ -143,10 +143,11 @@ def test_the_lookup_asks_every_sign_in_host_and_merges_the_same_tenant() -> None
     tenant = Tenant.lookup("Contoso.com", transport=recorder.transport)
 
     assert (tenant.id, tenant.cloud, tenant.domain) == (COMMERCIAL_ID, COMMERCIAL, "contoso.com")
-    assert recorder.urls() == [
+    # The hosts are asked at the same time, so the order the requests are seen in varies.
+    assert sorted(recorder.urls()) == sorted(
         f"https://{host}/Contoso.com/v2.0/.well-known/openid-configuration"
         for host in (COM, US, CN)
-    ]
+    )
 
 
 def test_a_us_government_tenant_is_found() -> None:
