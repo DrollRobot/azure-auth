@@ -10,7 +10,9 @@ host but not their Graph, Exchange or Security & Compliance hosts, so they are t
 here.
 
 Sources: the Exchange hosts are the ExchangeOnlineManagement module's own environment table
-(3.10.1), and the IPPS hosts its ``Connect-IPPSSession`` connection URIs. Every host below
+(3.10.1), and the IPPS hosts its ``Connect-IPPSSession`` connection URIs. The token exchange
+audiences are from Microsoft's "Configure an application to trust a managed identity"
+(read 2026-11-05). Every host below
 was checked live on 2026-09-26: each answers an unauthenticated request with a challenge
 naming its cloud's sign-in host (``tests/live/test_clouds.py``).
 """
@@ -50,6 +52,9 @@ class Cloud:
         ipps: Security & Compliance, as the resource tokens are issued for.
         ipps_host: Host that Security & Compliance requests are sent to first. Usually the
             host of ``ipps``; DoD sends them to a prefixed host.
+        token_exchange_audience: The audience of the token a managed identity presents as an
+            application's credential (workload identity federation). An application's
+            federated credential that trusts the identity names it.
         first_party_client_ids: The package's default client ids (see
             :mod:`azure_auth.constants`) that Microsoft publishes in this cloud. A client
             whose default is missing needs ``client_id=`` of the caller's own application.
@@ -63,6 +68,7 @@ class Cloud:
     exchange: str
     ipps: str
     ipps_host: str
+    token_exchange_audience: str
     first_party_client_ids: frozenset[str] = _EVERY_CLIENT_ID
 
     @property
@@ -82,6 +88,7 @@ COMMERCIAL = Cloud(
     exchange="https://outlook.office365.com",
     ipps="https://ps.compliance.protection.outlook.com",
     ipps_host="ps.compliance.protection.outlook.com",
+    token_exchange_audience="api://AzureADTokenExchange",  # noqa: S106 (an audience URI, not a secret)
 )
 """The worldwide cloud, including GCC."""
 
@@ -94,6 +101,7 @@ US_GOV = Cloud(
     exchange="https://outlook.office365.us",
     ipps="https://ps.compliance.protection.office365.us",
     ipps_host="ps.compliance.protection.office365.us",
+    token_exchange_audience="api://AzureADTokenExchangeUSGov",  # noqa: S106 (an audience URI, not a secret)
 )
 """US Government GCC High."""
 
@@ -108,6 +116,8 @@ US_GOV_DOD = Cloud(
     # The module strips the "l5." prefix to get the token audience, and so does this table.
     ipps="https://ps.compliance.protection.office365.us",
     ipps_host="l5.ps.compliance.protection.office365.us",
+    # Microsoft gives one value for US Government; DoD shares GCC High's sign-in host.
+    token_exchange_audience="api://AzureADTokenExchangeUSGov",  # noqa: S106 (an audience URI, not a secret)
 )
 """US Government DoD."""
 
@@ -120,6 +130,7 @@ CHINA = Cloud(
     exchange="https://partner.outlook.cn",
     ipps="https://ps.compliance.protection.partner.outlook.cn",
     ipps_host="ps.compliance.protection.partner.outlook.cn",
+    token_exchange_audience="api://AzureADTokenExchangeChina",  # noqa: S106 (an audience URI, not a secret)
     # Microsoft Graph Command Line Tools does not exist here: its device code request is
     # refused like a made-up id's (AADSTS50059), while the other two are answered (measured
     # 2026-09-27).

@@ -333,6 +333,7 @@ async def test_the_check_finds_what_the_sdk_network_trace_logs(
 
 IDENTITY_ENDPOINT = "http://localhost:42356/msi/token"
 IDENTITY_HEADER = "identity-header-" + uuid.uuid4().hex
+IDENTITY_CLIENT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 
 class FakeIdentityEndpoint(requests.adapters.HTTPAdapter):
@@ -374,9 +375,7 @@ def identity_endpoint(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeIdentityE
         session.mount("https://", NoNetwork())
         session.mount("http://", NoNetwork())
         session.mount(IDENTITY_ENDPOINT, fake)
-        monkeypatch.setattr(
-            "azure_auth.auth.context._managed_identity_http_client", lambda: session
-        )
+        monkeypatch.setattr("azure_auth.auth.managed_identity.http_client", lambda: session)
         yield fake
 
 
@@ -400,6 +399,31 @@ async def test_a_managed_identity_reading_a_vault_secret_logs_no_secret(
             "Key Vault secret value": [VAULT_SECRET],
             "identity header": [IDENTITY_HEADER],
             "access token": identity_endpoint.access_tokens,
+        },
+    )
+
+
+async def test_an_application_whose_credential_is_the_identity_logs_no_secret(
+    session: requests.Session, entra: FakeEntra, identity_endpoint: FakeIdentityEndpoint
+) -> None:
+    transport = AsyncioRequestsTransport(session=session)
+    auth = app_auth(managed_identity_client_id=IDENTITY_CLIENT_ID)
+    with all_logs_at_debug() as records, pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            "azure_auth.clients.keyvault.SecretClient",
+            functools.partial(SecretClient, transport=transport),
+        )
+        async with KeyVaultClient(auth, VAULT) as vault:
+            value = await vault.get_secret("db-password")
+    assert value == VAULT_SECRET
+    assert [form["client_assertion"] for form in entra.forms] == identity_endpoint.access_tokens
+    assert_no_secrets(
+        records,
+        {
+            "Key Vault secret value": [VAULT_SECRET],
+            "identity header": [IDENTITY_HEADER],
+            "the identity's token": identity_endpoint.access_tokens,
+            "the application's token": entra.access_tokens,
         },
     )
 

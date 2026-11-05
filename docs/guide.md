@@ -25,6 +25,7 @@ A context runs exactly one flow, decided by its arguments.
 | App, PFX | `client_id=`, `certificate_pfx=` (bytes or path), optional `certificate_password=` |
 | App, Windows certificate store | `client_id=`, `certificate_thumbprint=`, optional `certificate_store="LocalMachine"` |
 | Managed identity | `managed_identity=True`, `tenant=` or `cloud=`, optional `client_id=` for a user-assigned identity |
+| App, managed identity as its credential | `client_id=`, `managed_identity_client_id=` |
 
 Secrets and key material are only held in memory. Load them from Key Vault or a keyring, not
 from source or a plain-text file.
@@ -143,6 +144,42 @@ async with KeyVaultClient(auth, "https://contoso.vault.azure.net") as vault:
 - On a virtual machine with exactly one user-assigned identity, Azure may answer a
   system-assigned request with that identity's token.
 - `cache="disk"` works but gains nothing: the endpoint is on the host.
+
+### A managed identity as an application's credential
+
+An application can sign in on an Azure host with the host's user-assigned managed identity as
+its credential, in place of a secret or certificate. The application registration needs a
+federated credential that trusts the identity ("configure an application to trust a managed
+identity"). The identity then needs no role of its own: the tokens are the application's.
+
+```python
+auth = AuthContext(
+    tenant_id,
+    client_id=app_client_id,
+    managed_identity_client_id=identity_client_id,
+)
+auth.acquire_token_silently(
+    ["https://vault.azure.net/.default"]
+)  # fails now if the identity or the trust is missing
+```
+
+- The identity gets a token for the cloud's token exchange audience
+  (`api://AzureADTokenExchange`, `...USGov` in US Government, `...China` in China), and the
+  application's client credentials request presents it as the client assertion. It is an app
+  flow like any other: every client works with it, for any `<resource>/.default`.
+- User-assigned identities only, in the application's tenant: Microsoft does not take a
+  system-assigned one. The same hosts as the managed identity flow above.
+- Nothing is written to disk. The identity's token is kept in memory, never in the context's
+  cache, and serves every resource until it nears expiry.
+- Off Azure, `ManagedIdentityUnavailable`; an identity the host does not have, an `AuthError`
+  from the endpoint, before anything is sent to Entra ID. When Entra ID refuses the exchange,
+  an `AuthError` leading with its reason, and naming the application and the identity: for an
+  application that does not trust the identity, `AADSTS70021` (no matching federated identity
+  record), or `AADSTS70025` when it has no federated credential at all. Nothing is retried and nothing falls back. A federated
+  credential can take a few minutes to take effect after it is created.
+- Its own tenant only: `get_tenant_context()` raises `ValueError` for any other, and a vault in
+  another tenant fails with an `AuthError` that says so. Multi-tenant applications are not
+  supported with this credential yet.
 
 ## Clouds
 

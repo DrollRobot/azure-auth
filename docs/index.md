@@ -33,7 +33,9 @@ asyncio.run(main())
 The first request opens the browser. With `cache="disk"` later runs are silent.
 
 On an Azure host, `AuthContext(tenant_id, managed_identity=True)` signs in as the host's
-managed identity instead: no browser, no secret, nothing on disk.
+managed identity instead: no browser, no secret, nothing on disk. An application can have the
+identity as its credential: `AuthContext(tenant_id, client_id=app_id,
+managed_identity_client_id=identity_id)`.
 
 The tenant can be in any Microsoft cloud: Commercial, GCC, GCC High, DoD or China. The
 context finds which by itself. To look a tenant up without signing in at all:

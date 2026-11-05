@@ -335,6 +335,7 @@ def error_from_msal_result(
     *,
     tenant: Tenant,
     scopes: Sequence[str],
+    note: str | None = None,
 ) -> AuthError:
     """Translate a failed MSAL result into an exception.
 
@@ -342,6 +343,7 @@ def error_from_msal_result(
         result: The dictionary MSAL returned, or ``None`` when MSAL found nothing to return.
         tenant: Tenant the token was requested from.
         scopes: Scopes that were requested.
+        note: A sentence added after Entra's answer, such as which credential was presented.
 
     Returns:
         The exception to raise, carrying Entra's answer in its fields
@@ -368,6 +370,8 @@ def error_from_msal_result(
         if suberror:
             broker += f", SubError: {suberror.group(1)}"
         message = f"{reason} ({broker})"
+    if note:
+        message = f"{message.rstrip('. ')}. {note}"
 
     translated: AuthError
     if markers & _CONSENT_MARKERS or codes & _CONSENT_ERROR_CODES:

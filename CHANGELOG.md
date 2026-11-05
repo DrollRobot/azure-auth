@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- App sign-in with the host's managed identity as the credential:
+  `AuthContext(tenant, client_id=, managed_identity_client_id=)`.
+
 ## [0.11.0] - 2026-11-04 - Managed identity
 
 ### Added

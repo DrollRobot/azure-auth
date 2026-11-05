@@ -133,9 +133,9 @@ def test_cert_store_credential_signs_ps256_first(
     paddings = patch_cng(monkeypatch, certificate, refuse_pss=False)
     credential = CertStoreCredential(THUMBPRINT)
 
-    assertion = credential.msal_client_credential(client_id="app", token_endpoint=ENDPOINT)[
-        "client_assertion"
-    ]()
+    assertion = credential.msal_client_credential(
+        client_id="app", token_endpoint=ENDPOINT, cloud=COMMERCIAL
+    )["client_assertion"]()
 
     header, claims, signing_input, signature = decode_jwt(assertion)
     assert (header["alg"], claims["aud"], paddings) == ("PS256", ENDPOINT, ["pss"])
@@ -244,7 +244,10 @@ def test_certificate_store_is_reported_as_unavailable_off_windows() -> None:
 
 def test_secret_credential_hides_its_value() -> None:
     credential = SecretCredential("s3cret")
-    assert credential.msal_client_credential(client_id="a", token_endpoint="b") == "s3cret"
+    assert (
+        credential.msal_client_credential(client_id="a", token_endpoint="b", cloud=COMMERCIAL)
+        == "s3cret"
+    )
     assert "s3cret" not in repr(credential)
 
 
@@ -253,7 +256,9 @@ def test_pem_credential_lets_msal_compute_the_thumbprint(certificate: TestCertif
         certificate.certificate_pem, certificate.private_key_pem, "passphrase"
     )
 
-    value = credential.msal_client_credential(client_id="app", token_endpoint=ENDPOINT)
+    value = credential.msal_client_credential(
+        client_id="app", token_endpoint=ENDPOINT, cloud=COMMERCIAL
+    )
 
     assert value == {
         "private_key": certificate.private_key_pem,

@@ -1,13 +1,14 @@
 """Application credentials and the client assertion used for certificate authentication.
 
-Three kinds of credential are supported for app flows:
+Four kinds of credential are supported for app flows:
 
 * a client secret,
 * a certificate and private key supplied as PEM or PFX (MSAL signs the assertion),
 * a certificate in the Windows certificate store whose key cannot be exported (this package
-  signs the assertion through CNG, see :mod:`azure_auth.auth.cng`).
+  signs the assertion through CNG, see :mod:`azure_auth.auth.cng`),
+* a user-assigned managed identity of the Azure host, whose token is the assertion.
 
-Secrets and key material are only ever held in memory.
+Secrets, key material and the identity's tokens are only ever held in memory.
 """
 
 from __future__ import annotations
@@ -15,13 +16,15 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import threading
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
+import msal
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
@@ -31,7 +34,11 @@ from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
 from cryptography.hazmat.primitives.serialization import pkcs12
 
 from azure_auth.auth import cng
+from azure_auth.auth import managed_identity as host_identity
 from azure_auth.auth.errors import CertificateUnavailable
+
+if TYPE_CHECKING:
+    from azure_auth.clouds import Cloud
 
 ASSERTION_LIFETIME_SECONDS = 600
 
@@ -108,12 +115,13 @@ class SecretCredential:
 
     secret: str = field(repr=False)
 
-    def msal_client_credential(self, *, client_id: str, token_endpoint: str) -> Any:
+    def msal_client_credential(self, *, client_id: str, token_endpoint: str, cloud: Cloud) -> Any:
         """Return the value MSAL expects as ``client_credential``.
 
         Args:
             client_id: Application (client) id. Unused for secrets.
             token_endpoint: Tenant-specific token endpoint. Unused for secrets.
+            cloud: The tenant's cloud. Unused for secrets.
 
         Returns:
             The client secret.
@@ -168,7 +176,7 @@ class PemCertificateCredential:
             ).decode("ascii"),
         )
 
-    def msal_client_credential(self, *, client_id: str, token_endpoint: str) -> Any:
+    def msal_client_credential(self, *, client_id: str, token_endpoint: str, cloud: Cloud) -> Any:
         """Return the value MSAL expects as ``client_credential``.
 
         MSAL derives the SHA-256 thumbprint from ``public_certificate`` and signs the
@@ -177,6 +185,7 @@ class PemCertificateCredential:
         Args:
             client_id: Application (client) id. Unused; MSAL builds the assertion.
             token_endpoint: Tenant-specific token endpoint. Unused; MSAL builds the assertion.
+            cloud: The tenant's cloud. Unused.
 
         Returns:
             The credential dictionary.
@@ -327,7 +336,7 @@ class CertStoreCredential:
                 self._padding = "pkcs1"
         return self._build(client_id, token_endpoint, "pkcs1")
 
-    def msal_client_credential(self, *, client_id: str, token_endpoint: str) -> Any:
+    def msal_client_credential(self, *, client_id: str, token_endpoint: str, cloud: Cloud) -> Any:
         """Return the value MSAL expects as ``client_credential``.
 
         The assertion callable is bound to one token endpoint, because the ``aud`` claim is
@@ -336,6 +345,7 @@ class CertStoreCredential:
         Args:
             client_id: Application (client) id.
             token_endpoint: Tenant-specific token endpoint.
+            cloud: The tenant's cloud. Unused; the token endpoint names it.
 
         Returns:
             A dictionary holding the assertion callable.
@@ -347,4 +357,110 @@ class CertStoreCredential:
         return {"client_assertion": assertion}
 
 
-AppCredential = SecretCredential | PemCertificateCredential | CertStoreCredential
+class ManagedIdentityAssertionCredential:
+    """A user-assigned managed identity of the Azure host, as an application's credential.
+
+    The application registration has a federated credential that trusts the identity. The
+    client assertion is a token the identity gets from the host's identity endpoint for the
+    cloud's token exchange audience (:attr:`~azure_auth.Cloud.token_exchange_audience`), and
+    Entra ID takes it in place of a secret or a signed certificate assertion. Microsoft allows
+    user-assigned identities only, in the application's own tenant.
+
+    The identity's tokens are kept in this credential's own cache, in memory, whatever cache
+    the context has: they are a credential, and never reach a disk cache. The identity's token
+    serves every resource the application asks for, until it nears expiry; MSAL asks for the
+    assertion only when it sends a request to Entra ID, never when its cache answers.
+
+    Attributes:
+        identity_client_id: The client id of the user-assigned identity.
+        other_tenants: Whether a context may reach tenants other than its own with this
+            credential. ``False``: Microsoft supports a multi-tenant application provisioned
+            in another tenant reaching it this way, but this package does not yet (user,
+            2026-11-05), and a context refuses any tenant but its own. Setting it ``True`` is
+            all it takes to add it: :meth:`~azure_auth.AuthContext.get_tenant_context` then
+            builds other tenants' contexts as for every other credential, and the assertion,
+            tied to no tenant's token endpoint, serves them all.
+    """
+
+    other_tenants: ClassVar[bool] = False
+
+    def __init__(self, identity_client_id: str) -> None:
+        """Remember which identity to use. Nothing is requested yet.
+
+        Args:
+            identity_client_id: The client id (a GUID) of a user-assigned identity assigned
+                to the host.
+        """
+        self.identity_client_id = identity_client_id
+        self._client: Any = None
+        self._lock = threading.Lock()
+
+    def __repr__(self) -> str:
+        """Describe the credential without its tokens.
+
+        Returns:
+            A short description.
+        """
+        return f"ManagedIdentityAssertionCredential(identity_client_id={self.identity_client_id!r})"
+
+    def _identity(self) -> Any:
+        """Return the msal client for the identity, creating it once.
+
+        Returns:
+            An ``msal.ManagedIdentityClient`` on a cache of this credential's own.
+        """
+        with self._lock:
+            if self._client is None:
+                self._client = host_identity.identity_client(
+                    self.identity_client_id, token_cache=msal.TokenCache()
+                )
+            return self._client
+
+    def assertion(self, audience: str) -> str:
+        """Get the identity's token for the token exchange audience.
+
+        Args:
+            audience: The cloud's token exchange audience.
+
+        Returns:
+            The token, from this credential's cache while it is fresh.
+
+        Raises:
+            ManagedIdentityUnavailable: If this host has no identity endpoint.
+            NetworkError: If the host's endpoint could not be reached, or did not answer.
+            AuthError: If the endpoint refused, such as for an identity not on this host.
+        """
+        result = host_identity.request_token(
+            self._identity(), audience, client_id=self.identity_client_id
+        )
+        return str(result["access_token"])
+
+    def msal_client_credential(self, *, client_id: str, token_endpoint: str, cloud: Cloud) -> Any:
+        """Return the value MSAL expects as ``client_credential``.
+
+        MSAL calls the assertion callable each time it sends a token request. An error the
+        callable raises comes out of MSAL's token request unchanged.
+
+        Args:
+            client_id: Application (client) id. Unused; the identity's token names nobody.
+            token_endpoint: Tenant-specific token endpoint. Unused; the assertion's audience
+                is the cloud's, not a tenant's.
+            cloud: The tenant's cloud, whose token exchange audience the token is for.
+
+        Returns:
+            A dictionary holding the assertion callable.
+        """
+        audience = cloud.token_exchange_audience
+
+        def assertion() -> str:
+            return self.assertion(audience)
+
+        return {"client_assertion": assertion}
+
+
+AppCredential = (
+    SecretCredential
+    | PemCertificateCredential
+    | CertStoreCredential
+    | ManagedIdentityAssertionCredential
+)

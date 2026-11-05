@@ -1,24 +1,18 @@
 """Unit tests for the managed identity flow, with the host's identity endpoint faked.
 
 The real msal managed identity client runs in the middle; the endpoint is answered at the
-``requests`` adapter the context's session sends through, so each test sees the exact
-request the endpoint would get. The host is described through its environment variables, as
-msal reads them.
+``requests`` adapter the context's session sends through (``tests/identity.py``), so each test
+sees the exact request the endpoint would get.
 """
 
 from __future__ import annotations
 
-import io
-import json
 import time
-from collections.abc import Callable, Iterator
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
 
 import httpx2
 import pytest
 import requests
-from urllib3.response import HTTPResponse
 
 from azure_auth import (
     ArmClient,
@@ -31,126 +25,30 @@ from azure_auth import (
     NetworkError,
     Tenant,
 )
-from azure_auth.auth import context as context_module
+from azure_auth.auth import managed_identity as managed_identity_module
 from azure_auth.clouds import COMMERCIAL, US_GOV
 from tests.fakes import FakeLookup
-from tests.http import Recorder, fake_jwt, ok
+from tests.http import Recorder, ok
+from tests.identity import (
+    CONTAINER_APPS_ENDPOINT,
+    HOST_VARIABLES,
+    IDENTITY_CLIENT_ID,
+    IDENTITY_HEADER,
+    IMDS,
+    OTHER_TENANT,
+    TENANT,
+    FakeEndpoint,
+    app_service_answer,
+    imds_answer,
+    respond,
+    token,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
-TENANT = "11111111-2222-3333-4444-555555555555"
-OTHER_TENANT = "66666666-7777-8888-9999-000000000000"
-IDENTITY_CLIENT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 SYSTEM_CLIENT_ID = "ffffffff-0000-1111-2222-333333333333"
 VAULT_SCOPE = "https://vault.azure.net/.default"
 GOV_VAULT_SCOPE = "https://vault.usgovcloudapi.net/.default"
-CONTAINER_APPS_ENDPOINT = "http://localhost:42356/msi/token"
-IDENTITY_HEADER = "the-identity-header-" + "x" * 32
-IMDS = "http://169.254.169.254/metadata/identity/oauth2/token"
-
-# Every variable msal reads to tell the hosts apart.
-HOST_VARIABLES = (
-    "IDENTITY_ENDPOINT",
-    "IDENTITY_HEADER",
-    "IDENTITY_SERVER_THUMBPRINT",
-    "MSI_ENDPOINT",
-    "MSI_SECRET",
-    "IMDS_ENDPOINT",
-    "AZURE_POD_IDENTITY_AUTHORITY_HOST",
-    "AZUREPS_HOST_ENVIRONMENT",
-)
-
-Answer = Callable[[requests.PreparedRequest], requests.Response]
-
-
-def respond(
-    request: requests.PreparedRequest,
-    status: int,
-    body: Any = None,
-    headers: dict[str, str] | None = None,
-) -> requests.Response:
-    """Build the response a real connection would have produced."""
-    content = (
-        body.encode()
-        if isinstance(body, str)
-        else b""
-        if body is None
-        else json.dumps(body).encode()
-    )
-    raw = HTTPResponse(
-        body=io.BytesIO(content),
-        headers={"Content-Type": "application/json", **(headers or {})},
-        status=status,
-        preload_content=False,
-    )
-    return requests.adapters.HTTPAdapter().build_response(request, raw)
-
-
-def token(client_id: str = IDENTITY_CLIENT_ID, tenant: str = TENANT, **claims: Any) -> str:
-    """An access token as the identity endpoint issues them: v1 claims, unsigned."""
-    return fake_jwt(tid=tenant, appid=client_id, oid="identity-object-id", ver="1.0", **claims)
-
-
-def app_service_answer(
-    request: requests.PreparedRequest, access_token: str = token(), expires_in: int = 86400
-) -> requests.Response:
-    """What the App Service-style endpoint (Container Apps, Functions) answers with."""
-    return respond(
-        request,
-        200,
-        {
-            "access_token": access_token,
-            "expires_on": str(int(time.time()) + expires_in),
-            "resource": parse_qs(urlsplit(request.url or "").query)["resource"][0],
-            "token_type": "Bearer",
-            "client_id": IDENTITY_CLIENT_ID,
-        },
-    )
-
-
-def imds_answer(
-    request: requests.PreparedRequest, access_token: str = token(), expires_in: int = 86400
-) -> requests.Response:
-    """What the instance metadata endpoint of a virtual machine answers with."""
-    return respond(
-        request,
-        200,
-        {
-            "access_token": access_token,
-            "expires_in": str(expires_in),
-            "expires_on": str(int(time.time()) + expires_in),
-            "resource": parse_qs(urlsplit(request.url or "").query)["resource"][0],
-            "token_type": "Bearer",
-        },
-    )
-
-
-class FakeEndpoint(requests.adapters.HTTPAdapter):
-    """The identity endpoint: records every request and answers as scripted.
-
-    Attributes:
-        requests: Every request, in order.
-        sends: The keyword arguments of every send, holding the timeout.
-    """
-
-    def __init__(self, answer: Answer) -> None:
-        super().__init__()
-        self.answer = answer
-        self.requests: list[requests.PreparedRequest] = []
-        self.sends: list[dict[str, Any]] = []
-
-    def send(self, request: requests.PreparedRequest, *args: Any, **kwargs: Any) -> Any:
-        self.requests.append(request)
-        self.sends.append(kwargs)
-        return self.answer(request)
-
-    @property
-    def params(self) -> list[dict[str, str]]:
-        """The query of every request, one value per name."""
-        return [
-            {name: values[0] for name, values in parse_qs(urlsplit(r.url or "").query).items()}
-            for r in self.requests
-        ]
 
 
 @pytest.fixture(autouse=True)
@@ -158,40 +56,6 @@ def no_host(monkeypatch: pytest.MonkeyPatch) -> None:
     """Start every test off Azure: no host variable set."""
     for name in HOST_VARIABLES:
         monkeypatch.delenv(name, raising=False)
-
-
-@pytest.fixture
-def endpoint(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeEndpoint]:
-    """The fake endpoint, answering App Service style, mounted on the context's session."""
-    fake = FakeEndpoint(app_service_answer)
-    session: requests.Session | None = None
-
-    def http_client() -> requests.Session:
-        nonlocal session
-        session = context_module._IdentitySession()
-        session.mount("http://", fake)
-        session.mount("https://", fake)
-        return session
-
-    monkeypatch.setattr(context_module, "_managed_identity_http_client", http_client)
-    yield fake
-    if session is not None:
-        session.close()
-
-
-@pytest.fixture
-def container_apps(monkeypatch: pytest.MonkeyPatch, endpoint: FakeEndpoint) -> FakeEndpoint:
-    """A Container Apps job: the App Service-style variables are set."""
-    monkeypatch.setenv("IDENTITY_ENDPOINT", CONTAINER_APPS_ENDPOINT)
-    monkeypatch.setenv("IDENTITY_HEADER", IDENTITY_HEADER)
-    return endpoint
-
-
-@pytest.fixture
-def vm(endpoint: FakeEndpoint) -> FakeEndpoint:
-    """A virtual machine: no host variable, the instance metadata endpoint answers."""
-    endpoint.answer = imds_answer
-    return endpoint
 
 
 def identity_auth(**kwargs: Any) -> AuthContext:
@@ -257,7 +121,7 @@ def test_every_request_carries_the_endpoints_timeout(container_apps: FakeEndpoin
 
 
 def test_the_session_retries_a_throttled_or_failing_answer_but_never_a_connection() -> None:
-    session = context_module._IdentitySession()
+    session = managed_identity_module.IdentitySession()
     adapter = session.get_adapter("http://localhost/")
     assert isinstance(adapter, requests.adapters.HTTPAdapter)
     retry = adapter.max_retries
@@ -688,8 +552,8 @@ def test_an_advertised_endpoint_that_stops_answering_is_a_network_error(
 
 
 def test_the_real_session_is_what_the_client_sends_through() -> None:
-    session = context_module._managed_identity_http_client()
+    session = managed_identity_module.http_client()
     try:
-        assert isinstance(session, context_module._IdentitySession)
+        assert isinstance(session, managed_identity_module.IdentitySession)
     finally:
         session.close()
