@@ -1,4 +1,7 @@
-"""Scans the project for unwanted string patterns and fails the test if any are found.
+"""Scans the files git would commit for unwanted string patterns; fails if any are found.
+
+Only tracked files and untracked files not excluded by .gitignore are scanned, so ignored
+files (.env files, virtual environments, caches) never match.
 
 If adding sensitive strings that you don't want committed:
 - Add .local/ to .gitignore
@@ -7,6 +10,9 @@ If adding sensitive strings that you don't want committed:
 - Update pyproject.toml to include .local/tests in testpaths:
 [tool.pytest.ini_options]
 testpaths = ["tests",".local/tests"]
+- Update pyproject.toml to give .local/tests the same lint exemptions as tests:
+[tool.ruff.lint.per-file-ignores]
+".local/tests/**" = <same list as "tests/**">
 
 Add regex patterns to UNWANTED_PATTERNS to enable scanning.
 Lines matching any EXCEPTION_PATTERNS entry are suppressed (counted but not reported).
@@ -15,6 +21,8 @@ Lines matching any EXCEPTION_PATTERNS entry are suppressed (counted but not repo
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,12 +69,8 @@ EXCLUDED_EXTENSIONS: set[str] = {
     ".pptx",
 }
 
-EXCLUDED_FOLDERS: set[str] = {
-    ".local",
-    ".git",
-    ".venv",
-    "__pycache__",
-}
+# Git already skips ignored files. List only committed folders and files to skip.
+EXCLUDED_FOLDERS: set[str] = set()
 
 EXCLUDED_FILES: set[str] = set()
 
@@ -85,6 +89,34 @@ def _find_root() -> Path:
 
 
 _ROOT = _find_root()
+
+
+def _committable_files() -> list[Path]:
+    """List the files git would commit, relative to the project root.
+
+    Covers tracked files plus untracked files that .gitignore does not exclude.
+
+    Returns:
+        Sorted relative paths. Tracked files deleted from disk are included; callers
+        skip paths that are not regular files.
+
+    Raises:
+        RuntimeError: If git is not on PATH or the project root is not in a git repo.
+    """
+    git = shutil.which("git")
+    if git is None:
+        raise RuntimeError("git not found on PATH; cannot list the files to scan")
+    result = subprocess.run(  # noqa: S603 (fixed argv list, no shell)
+        [git, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git ls-files failed: {result.stderr.strip()}")
+    return sorted({Path(name) for name in result.stdout.split("\0") if name})
 
 
 @dataclass
@@ -123,12 +155,12 @@ def _scan() -> tuple[list[Hit], int]:
     hits: list[Hit] = []
     exception_count = 0
 
-    for path in sorted(_ROOT.rglob("*")):
+    for rel in _committable_files():
+        path = _ROOT / rel
         if not path.is_file():
             continue
         if path.suffix in EXCLUDED_EXTENSIONS:
             continue
-        rel = path.relative_to(_ROOT)
         if str(rel) in EXCLUDED_FILES:
             continue
         if any(part in EXCLUDED_FOLDERS for part in rel.parts):
