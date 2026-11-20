@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-19 - Broker extra on Python 3.15
+
+### Changed
+
+- **Breaking:** requires Python 3.11.18 or newer.
+
+### Fixed
+
+- `azure-auth[broker]` installs on Python 3.15, without the broker runtime.
+
 ## [0.12.0] - 2026-11-05 - Managed identity as an app credential
 
 ### Added
@@ -197,7 +207,8 @@ Also included, but not yet verified: application sign-in with a secret or certif
 Windows broker, clients for Azure Resource Manager, Exchange Online, Security & Compliance
 and Key Vault, blocking versions of every client, and GDAP access to managed tenants.
 
-[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/DrollRobot/azure-auth/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/DrollRobot/azure-auth/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/DrollRobot/azure-auth/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/DrollRobot/azure-auth/compare/v0.9.1...v0.10.0
