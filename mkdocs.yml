@@ -24,7 +24,7 @@ markdown_extensions:
   - pymdownx.highlight        # syntax highlighting
   - pymdownx.inlinehilite     # inline `code` highlighting
   - toc:
-      permalink: true         # ¶ link on each heading
+      permalink: true         # anchor link on each heading
 
 plugins:
   - search

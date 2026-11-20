@@ -47,19 +47,66 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import _cli
 
 from azure_auth import AuthContext, GraphClient
 from tests.verify_remote_disposable import SENTINEL
 
-# Bump on every change so scripts/compare_to_template.py can flag copies in other repos.
 # 1.1.0: the tenant and account come from --tenant and --username, never the environment.
-__version__ = "1.1.0"
+# 1.2.0: carries its own output helpers; no longer imports scripts/_cli.py.
+__version__ = "1.2.0"
+
+
+def section(title: str) -> None:
+    """Print a section header to separate steps in the output.
+
+    Args:
+        title: Section title.
+    """
+    print()
+    print(f"== {title} ==", flush=True)
+
+
+def info(label: str, value: str) -> None:
+    """Print an aligned ``label: value`` line.
+
+    Args:
+        label: Short field name.
+        value: Field value.
+    """
+    print(f"  {label + ':':<20}{value}")
+
+
+def die(message: str) -> NoReturn:
+    """Print an error to stderr and exit with status 1.
+
+    Args:
+        message: Error text.
+    """
+    print(f"ERROR: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def confirm(prompt: str) -> bool:
+    """Ask a yes/no question on the terminal.
+
+    Args:
+        prompt: Question to display, without the ``[y/n]`` suffix.
+
+    Returns:
+        ``True`` for yes, ``False`` for no.
+    """
+    while True:
+        answer = input(f"{prompt} [y/n] ").strip().lower()
+        if answer in ("y", "yes"):
+            return True
+        if answer in ("n", "no"):
+            return False
+        print("  Please answer 'y' or 'n'.")
+
 
 SCOPES = ["Organization.ReadWrite.All"]
 
@@ -100,7 +147,7 @@ async def run(args: argparse.Namespace) -> int:
     tenant = args.tenant.strip()
     username = args.username.strip()
     if not (tenant and username):
-        _cli.die("--tenant and --username must not be empty.")
+        die("--tenant and --username must not be empty.")
 
     auth = AuthContext(tenant, username=username)
     async with GraphClient(auth, scopes=SCOPES) as graph:
@@ -113,13 +160,13 @@ async def run(args: argparse.Namespace) -> int:
         marked = SENTINEL.lower() in [mark.lower() for mark in marks]
 
         others = [mark for mark in marks if mark.lower() != SENTINEL.lower()]
-        _cli.section("Tenant")
-        _cli.info("display name", str(organization.get("displayName", "")))
-        _cli.info("tenant id", org_id)
-        _cli.info("field", "organization.marketingNotificationEmails")
-        _cli.info("marker looked for", SENTINEL)
-        _cli.info("disposable", "YES" if marked else "no")
-        _cli.info("other addresses", ", ".join(others) if others else "(none)")
+        section("Tenant")
+        info("display name", str(organization.get("displayName", "")))
+        info("tenant id", org_id)
+        info("field", "organization.marketingNotificationEmails")
+        info("marker looked for", SENTINEL)
+        info("disposable", "YES" if marked else "no")
+        info("other addresses", ", ".join(others) if others else "(none)")
         sys.stdout.flush()
 
         if args.status:
@@ -127,40 +174,40 @@ async def run(args: argparse.Namespace) -> int:
 
         if args.unmark:
             if not marked:
-                _cli.success("Not marked; nothing to remove.")
+                print("Not marked; nothing to remove.")
                 return 0
-            _cli.section("Remove the marker")
+            section("Remove the marker")
             print(f"  removing '{SENTINEL}' from organization.marketingNotificationEmails")
             print(f"  leaving:  {', '.join(others) if others else '(nothing else)'}")
-            if not _cli.confirm("Remove the disposability marker?"):
-                _cli.warn("Unchanged.")
+            if not confirm("Remove the disposability marker?"):
+                print("Unchanged.")
                 return 1
             await graph.patch(f"/organization/{org_id}", {"marketingNotificationEmails": others})
-            _cli.success("Marker removed. Destructive tests will now refuse to run.")
+            print("Marker removed. Destructive tests will now refuse to run.")
             return 0
 
         if marked:
-            _cli.success("Already marked disposable. Nothing to do.")
+            print("Already marked disposable. Nothing to do.")
             return 0
 
-        _cli.section("Mark as disposable")
+        section("Mark as disposable")
         print(f"  appending '{SENTINEL}'")
         print("  to:       organization.marketingNotificationEmails")
         print(f"  keeping:  {', '.join(others) if others else '(list is currently empty)'}")
         print()
-        _cli.warn(
+        print(
             f"This declares '{organization.get('displayName', tenant)}' a THROWAWAY tenant.\n"
             "The test suite will then be allowed to mutate it: delete consent grants and\n"
             "change objects. Do not do this to a tenant anyone depends on."
         )
-        if not _cli.confirm("Is this tenant genuinely disposable?"):
-            _cli.warn("Unchanged.")
+        if not confirm("Is this tenant genuinely disposable?"):
+            print("Unchanged.")
             return 1
 
         await graph.patch(
             f"/organization/{org_id}", {"marketingNotificationEmails": [*marks, SENTINEL]}
         )
-        _cli.success(f"Marked. Destructive tests may now run against {org_id}.")
+        print(f"Marked. Destructive tests may now run against {org_id}.")
         return 0
 
 
@@ -175,7 +222,7 @@ def main() -> int:
     try:
         return asyncio.run(run(args))
     except KeyboardInterrupt:
-        _cli.warn("\nInterrupted.")
+        print("\nInterrupted.")
         return 1
 
 

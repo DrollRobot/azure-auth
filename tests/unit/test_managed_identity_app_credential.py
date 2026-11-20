@@ -23,7 +23,7 @@ from azure_auth import (
 )
 from azure_auth.auth.credentials import ManagedIdentityAssertionCredential
 from azure_auth.clouds import CHINA, COMMERCIAL, US_GOV, US_GOV_DOD, Cloud
-from tests.http import Recorder, ok
+from tests.fake_http import Recorder, ok
 from tests.identity import (
     APP_CLIENT_ID,
     CONTAINER_APPS_ENDPOINT,

@@ -4,23 +4,26 @@
 A collection of clients and helper functions for authentication with Azure, Graph, Exchange, and other Microsoft cloud systems.
 
 ## General rules
-- Environment values are are stored in the config system. Package config schema
-  is defined in src/name/config/schema.py.
 - Secrets are stored only in keyvault or keyring. Never in source, never in
   plain-text on disk.
+- Support only the Python versions python.org still supports
+  (https://devguide.python.org/versions/), at their latest patch release.
+  Old patch releases are not supported. Write every Python version with a
+  patch number, except where a tool accepts only MAJOR.MINOR (mypy, ruff,
+  pre-commit).
 
 ## Code Formatting and Style
 - Follow pep8 style guidelines.
 - Always include thorough docstrings for all functions and classes.
 - Line length limit: 100 characters.
 - Use type hints for all function signatures.
-- Do not fight automatic formatting. Always commit autoformatting changes, even if
-  they're out of scope for the current task.
 
 ## pre-commit
+- Do not fight automatic formatting. Always commit autoformatting changes, even if
+  they're out of scope for the current task.
 - Formatting changes and detect-secrets updates to the .secrets.baseline are routine
-  and expected. If all that's required is re-staging and re-committing, this is not
-  something worth reporting to the user. Just move on.
+  and expected. If all that's required is re-staging and re-committing, DO NOT REPORT
+  TO THE USER. Only report when user interaction is required.
 
 ## detect-secrets
 This repo uses detect-secrets.
@@ -49,3 +52,8 @@ ALWAYS READ BEFORE WRITING NEW CODE.
 
 ## Build and Release
 For build and release procedures, see [AGENTS.RELEASING.md](AGENTS.RELEASING.md).
+When updating CHANGELOG.md:
+- Changelogs should contain a high-level overview of changes, not low-level
+  technical details.
+- Group logical changes. Don't create two "added" and "removed" entries when one
+  "changed" would be more appropriate.

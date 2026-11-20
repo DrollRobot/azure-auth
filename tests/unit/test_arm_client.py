@@ -9,8 +9,8 @@ from azure_auth import AuthContext
 from azure_auth.clients import ArmClient, ArmError
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import AZURE_POWERSHELL_CLIENT_ID
+from tests.fake_http import Recorder, ok
 from tests.fakes import IDP, FakeLookup, FakeMsal, error_result, token_result
-from tests.http import Recorder, ok
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 

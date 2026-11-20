@@ -43,7 +43,7 @@ from azure_auth.clouds import COMMERCIAL
 from azure_auth.constants import GRAPH_CLI_CLIENT_ID
 from azure_auth.sync.keyvault import KeyVaultClient as BlockingKeyVaultClient
 from tests.certs import make_certificate
-from tests.http import Recorder, fake_jwt, ok
+from tests.fake_http import Recorder, fake_jwt, ok
 from tests.logs import all_logs_at_debug, assert_no_secrets, find_secrets
 
 pytestmark = [pytest.mark.integration, pytest.mark.acceptance, pytest.mark.anyio]

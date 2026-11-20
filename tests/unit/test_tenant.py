@@ -15,7 +15,7 @@ import pytest
 
 from azure_auth import AmbiguousTenant, AuthError, NetworkError, Tenant, TenantNotFound
 from azure_auth.clouds import CHINA, COMMERCIAL, US_GOV, US_GOV_DOD, Cloud
-from tests.http import Recorder, ok
+from tests.fake_http import Recorder, ok
 
 pytestmark = pytest.mark.unit
 

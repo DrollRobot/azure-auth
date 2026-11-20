@@ -49,4 +49,9 @@
 ssh-add -T "$(git config user.signingkey)" && git commit
 ```
 
-- After committing, push to origin.
+# Pushing
+
+- After every push, run `scripts/wait_for_ci.py` and wait.
+   Exit 0 indicates all Github actions passed. If all passed, simply tell the
+   user "Push complete, all actions passed." If actions fail, fix them. Do not
+   imply the work is complete if actions haven't passed yet.

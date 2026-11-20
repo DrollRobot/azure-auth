@@ -21,7 +21,7 @@ import msal
 import requests
 from urllib3.response import HTTPResponse
 
-from tests.http import fake_jwt
+from tests.fake_http import fake_jwt
 
 TENANT = "11111111-2222-3333-4444-555555555555"
 OTHER_TENANT = "66666666-7777-8888-9999-000000000000"

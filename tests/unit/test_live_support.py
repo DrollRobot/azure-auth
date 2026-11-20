@@ -21,8 +21,8 @@ from azure_auth import AuthContext, ExchangeClient, Tenant
 from azure_auth.clouds import COMMERCIAL
 from azure_auth.sync import ExchangeClient as BlockingExchangeClient
 from tests import alert_user
+from tests.fake_http import Recorder, fake_jwt, ok
 from tests.fakes import FakeMsal, token_result
-from tests.http import Recorder, fake_jwt, ok
 from tests.live import support
 from tests.live.support import (
     BASELINE_SCOPES,

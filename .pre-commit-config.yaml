@@ -5,36 +5,55 @@
 # uv sync
 # uv run pre-commit install
 # uv run pre-commit install --hook-type pre-push
-# uv run pre-commit autoupdate
-
-default_language_version:
-  python: python3.11
+# Every hook runs through `uv run`: its version is the one in uv.lock.
 
 default_stages: [pre-commit]
 
-ci:
-  autoupdate_schedule: monthly
-
 repos:
-  # Generic hygiene
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+  # Generic hygiene, from the pre-commit-hooks package (a dev dependency)
+  - repo: local
     hooks:
       - id: trailing-whitespace
+        name: trim trailing whitespace
+        entry: uv run trailing-whitespace-fixer
+        language: system
+        types: [text]
       - id: end-of-file-fixer
+        name: fix end of files
+        entry: uv run end-of-file-fixer
+        language: system
+        types: [text]
       - id: check-yaml
+        name: check yaml
+        entry: uv run check-yaml
+        language: system
+        types: [yaml]
       - id: check-toml
+        name: check toml
+        entry: uv run check-toml
+        language: system
+        types: [toml]
       - id: check-added-large-files
+        name: check for added large files
+        entry: uv run check-added-large-files
+        language: system
       - id: mixed-line-ending
-        args: [--fix=lf]  # for cross-platform support
+        name: mixed line ending
+        entry: uv run mixed-line-ending --fix=lf  # for cross-platform support
+        language: system
+        types: [text]
 
   # detect-secrets
   - repo: local
     hooks:
+      # The wrapper fixes path matching on Windows, where the plain hook keeps
+      # baseline entries for files with no secrets left and CI then fails.
+      # Serial: parallel batches each rewrite the baseline and the last one wins.
       - id: detect-secrets
         name: Detect secrets
-        entry: uv run detect-secrets-hook --baseline .secrets.baseline
+        entry: uv run python tests/detect_secrets_hook.py --baseline .secrets.baseline
         language: system
+        require_serial: true
 
       # The hook above only checks that findings are *in* the baseline; this
       # gate requires every entry to be an audited false positive, so a
@@ -48,12 +67,20 @@ repos:
         always_run: true
 
   # Ruff: lint + format
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.3
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix]
+        name: ruff check
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi, jupyter]
+        require_serial: true
       - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi, jupyter]
+        require_serial: true
 
   # Mypy type checking
   - repo: local
@@ -99,6 +126,15 @@ repos:
       - id: uv-audit
         name: uv audit
         entry: uv audit
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+
+      # dead code checking
+      - id: vulture
+        name: vulture
+        entry: uv run vulture
         language: system
         stages: [pre-push]
         pass_filenames: false

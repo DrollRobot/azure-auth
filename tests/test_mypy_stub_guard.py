@@ -14,23 +14,12 @@ this module to the new API instead of deleting the guard.
 
 from __future__ import annotations
 
-import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
-if sys.version_info >= (3, 11):  # noqa: UP036 # allows compatibility back to 3.10
-    import tomllib
-else:
-    import tomli as tomllib
-
 import pytest
 from mypy.stubinfo import stub_distribution_name
-
-# Version of this guard test. It ships to projects generated from this template
-# (cleanup.py keeps it, as it has no matching script), so bump on every change
-# to let scripts/compare_to_template.py flag stale copies: patch = bugfix, minor
-# = new/loosened check, major = removed or renamed check.
-__version__ = "1.0.1"
 
 _PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 

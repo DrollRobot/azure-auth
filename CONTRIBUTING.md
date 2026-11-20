@@ -2,7 +2,7 @@
 Thank you for your interest in contributing!
 
 ## Setting up a development environment
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11.18 or newer and [uv](https://docs.astral.sh/uv/).
 ```
 git clone https://github.com/DrollRobot/azure-auth.git
 cd azure-auth
@@ -14,6 +14,9 @@ uv run pre-commit install --hook-type pre-push
 ## Running checks
 The full list of lint, format, type-check, test, and pre-commit commands lives
 in [AGENTS.TESTING.md](AGENTS.TESTING.md). Run those before opening a PR.
+
+Pre-commit also runs lint, format, type check, and secret detection
+automatically on every commit.
 
 ### Code structure
 - `src/azure_auth/auth/` -- `AuthContext`, credentials, the token cache, the Windows

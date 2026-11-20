@@ -26,7 +26,7 @@ from azure_auth import AuthContext, AuthError, KeyVaultError, Tenant
 from azure_auth.auth import managed_identity as managed_identity_module
 from azure_auth.clients.keyvault import KeyVaultClient
 from azure_auth.clouds import COMMERCIAL, US_GOV, Cloud
-from tests.http import fake_jwt
+from tests.fake_http import fake_jwt
 from tests.identity import JWT_BEARER, FakeEntra, MsalOver
 
 pytestmark = [pytest.mark.integration, pytest.mark.anyio]

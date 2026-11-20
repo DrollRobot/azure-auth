@@ -32,9 +32,6 @@ from pathlib import Path
 
 import pytest
 
-# Version of this test
-__version__ = "1.0.0"
-
 # Guard suites to re-run. Each may be absent: a generated project can decline
 # the suppression gate at setup time, and the comparison against the template
 # expects that, so a missing file is skipped rather than failed.

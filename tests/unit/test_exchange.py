@@ -11,8 +11,8 @@ from azure_auth import AuthContext
 from azure_auth.clients import ExchangeClient, InvokeCommandError
 from azure_auth.clients.exchange import encode_identity
 from azure_auth.clients.invoke_command import SYSTEM_MAILBOX
+from tests.fake_http import Recorder, fake_jwt, ok
 from tests.fakes import FakeMsal, token_result
-from tests.http import Recorder, fake_jwt, ok
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 
@@ -41,7 +41,7 @@ def auth(fake_msal: FakeMsal) -> AuthContext:
 
 @pytest.mark.parametrize(
     ("identity", "expected"),
-    [(MAILBOX, KEY), ("Jörg Müller", "SsO2cmcgTcO8bGxlcg=="), ("", "")],
+    [(MAILBOX, KEY), ("J\u00f6rg M\u00fcller", "SsO2cmcgTcO8bGxlcg=="), ("", "")],
 )
 def test_an_identity_is_encoded_as_utf8_base64(identity: str, expected: str) -> None:
     assert encode_identity(identity) == expected

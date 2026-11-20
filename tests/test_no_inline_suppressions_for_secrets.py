@@ -26,9 +26,6 @@ from pathlib import Path
 
 import pytest
 
-# Version of this test
-__version__ = "2.0.2"
-
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -310,9 +307,3 @@ def test_gate_fails_loudly_when_git_is_unavailable(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     with pytest.raises(pytest.fail.Exception, match="no fallback file list"):
         test_no_inline_suppressions_for_secrets()
-
-
-@pytest.mark.unit
-def test_guard_declares_a_version() -> None:
-    # compare_to_template.py tracks this file by __version__.
-    assert __version__

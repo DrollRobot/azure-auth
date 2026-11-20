@@ -47,16 +47,16 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 
-# Running this file as a script puts its own directory first on sys.path, and tests/http.py
-# there shadows the standard library's `http` package. msal imports `http.server`, would get
-# that file instead, and would fall back to its Python 2 import and crash. Drop this directory
-# before importing anything that is not standard library.
+# Running this file as a script puts its own directory first on sys.path, where a test helper
+# named like a standard library module would shadow it (tests/http.py once shadowed `http`,
+# and msal's `import http.server` crashed). Drop this directory before importing anything
+# that is not standard library.
 sys.path[:] = [entry for entry in sys.path if not entry or Path(entry).resolve() != _HERE]
 sys.path.insert(0, str(_HERE.parent / "src"))
 
 from azure_auth import AuthContext, GraphClient  # noqa: E402  (sys.path fixed up above)
 
-# Bump on every change so scripts/compare_to_template.py can flag copies in other repos:
+# Bump on every change:
 # patch = bugfix, minor = new behaviour, major = a change to the marker other repos read.
 __version__ = "1.0.0"
 

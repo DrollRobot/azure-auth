@@ -20,8 +20,8 @@ from azure_auth._sync.base import claims_from_challenge, retry_delay
 from azure_auth._sync.graph import _scopes_in
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import GRAPH_APP_ID, GRAPH_CLI_CLIENT_ID
+from tests.fake_http import Dropped, Recorder, fake_jwt, ok
 from tests.fakes import Call, FakeLookup, FakeMsal, error_result, token_result
-from tests.http import Dropped, Recorder, fake_jwt, ok
 
 pytestmark = pytest.mark.unit
 

@@ -14,8 +14,8 @@ from azure_auth.clients.invoke_command import (
 )
 from azure_auth.clouds import CHINA, US_GOV, US_GOV_DOD, Cloud
 from azure_auth.constants import EXCHANGE_POWERSHELL_CLIENT_ID
+from tests.fake_http import Recorder, fake_jwt, ok
 from tests.fakes import FakeMsal, token_result
-from tests.http import Recorder, fake_jwt, ok
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
 

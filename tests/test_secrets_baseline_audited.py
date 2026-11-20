@@ -13,9 +13,6 @@ state ``detect-secrets audit`` writes when a human marks a finding as a false
 positive. ``is_secret: true`` (a confirmed real secret) and a missing or null
 ``is_secret`` (never reviewed) both fail.
 
-Version note: this file ships to projects generated from this template; bump
-``__version__`` on every change so ``scripts/compare_to_template.py`` can flag
-stale copies.
 """
 
 from __future__ import annotations
@@ -24,8 +21,6 @@ import json
 from pathlib import Path
 
 import pytest
-
-__version__ = "1.0.2"
 
 BASELINE_NAME = ".secrets.baseline"
 
@@ -150,9 +145,3 @@ def test_confirmed_real_secret_is_flagged_verified_true() -> None:
 @pytest.mark.unit
 def test_empty_baseline_results_are_accepted() -> None:
     assert _unaudited_entries(json.dumps({"results": {}})) == []
-
-
-@pytest.mark.unit
-def test_guard_declares_a_version() -> None:
-    # compare_to_template.py tracks this file by __version__.
-    assert __version__

@@ -27,8 +27,8 @@ from azure_auth import (
 )
 from azure_auth.auth import managed_identity as managed_identity_module
 from azure_auth.clouds import COMMERCIAL, US_GOV
+from tests.fake_http import Recorder, ok
 from tests.fakes import FakeLookup
-from tests.http import Recorder, ok
 from tests.identity import (
     CONTAINER_APPS_ENDPOINT,
     HOST_VARIABLES,

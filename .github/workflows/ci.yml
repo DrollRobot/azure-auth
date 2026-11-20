@@ -22,9 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        # requires-python's floor through the newest release
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11.18", "3.12.16", "3.13.18", "3.14.10", "3.15.2"]
     runs-on: ${{ matrix.os }}
+    env:
+      UV_PYTHON: ${{ matrix.python }}  # overrides .python-version for every uv command
     steps:
       - uses: actions/checkout@v7
 
@@ -32,8 +33,6 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          version: "0.11.x"
-          python-version: ${{ matrix.python-version }}
 
       - name: Sync dependencies
         run: uv sync --locked --all-groups --all-extras
@@ -46,6 +45,9 @@ jobs:
 
       - name: Type check (mypy)
         run: uv run mypy
+
+      - name: Dead code (vulture)
+        run: uv run vulture
 
       - name: Offline tests
         run: uv run pytest -m "not live"

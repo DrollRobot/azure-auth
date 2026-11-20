@@ -530,21 +530,21 @@ Errors:
 
 ```
 AuthError(error, error_codes, suberror, correlation_id, trace_id, claims)
-├── InteractionRequired(tenant_id, scopes)
-├── ConsentRequired(tenant_id, scopes)
-├── AccountSelectionRequired
-├── CertificateUnavailable
-├── CacheEncryptionUnavailable
-├── CacheFileEmpty(path)
-├── BrokerUnavailable
-├── ManagedIdentityUnavailable
-├── TenantNotFound(tenant)
-└── AmbiguousTenant(tenant, candidates)
+|-- InteractionRequired(tenant_id, scopes)
+|-- ConsentRequired(tenant_id, scopes)
+|-- AccountSelectionRequired
+|-- CertificateUnavailable
+|-- CacheEncryptionUnavailable
+|-- CacheFileEmpty(path)
+|-- BrokerUnavailable
+|-- ManagedIdentityUnavailable
+|-- TenantNotFound(tenant)
+`-- AmbiguousTenant(tenant, candidates)
 ResourceError(status, code, request_id, body)
-├── GraphError
-├── ArmError
-├── InvokeCommandError
-└── KeyVaultError
+|-- GraphError
+|-- ArmError
+|-- InvokeCommandError
+`-- KeyVaultError
 NetworkError
 ```
 
@@ -663,7 +663,7 @@ from module version 3.10.1:
   returns the whole result set; use `iter_pages()` to stop early.
 
 `ResultSize` does nothing here. In the PowerShell module it is a client-side cap applied
-while consuming pages, not a cmdlet parameter, so `InvokeCommand` ignores it — silently, with
+while consuming pages, not a cmdlet parameter, so `InvokeCommand` ignores it -- silently, with
 no warning, in every spelling (`10`, `"10"`, `"Unlimited"`). `run("Get-Mailbox", ResultSize=10)`
 returns every mailbox in the tenant. To limit results, break out of `iter_pages()` yourself.
 

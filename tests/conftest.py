@@ -4,8 +4,8 @@ Tests are tagged with the marker taxonomy documented in AGENTS.TESTING.md.
 The dependency axis is what gates external resources:
 
 Live tests (marked @pytest.mark.live) require a real external resource --
-network, secrets, a live tenant, or a third-party API. Select on that axis
-with:
+network, secrets, a live tenant, or a third-party API.
+Select on that axis with:
 
     pytest -m "not live"   # offline tests only (the default pre-commit run)
     pytest -m live         # live tests only
