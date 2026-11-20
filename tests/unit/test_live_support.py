@@ -3,7 +3,8 @@
 ``restore_baseline`` itself signs in to Entra and edits grants, and is exercised by every live
 run. What is tested here are the checks it makes: that a token missing a baseline scope is
 caught, and that the tenant-wide grant is what has to carry the baseline. Scopes beyond the
-baseline are found in the grants, not the token, so the token check does not report them.
+baseline are found in the grants, not the token, so the token check does not report them. The
+certificate clean-up's test for a certificate already removed is tested here too.
 
 The GDAP tests' read-only guard is tested here too, offline, because the live tests that use it
 must never be the first place it is seen to refuse a write.
@@ -17,7 +18,7 @@ import json
 import httpx2
 import pytest
 
-from azure_auth import AuthContext, ExchangeClient, Tenant
+from azure_auth import AuthContext, ExchangeClient, GraphError, Tenant
 from azure_auth.clouds import COMMERCIAL
 from azure_auth.sync import ExchangeClient as BlockingExchangeClient
 from tests import alert_user
@@ -30,6 +31,7 @@ from tests.live.support import (
     _holds_baseline,
     cancel_alarm,
     is_test_user,
+    key_already_removed,
     missing_scopes,
     token_claims,
     token_scopes,
@@ -145,6 +147,32 @@ def test_the_baseline_has_to_be_in_a_tenant_wide_grant_for_graph() -> None:
     # The same scope names on another API are not the baseline scopes.
     assert not _holds_baseline([{**wide, "resourceId": "exchange"}], "graph")
     assert not _holds_baseline([], "graph")
+
+
+REMOVE_KEY = "POST https://graph.microsoft.com/v1.0/applications/app/removeKey"
+
+
+@pytest.mark.regression
+def test_removing_a_certificate_already_gone_counts_as_removed() -> None:
+    error = GraphError(
+        f"{REMOVE_KEY} -> 400 Request_BadRequest: No credentials found to be removed.",
+        status=400,
+        code="Request_BadRequest",
+    )
+    assert key_already_removed(error)
+
+
+@pytest.mark.parametrize(
+    ("status", "text"),
+    [
+        (400, "Request_BadRequest: Invalid proof."),
+        (403, "Authorization_RequestDenied: Insufficient privileges."),
+        (500, "No credentials found to be removed."),
+    ],
+)
+def test_any_other_refusal_to_remove_a_certificate_is_an_error(status: int, text: str) -> None:
+    error = GraphError(f"{REMOVE_KEY} -> {status} {text}", status=status)
+    assert not key_already_removed(error)
 
 
 TENANT_GUID = "11111111-2222-3333-4444-555555555555"

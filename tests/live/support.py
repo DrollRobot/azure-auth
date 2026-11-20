@@ -90,6 +90,7 @@ from azure_auth import (
     ConsentRequired,
     GraphClient,
     InteractionRequired,
+    ResourceError,
     Tenant,
 )
 from azure_auth.auth import cng
@@ -1090,16 +1091,34 @@ def _temporary_certificates(graph: BlockingGraphClient) -> tuple[str, list[str]]
     ]
 
 
+def key_already_removed(error: ResourceError) -> bool:
+    """Tell whether ``removeKey`` refused a key because the application no longer holds it.
+
+    Graph answers ``400`` with "No credentials found to be removed". Observed 2026-11-19: a
+    restore removed a test certificate and waited until the list no longer showed it; the next
+    restore's read was served from a replica that still listed it, and removing it again got
+    this answer.
+
+    Args:
+        error: The error ``removeKey`` raised.
+
+    Returns:
+        ``True`` for that answer, ``False`` for any other error.
+    """
+    return error.status == 400 and "No credentials found to be removed" in str(error)
+
+
 def _remove_temporary_certificates(may_remove: Callable[[], bool]) -> None:
     """Take every certificate a test uploaded back off the test application.
 
     They are the ones named :data:`TEMPORARY_CERTIFICATE_NAME`; the certificates the
     application is configured with stay. Removed with ``removeKey``, as the application.
 
-    The application's certificate list lags behind a removal: measured 2026-10-10, removed
-    certificates were still listed by the next restore, a minute or more later, which removed
-    them again. So this re-reads the list until the removed ones are gone (10 s in the run
-    after).
+    Graph serves the application from replicas that lag each other, in both directions:
+    measured 2026-10-10, removed certificates were still listed a minute or more later, and a
+    certificate can be listed by one replica and unknown to the one serving the removal. So
+    this removes whatever is still listed, counts "already removed" (:func:`key_already_removed`)
+    as done, and re-reads the list until the certificates are gone (10 s in the run after).
 
     Args:
         may_remove: Whether the tenant is marked disposable. Only called when there is
@@ -1115,13 +1134,21 @@ def _remove_temporary_certificates(may_remove: Callable[[], bool]) -> None:
                 " and the tenant is not marked disposable (tests/verify_remote_disposable.py),"
                 " so they were left alone"
             )
-        for key_id in temporary:
-            graph.post(
-                f"/applications/{object_id}/removeKey",
-                json={"keyId": key_id, "proof": _key_proof(object_id)},
-            )
         started = time.monotonic()
-        while still_listed := set(temporary) & set(_temporary_certificates(graph)[1]):
+        still_listed = set(temporary)
+        while True:
+            for key_id in sorted(still_listed):
+                try:
+                    graph.post(
+                        f"/applications/{object_id}/removeKey",
+                        json={"keyId": key_id, "proof": _key_proof(object_id)},
+                    )
+                except ResourceError as error:
+                    if not key_already_removed(error):
+                        raise
+            still_listed = set(temporary) & set(_temporary_certificates(graph)[1])
+            if not still_listed:
+                break
             waited = time.monotonic() - started
             if waited > PROPAGATION_TIMEOUT_SECONDS:
                 pytest.fail(
