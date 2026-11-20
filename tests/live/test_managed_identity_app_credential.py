@@ -58,10 +58,11 @@ needs_no_federation_app = pytest.mark.skipif(
 # a refused exchange at once.
 REFUSAL_SECONDS = 30
 
-# Entra's codes for an assertion no federated credential of the application matches: 70021
-# when the application has federated credentials but none for this identity, 70025 when it has
-# none at all (measured 2026-11-05).
-NO_MATCHING_FEDERATED_CREDENTIAL = frozenset({70021, 70025})
+# Entra's codes for an assertion no federated credential of the application matches: 70025
+# when it has none at all (measured 2026-11-05), and 700213 when it has federated credentials
+# but none for this identity (measured 2026-11-19; it names the assertion's subject). 70021 is
+# the documented code for that case, with the same message minus the subject.
+NO_MATCHING_FEDERATED_CREDENTIAL = frozenset({70021, 70025, 700213})
 
 
 def app_auth(app_client_id: str, identity_client_id: str = IDENTITY_CLIENT_ID) -> AuthContext:
