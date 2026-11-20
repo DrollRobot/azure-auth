@@ -73,7 +73,9 @@ keyvault = [
     "azure-keyvault-secrets>=4.11.2",
 ]
 broker = [
-    "msal[broker]>=1.39.0",
+    # pymsalruntime, the broker runtime, has no build for Python 3.15 yet (0.20.7,
+    # 2026-11-20). Drop the marker once it does.
+    "msal[broker]>=1.39.0; python_version < '3.15'",
 ]
 
 [tool.pytest.ini_options]

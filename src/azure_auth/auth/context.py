@@ -1334,7 +1334,8 @@ class AuthContext:
             return True
         if not self._given.broker_fallback:
             raise BrokerUnavailable(
-                "The authentication broker needs Windows and the 'broker' extra "
+                "The authentication broker needs Windows and pymsalruntime, which the 'broker' "
+                "extra installs on the Python versions Microsoft builds it for "
                 "(pip install azure-auth[broker])"
             )
         _LOGGER.warning("Authentication broker unavailable; falling back to the browser")

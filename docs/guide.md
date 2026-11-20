@@ -96,7 +96,9 @@ auth = AuthContext(
 
 ### The Windows broker
 
-`broker=True` signs in through the Windows Web Account Manager. It needs the `broker` extra.
+`broker=True` signs in through the Windows Web Account Manager. It needs the `broker` extra,
+which installs Microsoft's broker runtime (`pymsalruntime`) on the Python versions it is built
+for: not yet Python 3.15.
 When the broker is missing or fails, the context falls back to the browser. Pass
 `broker_fallback=False` to get `BrokerUnavailable` instead. A user who cancels the broker
 prompt is not sent to the browser.
