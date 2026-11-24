@@ -2,7 +2,7 @@
 Thank you for your interest in contributing!
 
 ## Setting up a development environment
-Requires Python 3.11.18 or newer and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).
 ```
 git clone https://github.com/DrollRobot/azure-auth.git
 cd azure-auth

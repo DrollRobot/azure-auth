@@ -18,7 +18,7 @@
 
 [template]
 url = "git@github.com:DrollRobot/python_repo_template.git"
-commit = "60486ea744eabfcd9b0dcbe19b4a5edd29968bcb"
+commit = "4041c31b6d15e55da1594eefb7b2e952108ce06a"
 
 [values]
 # One entry per token the template substitutes, in file contents and paths.

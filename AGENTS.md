@@ -6,11 +6,6 @@ A collection of clients and helper functions for authentication with Azure, Grap
 ## General rules
 - Secrets are stored only in keyvault or keyring. Never in source, never in
   plain-text on disk.
-- Support only the Python versions python.org still supports
-  (https://devguide.python.org/versions/), at their latest patch release.
-  Old patch releases are not supported. Write every Python version with a
-  patch number, except where a tool accepts only MAJOR.MINOR (mypy, ruff,
-  pre-commit).
 
 ## Code Formatting and Style
 - Follow pep8 style guidelines.

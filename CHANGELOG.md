@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Installs on any Python 3.11 again.
+
 ## [0.13.0] - 2026-11-19 - Broker extra on Python 3.15
 
 ### Changed

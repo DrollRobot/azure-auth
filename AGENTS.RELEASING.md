@@ -16,6 +16,7 @@
    ```
    For any advisory reported, raise that dependency's floor in
    `[project.dependencies]` (or its dependency group) to the fixed version.
+   If `uv lock` then fails, see step 4.
 
 2. **Refresh the lockfile** within existing pyproject.toml bounds. The
    pre-commit hooks run from the venv, so this updates them too:
@@ -52,10 +53,15 @@
       uv lock
       uv audit
       ```
-   If the new floor makes `uv lock` fail, another dependency still pins the
-   vulnerable range. Upgrade that dependency if possible; otherwise stop and
-   consult the user before considering `[tool.uv] override-dependencies`,
-   which forces past the conflicting pin at the cost of ignoring it.
+   If the new floor makes `uv lock` fail, the error names one of two causes:
+   - Another dependency still pins the vulnerable range. Upgrade that
+      dependency if possible; otherwise stop and consult the user before
+      considering `[tool.uv] override-dependencies`, which forces past the
+      conflicting pin at the cost of ignoring it.
+   - The fixed version needs a newer Python than `requires-python` allows.
+      Never keep the vulnerable version to keep Python support. Stop and
+      consult the user, then raise `requires-python` only as far as the fix
+      needs, with the advisory ID in a comment.
 
 5. **Install the final lockfile and test:**
    ```
