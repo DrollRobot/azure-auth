@@ -6,7 +6,7 @@ import importlib.util
 import sys
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ from azure_auth import (
     InteractionRequired,
 )
 from azure_auth.clients import ResourceClient
+from tests.live import headless_browser
 from tests.live.support import (
     BASELINE_SCOPES,
     BROWSER,
@@ -387,10 +388,46 @@ async def test_a_cancelled_sign_in_is_reported_and_not_retried() -> None:
 
 # How long the timeout test waits. The point here is only that the limit is real.
 TIMEOUT_SECONDS = 5
+# Chromium browsers, which take the flags that run them headless in a profile of their own.
+HEADLESS_CAPABLE = {"msedge", "chrome", "chromium"}
+# How long to wait for the launcher to record the browser. Starting a Python process can take
+# several seconds on a busy machine (measured up to 3.4 on Windows).
+LAUNCH_WAIT_SECONDS = 15
+
+
+@pytest.fixture
+def unseen_browser(tmp_path: Path) -> Iterator[list[str]]:
+    """The configured browser, run headless in a profile of its own, and closed afterwards.
+
+    Nobody sees its sign-in page, so nobody answers a sign-in that is meant to go unanswered,
+    and nothing is left open. The fresh profile holds no sign-in, so the page stops where a
+    person would have to act.
+
+    Skips the test unless ``AZURE_AUTH_TEST_BROWSER`` names Edge or Chrome.
+    """
+    if not BROWSER or Path(BROWSER[0]).stem.lower() not in HEADLESS_CAPABLE:
+        pytest.skip("set AZURE_AUTH_TEST_BROWSER to Edge or Chrome")
+    pid_file = tmp_path / "browser.pid"
+    yield [
+        sys.executable,
+        "-I",
+        headless_browser.__file__,
+        "--pid-file",
+        str(pid_file),
+        BROWSER[0],
+        "--headless=new",
+        f"--user-data-dir={tmp_path / 'profile'}",
+        "--no-first-run",
+    ]
+    pid = headless_browser.read_pid(pid_file, LAUNCH_WAIT_SECONDS)
+    if pid is not None:
+        headless_browser.close(pid)
 
 
 @needs_user
-async def test_an_unanswered_sign_in_times_out() -> None:
+# webbrowser lets go of the launcher it starts, which can still be running.
+@pytest.mark.filterwarnings(r"ignore:subprocess \d+ is still running:ResourceWarning")
+async def test_an_unanswered_sign_in_times_out(unseen_browser: list[str]) -> None:
     """A browser sign-in that nobody completes fails after ``browser_timeout`` seconds.
 
     A page that never returns to the application is the case this guards: a closed window,
@@ -398,11 +435,12 @@ async def test_an_unanswered_sign_in_times_out() -> None:
     and leaves MSAL waiting (measured 2026-09-29). The sign-in is forced, so it stops at the
     account picker whatever the browser holds, and nobody answers it.
 
-    It leaves a browser tab open, but nobody has to act, so it is not ``interactive``. Azure
-    PowerShell is the application because it exists in every tenant and nothing is granted.
+    The browser runs headless and is closed after the test (:func:`unseen_browser`), so
+    nobody sees the page or has to act, and it is not ``interactive``. Azure PowerShell is the
+    application because it exists in every tenant and nothing is granted.
     """
     auth = AuthContext(
-        TENANT, username=USERNAME, browser_timeout=TIMEOUT_SECONDS, browser=SIGN_IN_BROWSER
+        TENANT, username=USERNAME, browser_timeout=TIMEOUT_SECONDS, browser=unseen_browser
     )
     async with ArmClient(auth) as client:
         started = time.monotonic()

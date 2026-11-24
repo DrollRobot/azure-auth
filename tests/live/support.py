@@ -47,6 +47,8 @@ Environment variables:
   "--profile-directory=Profile 1"]'``, single-quoted in ``.env`` so that the double quotes
   survive. Every browser sign-in opens in it (:data:`SIGN_IN_BROWSER`), and naming one runs
   the chosen-browser sign-in test; give at least one argument, so it covers passing them.
+  The unanswered sign-in test runs the program headless, in a profile of its own and
+  without the arguments, and needs Edge or Chrome for that.
 * ``AZURE_AUTH_TEST_CACHE_REMINDER_PATH``: a folder in plain sight, such as the Desktop. Every
   live run puts ``AZURE-AUTH_MSAL_CACHE_DELETEME`` there, pointing at the folder that holds
   the encrypted token cache the tests leave behind (``tests/cache_reminder.py``): a ``.url``
