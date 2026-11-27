@@ -10,15 +10,23 @@ and writes the file when asked (:meth:`DiskTokenCache.flush`, which
 ``AuthContext.flush_cache()`` calls) and when the process exits. On Windows, where the file
 holds the tokens, each write builds the new file beside the old one and renames it into
 place, so a process stopped mid-write leaves the old file whole.
+
+Two more things, on Windows only, where the file holds the tokens: a reminder, a shortcut put
+where a person will see it, opening the folder that holds the cache
+(``AuthContext(cache_reminder=)``), so a sign-in on disk is not forgotten; and
+:func:`delete_cache`, which deletes the tokens and the file. Elsewhere the tokens are in the
+Keychain or libsecret, which deleting the folder would leave alone.
 """
 
 from __future__ import annotations
 
 import atexit
+import contextlib
 import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,10 +48,15 @@ _CACHE_FILE_NAME = "msal_token_cache.bin"
 _LOCK_SUFFIX = ".lockfile"
 # The new file is built here, beside the cache file, then renamed over it.
 _TEMP_SUFFIX = ".tmp"
-# On Windows, a process reading the cache file denies the rename for the milliseconds its read
-# takes: try for about a second.
-_REPLACE_ATTEMPTS = 20
-_REPLACE_WAIT = 0.05
+# On Windows, a process reading the cache file denies a rename or a delete for the
+# milliseconds its read takes: try for about a second.
+_IN_USE_ATTEMPTS = 20
+_IN_USE_WAIT = 0.05
+# The reminder's file name, when the reminder is given as a folder.
+_REMINDER_NAME = "AZURE-AUTH_MSAL_CACHE_DELETEME.url"
+# The reminder and delete_cache() are for Windows only. A constant, not a sys.platform test,
+# so tests can change it, and mypy checks both branches on every platform.
+_WINDOWS = os.name == "nt"
 
 # The disk caches this process has opened, by the file's full path, so every context naming
 # a file shares one copy of it in memory.
@@ -73,11 +86,30 @@ class _AtomicDpapiPersistence(msal_extensions.FilePersistenceWithDataProtection)
         _replace(temp, location)
 
 
+def _while_in_use(action: Callable[[], None]) -> None:
+    """Run a file operation, trying again while another process briefly holds the file.
+
+    On Windows, a file another process has open cannot be renamed over or deleted, and a
+    process reading the cache holds the file open for the milliseconds the read takes.
+
+    Args:
+        action: The operation, raising ``PermissionError`` while the file is in use.
+
+    Raises:
+        PermissionError: If the file stayed in use for about a second.
+    """
+    for attempt in range(1, _IN_USE_ATTEMPTS + 1):
+        try:
+            action()
+            return
+        except PermissionError:
+            if attempt == _IN_USE_ATTEMPTS:
+                raise
+            time.sleep(_IN_USE_WAIT)
+
+
 def _replace(source: str, target: str) -> None:
     """Rename a file over another, waiting out a reader that briefly denies it.
-
-    On Windows, a file another process has open cannot be renamed over, and a process reading
-    the cache holds the file open for the milliseconds the read takes.
 
     Args:
         source: The file to rename.
@@ -86,14 +118,24 @@ def _replace(source: str, target: str) -> None:
     Raises:
         PermissionError: If the target stayed in use for about a second.
     """
-    for attempt in range(1, _REPLACE_ATTEMPTS + 1):
-        try:
-            os.replace(source, target)
-            return
-        except PermissionError:
-            if attempt == _REPLACE_ATTEMPTS:
-                raise
-            time.sleep(_REPLACE_WAIT)
+    _while_in_use(lambda: os.replace(source, target))
+
+
+def _delete(path: str) -> None:
+    """Delete a file, if it is there, waiting out a reader that briefly denies it.
+
+    Args:
+        path: The file to delete.
+
+    Raises:
+        PermissionError: If the file stayed in use for about a second.
+    """
+
+    def remove() -> None:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(path)
+
+    _while_in_use(remove)
 
 
 # msal ships no types either.
@@ -192,6 +234,31 @@ class DiskTokenCache(msal.SerializableTokenCache):  # type: ignore[misc]
                 self._file_stamp = _stamp(self.path)
             self._pending.clear()
 
+    def delete(self) -> None:
+        """Delete the file and every token this object holds, written or not.
+
+        The file is first overwritten with an empty cache, so it holds no token even should
+        the delete then fail, then deleted with the temporary file a stopped write may have
+        left beside it. The copy in memory and the unwritten changes go too, so no later
+        flush, the one at exit included, writes the old tokens back. The object stays the
+        cache of every context holding it: tokens they get afterwards are written as usual.
+
+        Takes msal's lock, then the file lock, in the order :meth:`flush` does, so the two
+        cannot deadlock.
+
+        Raises:
+            OSError: If the file could not be overwritten or deleted.
+        """
+        with self._lock:
+            with msal_extensions.CrossPlatLock(self._lock_location):
+                if os.path.exists(self.path):
+                    self._persistence.save(msal.SerializableTokenCache().serialize())
+                for leftover in (self.path, self.path + _TEMP_SUFFIX):
+                    _delete(leftover)
+            self.deserialize(None)
+            self._pending.clear()
+            self._file_stamp = None
+
     def _reload_if_changed(self) -> None:
         """Reread the file if it changed since last read or written, keeping unwritten changes.
 
@@ -265,12 +332,23 @@ def default_cache_path() -> Path:
     return Path(platformdirs.user_cache_dir(_APP_NAME, appauthor=False)) / _CACHE_FILE_NAME
 
 
-def build_cache(kind: CacheKind, cache_path: str | Path | None = None) -> Any:
+def build_cache(
+    kind: CacheKind,
+    cache_path: str | Path | None = None,
+    cache_reminder: str | Path | None = None,
+) -> Any:
     """Create the MSAL token cache for an :class:`~azure_auth.AuthContext`.
 
     Args:
         kind: ``memory`` for a process-local cache, ``disk`` for an encrypted file.
-        cache_path: File to use for the disk cache. Defaults to :func:`default_cache_path`.
+        cache_path: File to use for the disk cache, with ``~`` expanded. Defaults to
+            :func:`default_cache_path`.
+        cache_reminder: Windows only, with ``disk``: where to put a shortcut opening the
+            folder that holds the cache file. A path ending in ``.url`` is the shortcut's file;
+            any other path is a folder, and the shortcut goes in it as
+            ``AZURE-AUTH_MSAL_CACHE_DELETEME.url``. ``~`` is expanded, missing folders are
+            created, and a file already there is replaced. Placed after the cache is opened,
+            so a cache that cannot be opened leaves no shortcut to nothing.
 
     Returns:
         An ``msal.TokenCache`` (or subclass) instance. A memory cache is new on every call; a
@@ -280,20 +358,110 @@ def build_cache(kind: CacheKind, cache_path: str | Path | None = None) -> Any:
     Raises:
         CacheEncryptionUnavailable: If ``kind`` is ``disk`` and the platform cannot encrypt
             the file (for example Linux without libsecret).
-        ValueError: If ``kind`` is not a known cache kind.
+        ValueError: If ``kind`` is not a known cache kind, or ``cache_reminder`` is given off
+            Windows or with ``memory``. Raised before anything is opened or written.
+        FileExistsError: If a directory stands where the shortcut's file would go.
     """
+    if kind not in ("memory", "disk"):
+        raise ValueError(f"cache must be 'memory' or 'disk', not {kind!r}")
+    if cache_reminder is not None:
+        if not _WINDOWS:
+            raise ValueError(
+                "cache_reminder is only available on Windows. Elsewhere the tokens are kept "
+                "in the Keychain or libsecret, not in the folder a reminder would open."
+            )
+        if kind != "disk":
+            raise ValueError("cache_reminder needs cache='disk'; a memory cache is not on disk")
     if kind == "memory":
         return msal.TokenCache()
-    if kind != "disk":
-        raise ValueError(f"cache must be 'memory' or 'disk', not {kind!r}")
 
-    path = Path(cache_path) if cache_path is not None else default_cache_path()
+    # msal-extensions expands ~ in the file's path, so expand it here too: the reminder then
+    # opens the file's real folder, and every name for the file finds the same cache.
+    path = Path(cache_path).expanduser() if cache_path is not None else default_cache_path()
     key = os.path.normcase(path.resolve())
     with _disk_caches_guard:
         cache = _disk_caches.get(key)
         if cache is None:
             cache = _disk_caches[key] = _open_disk_cache(path)
+    if cache_reminder is not None:
+        _place_reminder(path, Path(cache_reminder))
     return cache
+
+
+def delete_cache(cache_path: str | Path | None = None) -> None:
+    """Delete the encrypted disk cache: the file, and every token of it in this process.
+
+    For when the sign-in it holds is no longer wanted, such as when testing ends. The file is
+    overwritten with an empty cache first, so it holds no token even should the delete fail,
+    then deleted, with the temporary file a stopped write may have left beside it. Contexts in
+    this process sharing the cache lose its tokens too, so none writes them back; what they
+    sign in to afterwards is written as usual. No cache to delete is not an error.
+
+    Two things it cannot reach. Another process with the cache open writes its tokens back
+    at its next write: stop it first. And a context keeps the access tokens it holds in its
+    own memory until they expire.
+
+    Windows only: there the file holds the tokens.
+
+    Args:
+        cache_path: The cache file, as given to ``AuthContext(cache_path=)``. Defaults to
+            :func:`default_cache_path`.
+
+    Raises:
+        NotImplementedError: Off Windows, before anything is opened. Elsewhere the tokens are
+            kept in the Keychain or libsecret, which this does not reach.
+        CacheEncryptionUnavailable: If DPAPI cannot be used, so the cache cannot be opened.
+        OSError: If the file could not be overwritten or deleted. A file another process is
+            reading is tried again for about a second.
+    """
+    if not _WINDOWS:
+        raise NotImplementedError(
+            "delete_cache() is only available on Windows. Elsewhere the tokens are kept in the "
+            "Keychain or libsecret, which it does not reach."
+        )
+    build_cache("disk", cache_path).delete()
+
+
+def _reminder_file(target: Path) -> Path:
+    """Return the reminder's file for a ``cache_reminder`` path.
+
+    Args:
+        target: A path ending in ``.url``, which is the file itself, or a folder.
+
+    Returns:
+        The file, with ``~`` expanded.
+    """
+    target = target.expanduser()
+    return target if target.suffix.lower() == ".url" else target / _REMINDER_NAME
+
+
+def _place_reminder(cache_path: Path, reminder: Path) -> Path:
+    """Put the reminder, an Internet Shortcut opening the folder that holds ``cache_path``.
+
+    An existing file is replaced, so the reminder always points at the current cache. It is
+    deleted first and the new one created only if nothing is there, so a link put in its
+    place is never followed. A directory is left alone, since removing it could take
+    someone's files.
+
+    Args:
+        cache_path: The cache file; it need not exist yet.
+        reminder: The ``cache_reminder`` path: the file itself or a folder for it.
+
+    Returns:
+        The reminder's file.
+
+    Raises:
+        FileExistsError: If a directory stands where the file would go.
+    """
+    target = cache_path.resolve().parent
+    link = _reminder_file(reminder)
+    if link.is_dir() and not link.is_symlink():
+        raise FileExistsError(f"{link} is a directory, not a reminder; not replacing it")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.unlink(missing_ok=True)
+    with link.open("x", encoding="utf-8") as file:
+        file.write(f"[InternetShortcut]\nURL={target.as_uri()}/\n")
+    return link
 
 
 def _open_disk_cache(path: Path) -> DiskTokenCache:

@@ -383,6 +383,42 @@ There is no unencrypted disk cache. Where the platform cannot encrypt, for examp
 without libsecret, `cache="disk"` raises `CacheEncryptionUnavailable`. It never falls back to
 plain text and never silently switches to the memory cache.
 
+### Reminder and deleting the cache (Windows)
+
+A disk cache holds a refresh token, and it is easy to forget in a folder nobody opens.
+`cache_reminder=` puts a shortcut where you will see it, opening the folder that holds the
+cache file:
+
+```python
+auth = AuthContext(
+    "contoso.com", username="admin@contoso.com", cache="disk", cache_reminder="~/Desktop"
+)
+```
+
+A path ending in `.url` is the shortcut's own file. Any other path is a folder, and the
+shortcut goes in it as `AZURE-AUTH_MSAL_CACHE_DELETEME.url`. Missing folders are created, and
+the shortcut is written again each time a context is created, so it always points at the
+current cache. The shortcut holds only a path, so it may sit in a synced folder such as a
+Desktop; the cache itself should not.
+
+`delete_cache()` deletes the cache when the sign-in is no longer wanted:
+
+```python
+from azure_auth import delete_cache
+
+delete_cache()  # or delete_cache(cache_path) for a cache_path= cache
+```
+
+It empties the file before deleting it, so the file holds no token even if the delete fails.
+Contexts in this process lose the cache's tokens too, so none writes them back. It cannot
+reach two things: another process with the cache open writes its tokens back at its next
+write, so stop it first; and a context keeps the access tokens already in its memory until
+they expire.
+
+Both are Windows only: there the file holds the tokens. On macOS and Linux they are in the
+Keychain or libsecret, which deleting the folder leaves alone. There, `cache_reminder=` raises
+`ValueError` and `delete_cache()` raises `NotImplementedError`.
+
 ## Multi-tenant access (GDAP)
 
 `auth.get_tenant_context(tenant)` returns a context for another tenant that reuses the sign-in

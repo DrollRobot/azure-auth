@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `AuthContext(cache_reminder=)`: a shortcut to the disk cache's folder (Windows).
+- `delete_cache()` deletes the disk cache (Windows).
+
 ## [0.13.1] - 2026-11-23 - Any Python 3.11
 
 ### Fixed

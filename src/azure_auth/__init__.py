@@ -32,6 +32,7 @@ from azure_auth.auth import (
     ManagedIdentityUnavailable,
     Tenant,
     TenantNotFound,
+    delete_cache,
 )
 from azure_auth.clients import (
     ArmClient,
@@ -73,4 +74,5 @@ __all__ = [
     "ResourceError",
     "Tenant",
     "TenantNotFound",
+    "delete_cache",
 ]

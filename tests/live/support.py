@@ -49,11 +49,11 @@ Environment variables:
   the chosen-browser sign-in test; give at least one argument, so it covers passing them.
   The unanswered sign-in test runs the program headless, in a profile of its own and
   without the arguments, and needs Edge or Chrome for that.
-* ``AZURE_AUTH_TEST_CACHE_REMINDER_PATH``: a folder in plain sight, such as the Desktop. Every
-  live run puts ``AZURE-AUTH_MSAL_CACHE_DELETEME`` there, pointing at the folder that holds
-  the encrypted token cache the tests leave behind (``tests/cache_reminder.py``): a ``.url``
-  file on Windows, a symbolic link elsewhere. The end-of-run summary names the cache files
-  whether or not this is set.
+* ``AZURE_AUTH_TEST_CACHE_REMINDER_PATH``: Windows only. A folder in plain sight, such as the
+  Desktop, or a ``.url`` file in one. Every live run puts a shortcut there
+  (``AZURE-AUTH_MSAL_CACHE_DELETEME.url`` in a folder) opening the folder that holds the
+  encrypted token cache the tests leave behind: the package's ``cache_reminder``. The
+  end-of-run summary names the cache files whether or not this is set.
 * ``AZURE_AUTH_TEST_PROPAGATION_TIMEOUT_SECONDS``: how long :func:`restore_baseline` waits for
   Entra to catch up with a grant change: a new grant to show up, or a removed scope to stop
   being issued (default 300).
@@ -192,6 +192,8 @@ BROWSER: list[str] = json.loads(os.environ.get("AZURE_AUTH_TEST_BROWSER") or "[]
 # The ``browser`` every user-flow context that can prompt is given: the chosen browser, or None
 # for the system default.
 SIGN_IN_BROWSER: list[str] | None = BROWSER or None
+# Where the live tests' cache reminder goes (``AuthContext(cache_reminder=)``), or "" for none.
+CACHE_REMINDER = os.environ.get("AZURE_AUTH_TEST_CACHE_REMINDER_PATH", "").strip()
 
 needs_user = pytest.mark.skipif(
     not (TENANT and USERNAME),

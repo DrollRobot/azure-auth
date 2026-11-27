@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from azure_auth.auth.cache import delete_cache
 from azure_auth.auth.context import AsyncAuthContext, AuthContext
 from azure_auth.auth.errors import (
     AccountSelectionRequired,
@@ -33,4 +34,5 @@ __all__ = [
     "ManagedIdentityUnavailable",
     "Tenant",
     "TenantNotFound",
+    "delete_cache",
 ]

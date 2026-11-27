@@ -1583,3 +1583,23 @@ def test_closing_the_async_context_flushes_the_cache(cache_file: Path) -> None:
     asyncio.run(auth.aio.close())
 
     assert _written(cache_file) == ["kept"]
+
+
+def test_a_context_places_the_cache_reminder(
+    cache_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("azure_auth.auth.cache._WINDOWS", True)
+
+    user_context(cache="disk", cache_path=cache_file, cache_reminder=tmp_path / "desktop")
+
+    reminder = tmp_path / "desktop" / "AZURE-AUTH_MSAL_CACHE_DELETEME.url"
+    assert cache_file.parent.resolve().as_uri() in reminder.read_text(encoding="utf-8")
+
+
+def test_the_cache_reminder_is_refused_with_the_memory_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("azure_auth.auth.cache._WINDOWS", True)
+
+    with pytest.raises(ValueError, match="cache_reminder needs cache='disk'"):
+        user_context(cache="memory", cache_reminder=tmp_path / "desktop")

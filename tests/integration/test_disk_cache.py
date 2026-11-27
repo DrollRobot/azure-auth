@@ -13,7 +13,7 @@ import msal
 import pytest
 from msal_extensions.persistence import PersistenceDecryptionError
 
-from azure_auth import CacheFileEmpty
+from azure_auth import CacheFileEmpty, delete_cache
 from azure_auth.auth.cache import build_cache
 from tests import cache_aging
 
@@ -212,3 +212,40 @@ def test_an_empty_cache_file_names_itself_in_the_error(tmp_path: Path) -> None:
     cause = info.value.__cause__
     assert isinstance(cause, PersistenceDecryptionError)
     assert cause.errno == 87
+
+
+def test_a_deleted_cache_is_gone_after_a_restart(
+    tmp_path: Path, restart: Callable[[], None]
+) -> None:
+    path = tmp_path / "cache.bin"
+    cache = build_cache("disk", path)
+    cache.add(_event(_ACCESS_TOKEN))
+    cache.flush()
+
+    delete_cache(path)
+
+    assert list(tmp_path.iterdir()) == []
+    restart()
+    assert _tokens(path) == []
+
+
+def test_deleting_the_cache_waits_out_a_reader(tmp_path: Path) -> None:
+    # A file Python has open cannot be renamed over or deleted on Windows. The delete
+    # overwrites the file (a rename) and deletes it, and has to wait out a brief reader.
+    path = tmp_path / "cache.bin"
+    cache = build_cache("disk", path)
+    cache.add(_event(_ACCESS_TOKEN))
+    cache.flush()
+    reader = path.open("rb")
+    closing = threading.Timer(0.2, reader.close)
+    try:
+        with pytest.raises(PermissionError):
+            os.remove(path)
+        closing.start()
+
+        delete_cache(path)
+    finally:
+        closing.cancel()
+        reader.close()
+
+    assert not path.exists()

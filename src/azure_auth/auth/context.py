@@ -387,6 +387,7 @@ class AuthContext:
         managed_identity_client_id: str | None = None,
         cache: CacheKind = "memory",
         cache_path: str | Path | None = None,
+        cache_reminder: str | Path | None = None,
         broker: bool = False,
         broker_fallback: bool = True,
         browser_timeout: float = _DEFAULT_BROWSER_TIMEOUT_SECONDS,
@@ -445,6 +446,13 @@ class AuthContext:
             cache: ``memory`` (default) or ``disk`` for an encrypted cache file, written by
                 :meth:`flush_cache` and when the process exits.
             cache_path: Location of the disk cache. Defaults to the per-user cache directory.
+            cache_reminder: Windows only, with ``cache="disk"``: where to put a shortcut that
+                opens the folder holding the cache file, so the sign-in on disk is not
+                forgotten. A path ending in ``.url`` is the shortcut's own file; any other
+                path is a folder, and the shortcut goes in it as
+                ``AZURE-AUTH_MSAL_CACHE_DELETEME.url``. ``~`` is expanded, missing folders are
+                created, and the shortcut is written again each time a context is created.
+                :func:`~azure_auth.delete_cache` deletes the cache.
             broker: Use the Windows authentication broker (WAM) for user sign-in. Needs the
                 ``broker`` extra. Turns on the broker's PII logging, for the whole process, so
                 its errors carry Entra's reason. The broker's DEBUG log records (logger
@@ -477,7 +485,9 @@ class AuthContext:
                 look up: build its :class:`Tenant` by hand; or a managed identity is given
                 neither ``tenant`` nor ``cloud``, or both, or any sign-in argument, or
                 ``cloud`` is given for another flow, or ``managed_identity_client_id`` is not
-                a GUID or is given with ``managed_identity=True``.
+                a GUID or is given with ``managed_identity=True``, or ``cache_reminder`` is
+                given off Windows or with ``cache='memory'``.
+            FileExistsError: If a directory stands where ``cache_reminder``'s file would go.
             CacheEncryptionUnavailable: If ``cache='disk'`` cannot be encrypted here.
             CertificateUnavailable: If a PFX archive cannot be read.
             TenantNotFound: If the lookup finds no such tenant.
@@ -558,7 +568,7 @@ class AuthContext:
             client_id=client_id,
             username=username,
             credential=credential,
-            cache=build_cache(cache, cache_path),
+            cache=build_cache(cache, cache_path, cache_reminder),
             broker=broker,
             broker_fallback=broker_fallback,
             browser_timeout=browser_timeout,

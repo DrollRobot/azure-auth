@@ -6,8 +6,12 @@ text -- is proved against the platform's own encryption in
 the encrypted one: that a memory cache really is process-local and touches no file, that an
 unknown kind is refused, that a disk cache which cannot be encrypted raises rather than
 quietly falling back to something weaker, that changes wait in memory until a flush and no
-process's tokens are lost to another's, that an empty cache file is reported as such, and
-that the process's exit writes what is left.
+process's tokens are lost to another's, that an empty cache file is reported as such, that
+the process's exit writes what is left, that the reminder lands where it is asked for, and
+that a deleted cache leaves no token on disk or in memory.
+
+The reminder and ``delete_cache()`` are for Windows only. Their tests run everywhere, with
+``_WINDOWS`` set (``on_windows``), since the plain files standing in work on any platform.
 """
 
 from __future__ import annotations
@@ -25,10 +29,12 @@ import msal_extensions
 import pytest
 from msal_extensions.persistence import PersistenceDecryptionError
 
-from azure_auth import CacheEncryptionUnavailable, CacheFileEmpty
+from azure_auth import CacheEncryptionUnavailable, CacheFileEmpty, delete_cache
 from azure_auth.auth.cache import (
     DiskTokenCache,
     _flush_open_caches,
+    _place_reminder,
+    _reminder_file,
     _replace,
     build_cache,
     default_cache_path,
@@ -246,6 +252,30 @@ def test_contexts_naming_one_file_share_one_disk_cache(
     assert build_cache("disk", tmp_path / "other.bin") is not first
 
 
+@pytest.fixture
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Make a temporary folder the home folder ``~`` stands for.
+
+    Args:
+        tmp_path: The folder.
+        monkeypatch: Restores the real home folder afterwards.
+
+    Returns:
+        The folder.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    return tmp_path
+
+
+def test_a_home_relative_path_names_the_same_cache_as_the_full_one(
+    home: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    # msal-extensions writes "~/cache.bin" in the home folder. Unexpanded, the path resolved
+    # under the current folder, and the two names got two caches for one file.
+    assert build_cache("disk", "~/cache.bin") is build_cache("disk", home / "cache.bin")
+
+
 @pytest.mark.regression
 def test_threads_writing_one_disk_cache_keep_every_token(
     tmp_path: Path, plain_disk: Callable[[Path], Any]
@@ -457,7 +487,7 @@ def test_replacing_the_file_waits_out_a_reader(
         replace(src, dst)
 
     monkeypatch.setattr(os, "replace", busy_then_free)
-    monkeypatch.setattr("azure_auth.auth.cache._REPLACE_WAIT", 0)
+    monkeypatch.setattr("azure_auth.auth.cache._IN_USE_WAIT", 0)
 
     _replace(str(source), str(target))
 
@@ -472,7 +502,263 @@ def test_a_reader_that_never_lets_go_fails_the_replacement(
         raise PermissionError("in use")
 
     monkeypatch.setattr(os, "replace", always_busy)
-    monkeypatch.setattr("azure_auth.auth.cache._REPLACE_WAIT", 0)
+    monkeypatch.setattr("azure_auth.auth.cache._IN_USE_WAIT", 0)
 
     with pytest.raises(PermissionError, match="in use"):
         _replace(str(tmp_path / "new"), str(tmp_path / "old"))
+
+
+# ---------------------------------------------------------------------------- the reminder
+
+
+_DEFAULT_NAME = "AZURE-AUTH_MSAL_CACHE_DELETEME.url"
+
+
+@pytest.fixture
+def on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Behave as on Windows, where the reminder and ``delete_cache()`` are available.
+
+    Args:
+        monkeypatch: Restores the platform afterwards.
+    """
+    monkeypatch.setattr("azure_auth.auth.cache._WINDOWS", True)
+
+
+@pytest.fixture
+def off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Behave as on macOS or Linux, where neither is available.
+
+    Args:
+        monkeypatch: Restores the platform afterwards.
+    """
+    monkeypatch.setattr("azure_auth.auth.cache._WINDOWS", False)
+
+
+def test_a_folder_gets_the_reminder_under_its_default_name(tmp_path: Path) -> None:
+    cache_file = tmp_path / "cache" / "token_cache.bin"
+    folder = tmp_path / "desktop"
+
+    link = _place_reminder(cache_file, folder)
+
+    assert link == folder / _DEFAULT_NAME
+    text = link.read_text(encoding="utf-8")
+    assert text.startswith("[InternetShortcut]\n")
+    assert f"URL={cache_file.parent.resolve().as_uri()}/" in text
+
+
+@pytest.mark.parametrize("name", ["delete-my-cache.url", "Delete-My-Cache.URL"])
+def test_a_url_path_is_the_reminder_itself(tmp_path: Path, name: str) -> None:
+    wanted = tmp_path / "desktop" / name
+
+    link = _place_reminder(tmp_path / "c.bin", wanted)
+
+    assert link == wanted
+    assert link.is_file()
+
+
+def test_any_other_path_is_a_folder_for_the_reminder(tmp_path: Path) -> None:
+    # A name without .url is a folder, created, not a file Explorer could not open.
+    assert _reminder_file(tmp_path / "delete-my-cache") == (
+        tmp_path / "delete-my-cache" / _DEFAULT_NAME
+    )
+
+
+def test_missing_folders_are_created(tmp_path: Path) -> None:
+    folder = tmp_path / "not" / "yet" / "there"
+
+    link = _place_reminder(tmp_path / "c.bin", folder)
+
+    assert link.parent == folder
+    assert link.is_file()
+
+
+def test_an_existing_reminder_is_replaced(tmp_path: Path) -> None:
+    folder = tmp_path / "desktop"
+    old_cache = tmp_path / "old" / "c.bin"
+    new_cache = tmp_path / "new" / "c.bin"
+    _place_reminder(old_cache, folder)
+
+    link = _place_reminder(new_cache, folder)
+
+    text = link.read_text(encoding="utf-8")
+    assert new_cache.parent.resolve().as_uri() in text
+    assert old_cache.parent.resolve().as_uri() not in text
+
+
+def test_a_directory_with_the_reminders_name_is_left_alone(tmp_path: Path) -> None:
+    folder = tmp_path / "desktop"
+    in_the_way = folder / _DEFAULT_NAME
+    in_the_way.mkdir(parents=True)
+    (in_the_way / "somebodys-file.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="not replacing"):
+        _place_reminder(tmp_path / "c.bin", folder)
+
+    assert (in_the_way / "somebodys-file.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.usefixtures("on_windows")
+def test_a_disk_cache_places_the_reminder_it_is_given(
+    tmp_path: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    cache_file = tmp_path / "cache" / "cache.bin"
+
+    build_cache("disk", cache_file, tmp_path / "desktop")
+
+    text = (tmp_path / "desktop" / _DEFAULT_NAME).read_text(encoding="utf-8")
+    assert cache_file.parent.resolve().as_uri() in text
+
+
+@pytest.mark.usefixtures("on_windows")
+def test_the_reminder_opens_the_folder_of_a_home_relative_cache_path(
+    home: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    # Unexpanded, "~/sub/cache.bin" resolved to a "~" folder under the current folder, which
+    # holds no cache: the cache file is written in the home folder.
+    build_cache("disk", "~/sub/cache.bin", home / "desktop")
+
+    text = (home / "desktop" / _DEFAULT_NAME).read_text(encoding="utf-8")
+    assert f"URL={(home / 'sub').resolve().as_uri()}/" in text
+
+
+@pytest.mark.usefixtures("off_windows")
+def test_the_reminder_is_refused_off_windows(
+    tmp_path: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    # Off Windows the tokens are in the Keychain or libsecret; a shortcut to the folder would
+    # say "delete me" about a folder whose deletion leaves them there.
+    with pytest.raises(ValueError, match="only available on Windows"):
+        build_cache("disk", tmp_path / "cache" / "cache.bin", tmp_path / "desktop")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.usefixtures("on_windows")
+def test_the_reminder_is_refused_for_a_memory_cache(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="needs cache='disk'"):
+        build_cache("memory", None, tmp_path / "desktop")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------- deleting the cache
+
+
+@pytest.mark.usefixtures("on_windows")
+def test_deleting_the_cache_deletes_the_file_and_what_is_beside_it(
+    tmp_path: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    path = tmp_path / "cache.bin"
+    cache = build_cache("disk", path)
+    cache.add(_entry())
+    cache.flush()
+    path.with_name("cache.bin.tmp").write_text("left by a stopped write", encoding="utf-8")
+
+    delete_cache(path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.usefixtures("on_windows")
+def test_a_deleted_cache_leaves_no_token_in_memory_to_write_back(
+    tmp_path: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    # A context in this process still holds the cache object. Were its copy in memory kept,
+    # its next flush would put every deleted token back on disk.
+    path = tmp_path / "cache.bin"
+    cache = build_cache("disk", path)
+    cache.add(_entry("deleted"))
+    cache.flush()
+
+    delete_cache(path)
+
+    assert _tokens(cache) == []
+    cache.add(_entry("after", scope="After.Read"))
+    cache.flush()
+    assert _tokens(plain_disk(path)) == ["after"]
+
+
+@pytest.mark.usefixtures("on_windows")
+def test_unwritten_tokens_are_dropped_and_the_exit_writes_nothing_back(
+    tmp_path: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    path = tmp_path / "cache.bin"
+    build_cache("disk", path).add(_entry("never-written"))
+
+    delete_cache(path)
+    _flush_open_caches()
+
+    assert not path.exists()
+
+
+@pytest.mark.usefixtures("on_windows")
+def test_deleting_a_cache_that_is_not_there_is_no_error(
+    tmp_path: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    delete_cache(tmp_path / "never-made.bin")
+
+    assert not (tmp_path / "never-made.bin").exists()
+
+
+@pytest.mark.usefixtures("off_windows")
+def test_deleting_the_cache_is_refused_off_windows(
+    tmp_path: Path, plain_disk: Callable[[Path], Any]
+) -> None:
+    # Off Windows the tokens are in the Keychain or libsecret, which nothing here can test.
+    with pytest.raises(NotImplementedError, match="only available on Windows"):
+        delete_cache(tmp_path / "cache" / "cache.bin")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.usefixtures("on_windows")
+def test_deleting_waits_out_a_reader(
+    tmp_path: Path, plain_disk: Callable[[Path], Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A process reading the cache denies the delete for the milliseconds its read takes, as it
+    # denies the rename (PermissionError, WinError 32).
+    path = tmp_path / "cache.bin"
+    cache = build_cache("disk", path)
+    cache.add(_entry())
+    cache.flush()
+    denials = [PermissionError("in use"), PermissionError("in use")]
+    remove = os.remove
+
+    def busy_then_free(target: str) -> None:
+        if target == str(path) and denials:
+            raise denials.pop()
+        remove(target)
+
+    monkeypatch.setattr(os, "remove", busy_then_free)
+    monkeypatch.setattr("azure_auth.auth.cache._IN_USE_WAIT", 0)
+
+    delete_cache(path)
+
+    assert not path.exists()
+
+
+@pytest.mark.usefixtures("on_windows")
+def test_a_delete_that_fails_leaves_a_file_with_no_tokens(
+    tmp_path: Path, plain_disk: Callable[[Path], Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The file is emptied before it is deleted, so a reader that never lets go keeps the file
+    # but not the sign-in in it.
+    path = tmp_path / "cache.bin"
+    cache = build_cache("disk", path)
+    cache.add(_entry())
+    cache.flush()
+    remove = os.remove
+
+    def always_busy(target: str) -> None:
+        if target == str(path):
+            raise PermissionError("in use")
+        remove(target)
+
+    monkeypatch.setattr(os, "remove", always_busy)
+    monkeypatch.setattr("azure_auth.auth.cache._IN_USE_WAIT", 0)
+
+    with pytest.raises(PermissionError, match="in use"):
+        delete_cache(path)
+
+    assert path.exists()
+    assert _tokens(plain_disk(path)) == []
