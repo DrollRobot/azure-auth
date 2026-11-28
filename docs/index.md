@@ -1,50 +1,33 @@
 # azure-auth
 
-Authentication for Microsoft cloud services, so that other packages do not have to deal with
-it. Create one `AuthContext`, hand it to the client for the resource you need, and make
-requests. The client gets, caches and refreshes tokens.
+A Python library that signs in to Microsoft cloud services and makes requests to them, so your
+code doesn't handle tokens. Create an `AuthContext`, pass it to the client for the service you
+need, such as `GraphClient`, and make requests.
 
-## Installation
+Start with [getting started](getting-started.md): the install and a first request.
 
-```bash
-uv add git+https://github.com/DrollRobot/azure-auth.git
+## Use cases
 
-# optional extras: keyvault, broker
-uv add "azure-auth[keyvault,broker] @ git+https://github.com/DrollRobot/azure-auth.git"
-```
+- [Interactive sign-in](interactive-sign-in.md): browser and Windows broker sign-in, forcing a
+  new sign-in, choosing the browser.
+- [GDAP](gdap.md): a partner user signs in once and works in many customer tenants, with a
+  fallback to signing in with a customer's own account.
+- [Managed identity](managed-identity.md): code on an Azure host signs in with the host's
+  identity, with no secret or certificate.
+- [App sign-in](app-certificate.md): code signs in as an application, with a certificate or a
+  client secret.
 
-## Quick start
+## Shared topics
 
-```python
-import asyncio
-from azure_auth import AuthContext, GraphClient
+- [Clouds and tenants](clouds.md): how a tenant's cloud is found, and looking tenants up.
+- [Token cache](token-cache.md): memory or encrypted disk cache, writing and deleting it.
+- [Client ids and consent](client-ids-and-consent.md): which application each client signs in
+  to, scopes, and the consent screen.
+- [Clients](clients.md): Graph, Resource Manager, Exchange, Security & Compliance, Key Vault,
+  the Azure SDKs, and the blocking clients.
+- [Errors and retries](errors.md): the exceptions, their fields, and what is retried.
 
+## More
 
-async def main() -> None:
-    auth = AuthContext("contoso.onmicrosoft.com", username="admin@contoso.com", cache="disk")
-    async with GraphClient(auth, scopes=["User.Read.All"]) as graph:
-        users = await graph.get_all("/users", params={"$select": "displayName"})
-    print(len(users))
-
-
-asyncio.run(main())
-```
-
-The first request opens the browser. With `cache="disk"` later runs are silent.
-
-On an Azure host, `AuthContext(tenant_id, managed_identity=True)` signs in as the host's
-managed identity instead: no browser, no secret, nothing on disk. An application can have the
-identity as its credential: `AuthContext(tenant_id, client_id=app_id,
-managed_identity_client_id=identity_id)`.
-
-The tenant can be in any Microsoft cloud: Commercial, GCC, GCC High, DoD or China. The
-context finds which by itself. To look a tenant up without signing in at all:
-
-```python
-from azure_auth import Tenant
-
-tenant = Tenant.lookup("contoso.com")
-print(tenant.id, tenant.cloud.name)
-```
-
-Continue with the [guide](guide.md), or look things up in the [reference](reference/auth.md).
+- [Reference](reference/auth.md): every class and function, from the docstrings.
+- [Development](development.md): set up, run the tests, contribute.

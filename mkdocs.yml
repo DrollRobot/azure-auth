@@ -12,11 +12,23 @@ theme:
 
 nav:
   - Home: index.md
-  - Guide: guide.md
+  - Getting started: getting-started.md
+  - Use cases:
+      - Interactive sign-in: interactive-sign-in.md
+      - GDAP: gdap.md
+      - Managed identity: managed-identity.md
+      - App sign-in: app-certificate.md
+  - Topics:
+      - Clouds and tenants: clouds.md
+      - Token cache: token-cache.md
+      - Client ids and consent: client-ids-and-consent.md
+      - Clients: clients.md
+      - Errors and retries: errors.md
   - Reference:
       - Authentication: reference/auth.md
       - Clients: reference/clients.md
       - Blocking clients: reference/sync.md
+  - Development: development.md
 
 markdown_extensions:
   - admonition                # !!! note style callouts
