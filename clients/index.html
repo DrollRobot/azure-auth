@@ -1,0 +1,1374 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Authentication helpers and thin clients for Microsoft cloud services">
+      
+      
+      
+      
+        <link rel="prev" href="../client-ids-and-consent/">
+      
+      
+        <link rel="next" href="../errors/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Clients - azure-auth</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#clients" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="azure-auth" class="md-header__button md-logo" aria-label="azure-auth" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            azure-auth
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Clients
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DrollRobot/azure-auth" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="azure-auth" class="md-nav__button md-logo" aria-label="azure-auth" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    azure-auth
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DrollRobot/azure-auth" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use cases
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Use cases
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../interactive-sign-in/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive sign-in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gdap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GDAP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../managed-identity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Managed identity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../app-certificate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App sign-in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topics
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Topics
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clouds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clouds and tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../token-cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Token cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../client-ids-and-consent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client ids and consent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#microsoft-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Microsoft Graph
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#azure-resource-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure Resource Manager
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exchange-online-and-security-compliance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exchange Online and Security &amp; Compliance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exchange Online and Security &amp; Compliance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reading-exchange-objects-without-a-cmdlet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading Exchange objects without a cmdlet
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-endpoint-is-undocumented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The endpoint is undocumented
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-vault" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Vault
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#azure-sdks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure SDKs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#blocking-clients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blocking clients
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-client-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common client options
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../errors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Errors and retries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/auth/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/sync/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blocking clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#microsoft-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Microsoft Graph
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#azure-resource-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure Resource Manager
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exchange-online-and-security-compliance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exchange Online and Security &amp; Compliance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exchange Online and Security &amp; Compliance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reading-exchange-objects-without-a-cmdlet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading Exchange objects without a cmdlet
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-endpoint-is-undocumented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The endpoint is undocumented
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-vault" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Vault
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#azure-sdks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure SDKs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#blocking-clients" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blocking clients
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-client-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common client options
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="clients">Clients<a class="headerlink" href="#clients" title="Permanent link">&para;</a></h1>
+<p>Every client takes an <code>AuthContext</code> and gets its tokens from it. The clients are async;
+<a href="#blocking-clients">blocking versions</a> have the same names and methods. Use a client in an
+<code>async with</code> block, or call <code>await client.aclose()</code> when done.</p>
+<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">with</span> <span class="n">GraphClient</span><span class="p">(</span><span class="n">auth</span><span class="p">,</span> <span class="n">scopes</span><span class="o">=</span><span class="p">[</span><span class="s2">"User.Read.All"</span><span class="p">])</span> <span class="k">as</span> <span class="n">graph</span><span class="p">:</span>
+    <span class="n">users</span> <span class="o">=</span> <span class="k">await</span> <span class="n">graph</span><span class="o">.</span><span class="n">get_all</span><span class="p">(</span><span class="s2">"/users"</span><span class="p">)</span>
+</code></pre></div>
+<p>Every client retries throttled requests, gets a new token when the service asks for one, and
+never sends its token to a different host. See <a href="../errors/">errors and retries</a>.</p>
+<h2 id="microsoft-graph">Microsoft Graph<a class="headerlink" href="#microsoft-graph" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">GraphClient</span>
+
+<span class="k">async</span> <span class="k">with</span> <span class="n">GraphClient</span><span class="p">(</span><span class="n">auth</span><span class="p">,</span> <span class="n">scopes</span><span class="o">=</span><span class="p">[</span><span class="s2">"User.Read.All"</span><span class="p">],</span> <span class="n">api_version</span><span class="o">=</span><span class="s2">"beta"</span><span class="p">)</span> <span class="k">as</span> <span class="n">graph</span><span class="p">:</span>
+    <span class="n">me</span> <span class="o">=</span> <span class="k">await</span> <span class="n">graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"/me"</span><span class="p">)</span>
+    <span class="n">users</span> <span class="o">=</span> <span class="k">await</span> <span class="n">graph</span><span class="o">.</span><span class="n">get_all</span><span class="p">(</span><span class="s2">"/users"</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s2">"$top"</span><span class="p">:</span> <span class="mi">999</span><span class="p">})</span>  <span class="c1"># follows @odata.nextLink</span>
+    <span class="k">async</span> <span class="k">for</span> <span class="n">page</span> <span class="ow">in</span> <span class="n">graph</span><span class="o">.</span><span class="n">iter_pages</span><span class="p">(</span><span class="s2">"/groups"</span><span class="p">):</span>
+        <span class="o">...</span>
+    <span class="n">created</span> <span class="o">=</span> <span class="k">await</span> <span class="n">graph</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="s2">"/groups"</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="n">new_group</span><span class="p">)</span>
+    <span class="n">results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">graph</span><span class="o">.</span><span class="n">batch</span><span class="p">([{</span><span class="s2">"method"</span><span class="p">:</span> <span class="s2">"GET"</span><span class="p">,</span> <span class="s2">"url"</span><span class="p">:</span> <span class="s2">"/me"</span><span class="p">},</span> <span class="o">...</span><span class="p">])</span>  <span class="c1"># 20 per call</span>
+</code></pre></div>
+<ul>
+<li><code>get</code>, <code>post</code>, <code>patch</code>, <code>put</code> and <code>delete</code> return the parsed JSON body.</li>
+<li><code>batch()</code> returns one response per request, in request order. Failed requests in the batch
+  are returned with their status, not raised.</li>
+<li><code>api_version</code> is <code>v1.0</code> (default) or <code>beta</code>.</li>
+</ul>
+<h2 id="azure-resource-manager">Azure Resource Manager<a class="headerlink" href="#azure-resource-manager" title="Permanent link">&para;</a></h2>
+<p>Every call needs the resource provider's <code>api_version</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">ArmClient</span>
+
+<span class="k">async</span> <span class="k">with</span> <span class="n">ArmClient</span><span class="p">(</span><span class="n">auth</span><span class="p">)</span> <span class="k">as</span> <span class="n">arm</span><span class="p">:</span>
+    <span class="n">groups</span> <span class="o">=</span> <span class="k">await</span> <span class="n">arm</span><span class="o">.</span><span class="n">get_all</span><span class="p">(</span><span class="sa">f</span><span class="s2">"/subscriptions/</span><span class="si">{</span><span class="n">sub</span><span class="si">}</span><span class="s2">/resourcegroups"</span><span class="p">,</span> <span class="n">api_version</span><span class="o">=</span><span class="s2">"2021-04-01"</span><span class="p">)</span>
+    <span class="n">started</span> <span class="o">=</span> <span class="k">await</span> <span class="n">arm</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="s2">"PUT"</span><span class="p">,</span> <span class="n">path</span><span class="p">,</span> <span class="n">api_version</span><span class="o">=</span><span class="s2">"2021-04-01"</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="n">body</span><span class="p">)</span>
+    <span class="n">resource</span> <span class="o">=</span> <span class="k">await</span> <span class="n">arm</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">started</span><span class="p">)</span>  <span class="c1"># polls Azure-AsyncOperation or Location</span>
+</code></pre></div>
+<p>To use the Azure management SDKs instead, see <a href="#azure-sdks">Azure SDKs</a>.</p>
+<h2 id="exchange-online-and-security-compliance">Exchange Online and Security &amp; Compliance<a class="headerlink" href="#exchange-online-and-security-compliance" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">ExchangeClient</span><span class="p">,</span> <span class="n">IppsClient</span>
+
+<span class="k">async</span> <span class="k">with</span> <span class="n">ExchangeClient</span><span class="p">(</span><span class="n">auth</span><span class="p">)</span> <span class="k">as</span> <span class="n">exchange</span><span class="p">:</span>
+    <span class="n">mailboxes</span> <span class="o">=</span> <span class="k">await</span> <span class="n">exchange</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="s2">"Get-Mailbox"</span><span class="p">,</span> <span class="n">IncludeInactive</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">exchange</span><span class="o">.</span><span class="n">last_warnings</span><span class="p">)</span>
+
+<span class="k">async</span> <span class="k">with</span> <span class="n">IppsClient</span><span class="p">(</span><span class="n">auth</span><span class="p">)</span> <span class="k">as</span> <span class="n">ipps</span><span class="p">:</span>
+    <span class="n">labels</span> <span class="o">=</span> <span class="k">await</span> <span class="n">ipps</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="s2">"Get-Label"</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li>Cmdlet parameters are keyword arguments: a string or number for a plain parameter, a list
+  for a multi-valued one, <code>True</code> for a switch. Results are dictionaries.</li>
+<li><code>run()</code> fetches every page and returns all results. <code>iter_pages()</code> returns one page at a
+  time, so you can stop early.</li>
+<li>After each <code>run()</code>, <code>last_warnings</code> holds the warnings the cmdlet returned.</li>
+<li>A failed cmdlet raises <code>InvokeCommandError</code>. The message starts with the cmdlet name and
+  Exchange's reason; <code>status</code>, <code>code</code> and the full <code>body</code> are on the exception. Exchange
+  answers an unknown cmdlet and a cmdlet the account's roles don't allow with the same 403 and
+  no body, so the message names both possible causes.</li>
+</ul>
+<p><strong><code>ResultSize</code> does nothing.</strong> The PowerShell module applies it itself instead of sending it,
+so the service ignores it. To limit results, stop reading <code>iter_pages()</code> yourself. Each page
+has its results under <code>value</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">mailboxes</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">async</span> <span class="k">for</span> <span class="n">page</span> <span class="ow">in</span> <span class="n">exchange</span><span class="o">.</span><span class="n">iter_pages</span><span class="p">(</span><span class="s2">"Get-Mailbox"</span><span class="p">):</span>
+    <span class="n">mailboxes</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">page</span><span class="p">[</span><span class="s2">"value"</span><span class="p">])</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">mailboxes</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">10</span><span class="p">:</span>
+        <span class="k">break</span>
+</code></pre></div>
+<h3 id="reading-exchange-objects-without-a-cmdlet">Reading Exchange objects without a cmdlet<a class="headerlink" href="#reading-exchange-objects-without-a-cmdlet" title="Permanent link">&para;</a></h3>
+<p>These methods use the same REST endpoints as the module's faster <code>Get-EXO*</code> cmdlets. They
+return only the properties you ask for, while <code>Get-Mailbox</code> returns every property of every
+mailbox.</p>
+<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">with</span> <span class="n">ExchangeClient</span><span class="p">(</span><span class="n">auth</span><span class="p">)</span> <span class="k">as</span> <span class="n">exchange</span><span class="p">:</span>
+    <span class="n">audited</span> <span class="o">=</span> <span class="k">await</span> <span class="n">exchange</span><span class="o">.</span><span class="n">mailboxes</span><span class="p">(</span>
+        <span class="n">PropertySet</span><span class="o">=</span><span class="s2">"Audit"</span><span class="p">,</span>
+        <span class="n">RecipientTypeDetails</span><span class="o">=</span><span class="p">[</span><span class="s2">"UserMailbox"</span><span class="p">,</span> <span class="s2">"SharedMailbox"</span><span class="p">],</span>
+        <span class="n">select</span><span class="o">=</span><span class="p">[</span><span class="s2">"UserPrincipalName"</span><span class="p">,</span> <span class="s2">"DefaultAuditSet"</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="n">one</span> <span class="o">=</span> <span class="k">await</span> <span class="n">exchange</span><span class="o">.</span><span class="n">mailboxes</span><span class="p">(</span><span class="s2">"someone@contoso.com"</span><span class="p">)</span>
+    <span class="n">permissions</span> <span class="o">=</span> <span class="k">await</span> <span class="n">exchange</span><span class="o">.</span><span class="n">mailbox_permissions</span><span class="p">(</span><span class="s2">"someone@contoso.com"</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li>One method per cmdlet: <code>mailboxes</code>, <code>cas_mailboxes</code>, <code>recipients</code>, <code>mailbox_permissions</code>,
+  <code>mailbox_folder_permissions</code>, <code>mailbox_statistics</code>, <code>mailbox_folder_statistics</code>,
+  <code>mobile_device_statistics</code> and <code>recipient_permissions</code>.</li>
+<li>Options use the same names the cmdlets send. A list is sent comma-separated, <code>True</code> is a
+  switch, and <code>select</code>, <code>filter</code> and <code>expand</code> are OData's <code>$select</code>, <code>$filter</code> and <code>$expand</code>.</li>
+<li>An identity can be any form the cmdlets accept: UPN, SMTP address, GUID, external directory
+  object id or name.</li>
+<li><code>get(path, ...)</code> reads any path under the service root; <code>iter_get_pages()</code> returns one page
+  at a time.</li>
+</ul>
+<h3 id="the-endpoint-is-undocumented">The endpoint is undocumented<a class="headerlink" href="#the-endpoint-is-undocumented" title="Permanent link">&para;</a></h3>
+<p>Both clients use the <code>InvokeCommand</code> REST endpoint behind the ExchangeOnlineManagement
+PowerShell module. <strong>Microsoft does not document it.</strong> The request format was taken from module
+version 3.10.1, and may change without notice. The request details are in the
+<a href="../reference/clients/">reference</a>.</p>
+<ul>
+<li>Exchange routes each request by its <code>X-AnchorMailbox</code> header. The client sets it to the
+  signed-in user in their own tenant, and to the tenant's system mailbox for app sign-ins and
+  GDAP customers. To set another, pass <code>anchor_mailbox=</code>:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="n">exchange</span> <span class="o">=</span> <span class="n">ExchangeClient</span><span class="p">(</span><span class="n">auth</span><span class="p">,</span> <span class="n">anchor_mailbox</span><span class="o">=</span><span class="s2">"UPN:someone@contoso.com"</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li>Security &amp; Compliance redirects the first call to a regional host. The client follows the
+  redirect and keeps using that host.</li>
+<li>Cmdlets can be slow: the default timeout is 300 seconds. <code>page_size=</code> sets the preferred
+  page size (default 1000).</li>
+</ul>
+<p>For app sign-ins, see the <a href="../app-certificate/#per-resource-setup">per-resource setup</a>.</p>
+<h2 id="key-vault">Key Vault<a class="headerlink" href="#key-vault" title="Permanent link">&para;</a></h2>
+<p>Needs the <code>keyvault</code> extra.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth.clients.keyvault</span><span class="w"> </span><span class="kn">import</span> <span class="n">KeyVaultClient</span>
+
+<span class="k">async</span> <span class="k">with</span> <span class="n">KeyVaultClient</span><span class="p">(</span><span class="n">auth</span><span class="p">,</span> <span class="s2">"https://contoso.vault.azure.net"</span><span class="p">)</span> <span class="k">as</span> <span class="n">vault</span><span class="p">:</span>
+    <span class="n">password</span> <span class="o">=</span> <span class="k">await</span> <span class="n">vault</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">"service-password"</span><span class="p">)</span>
+    <span class="n">certificate_der</span> <span class="o">=</span> <span class="k">await</span> <span class="n">vault</span><span class="o">.</span><span class="n">get_certificate</span><span class="p">(</span><span class="s2">"signing"</span><span class="p">)</span>  <span class="c1"># public part only</span>
+    <span class="n">signature</span> <span class="o">=</span> <span class="k">await</span> <span class="n">vault</span><span class="o">.</span><span class="n">sign</span><span class="p">(</span><span class="s2">"signing-key"</span><span class="p">,</span> <span class="s2">"PS256"</span><span class="p">,</span> <span class="n">digest</span><span class="p">)</span>
+    <span class="n">valid</span> <span class="o">=</span> <span class="k">await</span> <span class="n">vault</span><span class="o">.</span><span class="n">verify</span><span class="p">(</span><span class="s2">"signing-key"</span><span class="p">,</span> <span class="s2">"PS256"</span><span class="p">,</span> <span class="n">digest</span><span class="p">,</span> <span class="n">signature</span><span class="p">)</span>
+</code></pre></div>
+<p>A small wrapper around the Azure SDK. It raises <code>KeyVaultError</code> and <code>NetworkError</code>, not the
+SDK's exceptions. For anything else, use the SDK clients directly (below).</p>
+<h2 id="azure-sdks">Azure SDKs<a class="headerlink" href="#azure-sdks" title="Permanent link">&para;</a></h2>
+<p><code>AuthContext</code> is an Azure SDK <code>TokenCredential</code>, and <code>auth.aio</code> an <code>AsyncTokenCredential</code>.
+Pass either as <code>credential=</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">azure.keyvault.secrets</span><span class="w"> </span><span class="kn">import</span> <span class="n">SecretClient</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">azure.keyvault.secrets.aio</span><span class="w"> </span><span class="kn">import</span> <span class="n">SecretClient</span> <span class="k">as</span> <span class="n">AsyncSecretClient</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">azure.mgmt.resource</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResourceManagementClient</span>
+
+<span class="n">secrets</span> <span class="o">=</span> <span class="n">SecretClient</span><span class="p">(</span><span class="s2">"https://contoso.vault.azure.net"</span><span class="p">,</span> <span class="n">credential</span><span class="o">=</span><span class="n">auth</span><span class="p">)</span>
+<span class="n">resources</span> <span class="o">=</span> <span class="n">ResourceManagementClient</span><span class="p">(</span><span class="n">credential</span><span class="o">=</span><span class="n">auth</span><span class="p">,</span> <span class="n">subscription_id</span><span class="o">=</span><span class="n">sub</span><span class="p">)</span>
+
+<span class="k">async</span> <span class="k">with</span> <span class="n">AsyncSecretClient</span><span class="p">(</span><span class="s2">"https://contoso.vault.azure.net"</span><span class="p">,</span> <span class="n">credential</span><span class="o">=</span><span class="n">auth</span><span class="o">.</span><span class="n">aio</span><span class="p">)</span> <span class="k">as</span> <span class="n">client</span><span class="p">:</span>
+    <span class="n">secret</span> <span class="o">=</span> <span class="k">await</span> <span class="n">client</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">"service-password"</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li>User sign-ins use the Azure PowerShell client id, unless the context sets another.</li>
+<li>The SDK clients raise their own exceptions, not this package's.</li>
+<li>Every token supports continuous access evaluation, whether or not the SDK asks for it.</li>
+</ul>
+<h2 id="blocking-clients">Blocking clients<a class="headerlink" href="#blocking-clients" title="Permanent link">&para;</a></h2>
+<p><code>azure_auth.sync</code> has the same classes and methods without <code>await</code>. They are generated from the
+async clients, so they behave the same.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">AuthContext</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth.sync</span><span class="w"> </span><span class="kn">import</span> <span class="n">GraphClient</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth.sync.keyvault</span><span class="w"> </span><span class="kn">import</span> <span class="n">KeyVaultClient</span>
+
+<span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span><span class="s2">"contoso.com"</span><span class="p">,</span> <span class="n">username</span><span class="o">=</span><span class="s2">"admin@contoso.com"</span><span class="p">)</span>
+
+<span class="k">with</span> <span class="n">GraphClient</span><span class="p">(</span><span class="n">auth</span><span class="p">,</span> <span class="n">scopes</span><span class="o">=</span><span class="p">[</span><span class="s2">"User.Read.All"</span><span class="p">])</span> <span class="k">as</span> <span class="n">graph</span><span class="p">:</span>
+    <span class="n">users</span> <span class="o">=</span> <span class="n">graph</span><span class="o">.</span><span class="n">get_all</span><span class="p">(</span><span class="s2">"/users"</span><span class="p">)</span>
+
+<span class="k">with</span> <span class="n">KeyVaultClient</span><span class="p">(</span><span class="n">auth</span><span class="p">,</span> <span class="s2">"https://contoso.vault.azure.net"</span><span class="p">)</span> <span class="k">as</span> <span class="n">vault</span><span class="p">:</span>
+    <span class="n">password</span> <span class="o">=</span> <span class="n">vault</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">"service-password"</span><span class="p">)</span>
+</code></pre></div>
+<p>Close a blocking client with a <code>with</code> block or <code>close()</code>. <code>AuthContext</code> itself is synchronous;
+<code>auth.aio</code> is its async interface.</p>
+<h2 id="common-client-options">Common client options<a class="headerlink" href="#common-client-options" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Default</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>client_id=</code></td>
+<td>see <a href="../client-ids-and-consent/#client-ids">client ids</a></td>
+<td>The application to sign in to.</td>
+</tr>
+<tr>
+<td><code>scopes=</code></td>
+<td><code>&lt;resource&gt;/.default</code></td>
+<td>Delegated scopes, for user sign-ins.</td>
+</tr>
+<tr>
+<td><code>timeout=</code></td>
+<td>100 seconds (300 for Exchange)</td>
+<td>Timeout for each HTTP request.</td>
+</tr>
+<tr>
+<td><code>max_retries=</code></td>
+<td>3</td>
+<td>How often a throttled request is retried.</td>
+</tr>
+<tr>
+<td><code>max_retry_wait=</code></td>
+<td>120 seconds</td>
+<td>Longest wait before one retry.</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><span class="n">graph</span> <span class="o">=</span> <span class="n">GraphClient</span><span class="p">(</span><span class="n">auth</span><span class="p">,</span> <span class="n">scopes</span><span class="o">=</span><span class="p">[</span><span class="s2">"User.Read.All"</span><span class="p">],</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">max_retries</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "content.code.copy", "search.highlight"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

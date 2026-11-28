@@ -1,0 +1,1489 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Authentication helpers and thin clients for Microsoft cloud services">
+      
+      
+      
+      
+        <link rel="prev" href="../gdap/">
+      
+      
+        <link rel="next" href="../app-certificate/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>Managed identity - azure-auth</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#managed-identity" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="azure-auth" class="md-header__button md-logo" aria-label="azure-auth" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            azure-auth
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Managed identity
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DrollRobot/azure-auth" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="azure-auth" class="md-nav__button md-logo" aria-label="azure-auth" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    azure-auth
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DrollRobot/azure-auth" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use cases
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Use cases
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../interactive-sign-in/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive sign-in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gdap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GDAP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Managed identity
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Managed identity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#sign-in-as-the-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sign in as the identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sign in as the identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#azure-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#system-assigned-or-user-assigned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System-assigned or user-assigned
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenant-or-cloud" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenant or cloud
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fail-at-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fail at startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-managed-identity-as-an-apps-credential" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A managed identity as an app's credential
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A managed identity as an app&#39;s credential">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#entra-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entra setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../app-certificate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App sign-in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topics
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Topics
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clouds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clouds and tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../token-cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Token cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../client-ids-and-consent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client ids and consent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../errors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Errors and retries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/auth/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/sync/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blocking clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#sign-in-as-the-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sign in as the identity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sign in as the identity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#azure-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#system-assigned-or-user-assigned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System-assigned or user-assigned
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenant-or-cloud" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenant or cloud
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fail-at-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fail at startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-managed-identity-as-an-apps-credential" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A managed identity as an app's credential
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A managed identity as an app&#39;s credential">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#entra-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entra setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="managed-identity">Managed identity<a class="headerlink" href="#managed-identity" title="Permanent link">&para;</a></h1>
+<p>Code on an Azure host signs in with the host's managed identity: no secret, no certificate,
+nothing stored on disk. Azure gives the host its tokens through a local endpoint. There are two
+ways to use it:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><a href="#sign-in-as-the-identity">Sign in as the identity</a></th>
+<th><a href="#a-managed-identity-as-an-apps-credential">The identity as an app's credential</a></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Signs in as</td>
+<td>the identity</td>
+<td>an application registration</td>
+</tr>
+<tr>
+<td>Permissions are given to</td>
+<td>the identity</td>
+<td>the application</td>
+</tr>
+<tr>
+<td>Identity type</td>
+<td>system- or user-assigned</td>
+<td>user-assigned only</td>
+</tr>
+<tr>
+<td>Arguments</td>
+<td><code>managed_identity=True</code></td>
+<td><code>client_id=</code>, <code>managed_identity_client_id=</code></td>
+</tr>
+</tbody>
+</table>
+<p>Sign in as the identity, unless an application registration already has the permissions you
+need, such as one that also runs outside Azure with a <a href="../app-certificate/">certificate</a>.</p>
+<p>Supported hosts: Container Apps and their jobs, App Service and Functions, virtual machines and
+scale sets, Azure Arc, Service Fabric and Azure Machine Learning. The context finds the
+endpoint from the host's environment variables.</p>
+<h2 id="sign-in-as-the-identity">Sign in as the identity<a class="headerlink" href="#sign-in-as-the-identity" title="Permanent link">&para;</a></h2>
+<h3 id="azure-setup">Azure setup<a class="headerlink" href="#azure-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Turn on the host's system-assigned identity, or attach a user-assigned identity to it.</li>
+<li>Give the identity a role on each resource it uses:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>az<span class="w"> </span>role<span class="w"> </span>assignment<span class="w"> </span>create<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--assignee-object-id<span class="w"> </span>&lt;identity<span class="w"> </span>principal<span class="w"> </span>id&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--assignee-principal-type<span class="w"> </span>ServicePrincipal<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--role<span class="w"> </span><span class="s2">"Key Vault Secrets User"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--scope<span class="w"> </span>&lt;vault<span class="w"> </span>resource<span class="w"> </span>id&gt;
+</code></pre></div>
+<p>The Azure portal can't give Microsoft Graph application permissions to a managed identity. An
+administrator can do it with this package:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">AuthContext</span><span class="p">,</span> <span class="n">GraphClient</span>
+
+<span class="n">GRAPH_APP_ID</span> <span class="o">=</span> <span class="s2">"00000003-0000-0000-c000-000000000000"</span>
+
+<span class="n">admin</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span><span class="s2">"contoso.com"</span><span class="p">,</span> <span class="n">username</span><span class="o">=</span><span class="s2">"admin@contoso.com"</span><span class="p">)</span>
+<span class="n">scopes</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"Application.Read.All"</span><span class="p">,</span> <span class="s2">"AppRoleAssignment.ReadWrite.All"</span><span class="p">]</span>
+<span class="k">async</span> <span class="k">with</span> <span class="n">GraphClient</span><span class="p">(</span><span class="n">admin</span><span class="p">,</span> <span class="n">scopes</span><span class="o">=</span><span class="n">scopes</span><span class="p">)</span> <span class="k">as</span> <span class="n">graph</span><span class="p">:</span>
+    <span class="n">graph_sp</span> <span class="o">=</span> <span class="k">await</span> <span class="n">graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="sa">f</span><span class="s2">"/servicePrincipals(appId='</span><span class="si">{</span><span class="n">GRAPH_APP_ID</span><span class="si">}</span><span class="s2">')"</span><span class="p">)</span>
+    <span class="n">role</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">role</span> <span class="k">for</span> <span class="n">role</span> <span class="ow">in</span> <span class="n">graph_sp</span><span class="p">[</span><span class="s2">"appRoles"</span><span class="p">]</span> <span class="k">if</span> <span class="n">role</span><span class="p">[</span><span class="s2">"value"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"User.Read.All"</span><span class="p">)</span>
+    <span class="k">await</span> <span class="n">graph</span><span class="o">.</span><span class="n">post</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"/servicePrincipals/</span><span class="si">{</span><span class="n">IDENTITY_PRINCIPAL_ID</span><span class="si">}</span><span class="s2">/appRoleAssignments"</span><span class="p">,</span>
+        <span class="n">json</span><span class="o">=</span><span class="p">{</span>
+            <span class="s2">"principalId"</span><span class="p">:</span> <span class="n">IDENTITY_PRINCIPAL_ID</span><span class="p">,</span>
+            <span class="s2">"resourceId"</span><span class="p">:</span> <span class="n">graph_sp</span><span class="p">[</span><span class="s2">"id"</span><span class="p">],</span>
+            <span class="s2">"appRoleId"</span><span class="p">:</span> <span class="n">role</span><span class="p">[</span><span class="s2">"id"</span><span class="p">],</span>
+        <span class="p">},</span>
+    <span class="p">)</span>
+</code></pre></div>
+<h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">AuthContext</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth.clients.keyvault</span><span class="w"> </span><span class="kn">import</span> <span class="n">KeyVaultClient</span>
+
+<span class="n">TENANT_ID</span> <span class="o">=</span> <span class="s2">"&lt;tenant id&gt;"</span>
+<span class="n">IDENTITY_CLIENT_ID</span> <span class="o">=</span> <span class="s2">"&lt;client id of the user-assigned identity&gt;"</span>
+
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span><span class="n">TENANT_ID</span><span class="p">,</span> <span class="n">managed_identity</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">client_id</span><span class="o">=</span><span class="n">IDENTITY_CLIENT_ID</span><span class="p">)</span>
+    <span class="k">async</span> <span class="k">with</span> <span class="n">KeyVaultClient</span><span class="p">(</span><span class="n">auth</span><span class="p">,</span> <span class="s2">"https://contoso.vault.azure.net"</span><span class="p">)</span> <span class="k">as</span> <span class="n">vault</span><span class="p">:</span>
+        <span class="n">password</span> <span class="o">=</span> <span class="k">await</span> <span class="n">vault</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">"service-password"</span><span class="p">)</span>
+
+
+<span class="n">asyncio</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
+</code></pre></div>
+<p>Every client works with it: <code>GraphClient(auth)</code>, <code>ArmClient(auth)</code>, and the Azure SDK clients
+with <code>credential=auth</code>.</p>
+<h3 id="system-assigned-or-user-assigned">System-assigned or user-assigned<a class="headerlink" href="#system-assigned-or-user-assigned" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span><span class="n">TENANT_ID</span><span class="p">,</span> <span class="n">managed_identity</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># system-assigned</span>
+<span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span><span class="n">TENANT_ID</span><span class="p">,</span> <span class="n">managed_identity</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">client_id</span><span class="o">=</span><span class="n">IDENTITY_CLIENT_ID</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li><code>client_id=</code> selects a user-assigned identity. Without it, the context uses the
+  system-assigned identity, and reads its client id from the first token. The context never
+  picks the identity from environment variables.</li>
+<li>On a virtual machine with exactly one user-assigned identity, a request for the
+  system-assigned identity may get a token for the user-assigned one.</li>
+</ul>
+<h3 id="tenant-or-cloud">Tenant or cloud<a class="headerlink" href="#tenant-or-cloud" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span><span class="n">TENANT_ID</span><span class="p">,</span> <span class="n">managed_identity</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># looks the tenant up</span>
+<span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span><span class="n">cloud</span><span class="o">=</span><span class="s2">"Commercial"</span><span class="p">,</span> <span class="n">managed_identity</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># no lookup</span>
+</code></pre></div>
+<p>A managed identity only gets tokens for its own tenant, so it doesn't need the tenant to sign
+in. The clients do need the cloud, to know which service URLs to call. <code>cloud=</code> skips the
+tenant lookup; <code>auth.tenant.id</code> is then <code>None</code> until the first token. If unsure, pass the
+tenant.</p>
+<h3 id="fail-at-startup">Fail at startup<a class="headerlink" href="#fail-at-startup" title="Permanent link">&para;</a></h3>
+<p>Otherwise, a missing identity fails at the first request. To find out at startup, ask for a
+token:</p>
+<div class="highlight"><pre><span></span><code><span class="k">await</span> <span class="n">auth</span><span class="o">.</span><span class="n">aio</span><span class="o">.</span><span class="n">acquire_token_silently</span><span class="p">([</span><span class="s2">"https://vault.azure.net/.default"</span><span class="p">])</span>
+</code></pre></div>
+<p>Getting a token shows that the identity is on the host, not that it has the roles it needs. A
+missing role fails later, as a 403 from the resource (<code>KeyVaultError</code>, <code>GraphError</code>, ...).</p>
+<h3 id="limits">Limits<a class="headerlink" href="#limits" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Each token is for one resource, as <code>&lt;resource&gt;/.default</code>. The clients already ask this way.
+  Passing delegated scopes raises <code>ValueError</code>.</li>
+<li>Own tenant only. <code>get_tenant_context()</code> raises <code>ValueError</code> for any other tenant. A vault in
+  another tenant fails with an <code>AuthError</code> that says so.</li>
+<li><code>cache="disk"</code> works but doesn't help: the endpoint is on the host.</li>
+</ul>
+<h3 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Error</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ManagedIdentityUnavailable</code></td>
+<td>Not on an Azure host, or the host has no identity. Fails within two seconds.</td>
+</tr>
+<tr>
+<td><code>AuthError</code></td>
+<td>The endpoint refused, for example because the client id isn't assigned to the host. The message names the identity, the endpoint and the reason.</td>
+</tr>
+<tr>
+<td><code>NetworkError</code></td>
+<td>The endpoint the host advertises did not answer.</td>
+</tr>
+</tbody>
+</table>
+<p>The context never falls back to another sign-in method.</p>
+<h2 id="a-managed-identity-as-an-apps-credential">A managed identity as an app's credential<a class="headerlink" href="#a-managed-identity-as-an-apps-credential" title="Permanent link">&para;</a></h2>
+<p>An application registration signs in with the host's user-assigned identity as its credential,
+instead of a secret or certificate. The tokens are for the application, so the identity itself
+needs no roles.</p>
+<h3 id="entra-setup">Entra setup<a class="headerlink" href="#entra-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Attach a user-assigned identity to the host.</li>
+<li>On the application registration, add a federated credential that trusts the identity:
+   Certificates &amp; secrets, Federated credentials, scenario "Managed identity".</li>
+<li>Give the application the permissions and roles it needs, as for any
+   <a href="../app-certificate/#entra-setup">app sign-in</a>.</li>
+</ol>
+<p>Step 2 from the command line:</p>
+<div class="highlight"><pre><span></span><code>az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>federated-credential<span class="w"> </span>create<span class="w"> </span>--id<span class="w"> </span>&lt;application<span class="w"> </span>client<span class="w"> </span>id&gt;<span class="w"> </span>--parameters<span class="w"> </span>credential.json
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"host-identity"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"issuer"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://login.microsoftonline.com/&lt;tenant id&gt;/v2.0"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"subject"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;identity principal id&gt;"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"audiences"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"api://AzureADTokenExchange"</span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The audience is <code>api://AzureADTokenExchangeUSGov</code> in US Government (GCC High and DoD) and
+<code>api://AzureADTokenExchangeChina</code> in China, with that cloud's sign-in host in the issuer. A new
+federated credential can take a few minutes to start working.</p>
+<h3 id="example_1">Example<a class="headerlink" href="#example_1" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">AuthContext</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth.clients.keyvault</span><span class="w"> </span><span class="kn">import</span> <span class="n">KeyVaultClient</span>
+
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span>
+        <span class="n">TENANT_ID</span><span class="p">,</span>
+        <span class="n">client_id</span><span class="o">=</span><span class="n">APP_CLIENT_ID</span><span class="p">,</span>
+        <span class="n">managed_identity_client_id</span><span class="o">=</span><span class="n">IDENTITY_CLIENT_ID</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="c1"># Fail now if the identity or the trust is missing.</span>
+    <span class="k">await</span> <span class="n">auth</span><span class="o">.</span><span class="n">aio</span><span class="o">.</span><span class="n">acquire_token_silently</span><span class="p">([</span><span class="s2">"https://vault.azure.net/.default"</span><span class="p">])</span>
+
+    <span class="k">async</span> <span class="k">with</span> <span class="n">KeyVaultClient</span><span class="p">(</span><span class="n">auth</span><span class="p">,</span> <span class="s2">"https://contoso.vault.azure.net"</span><span class="p">)</span> <span class="k">as</span> <span class="n">vault</span><span class="p">:</span>
+        <span class="n">password</span> <span class="o">=</span> <span class="k">await</span> <span class="n">vault</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">"service-password"</span><span class="p">)</span>
+
+
+<span class="n">asyncio</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
+</code></pre></div>
+<ul>
+<li>It works like any other app sign-in: every client works, with <code>&lt;resource&gt;/.default</code>.</li>
+<li>The identity's token is kept in memory only, not in the context's cache. The context reuses
+  it for every resource until it is close to expiring.</li>
+<li>Own tenant only, for now: <code>get_tenant_context()</code> raises <code>ValueError</code> for any other tenant.</li>
+</ul>
+<h3 id="errors_1">Errors<a class="headerlink" href="#errors_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Error</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ManagedIdentityUnavailable</code></td>
+<td>Not on an Azure host.</td>
+</tr>
+<tr>
+<td><code>AuthError</code> from the endpoint</td>
+<td>The host does not have that identity. Raised before anything is sent to Entra.</td>
+</tr>
+<tr>
+<td><code>AuthError</code>, AADSTS70021 or 700213</td>
+<td>The application has federated credentials, but none trusts this identity.</td>
+</tr>
+<tr>
+<td><code>AuthError</code>, AADSTS70025</td>
+<td>The application has no federated credential at all.</td>
+</tr>
+</tbody>
+</table>
+<p>Errors from Entra start with Entra's reason, and name the application and the identity. They
+are not retried, and the context doesn't fall back to another sign-in method.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "content.code.copy", "search.highlight"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

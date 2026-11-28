@@ -1,0 +1,1290 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Authentication helpers and thin clients for Microsoft cloud services">
+      
+      
+      
+      
+        <link rel="prev" href="../managed-identity/">
+      
+      
+        <link rel="next" href="../clouds/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
+    
+    
+      
+        <title>App sign-in - azure-auth</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#app-sign-in" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="azure-auth" class="md-header__button md-logo" aria-label="azure-auth" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            azure-auth
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              App sign-in
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DrollRobot/azure-auth" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="azure-auth" class="md-nav__button md-logo" aria-label="azure-auth" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    azure-auth
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DrollRobot/azure-auth" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use cases
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Use cases
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../interactive-sign-in/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interactive sign-in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gdap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GDAP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../managed-identity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Managed identity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App sign-in
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App sign-in
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#entra-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entra setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#windows-certificate-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Windows certificate store
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pem-or-pfx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PEM or PFX
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-client-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A client secret
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-resource-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-resource setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topics
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Topics
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clouds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clouds and tenants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../token-cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Token cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../client-ids-and-consent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Client ids and consent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../errors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Errors and retries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/auth/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/sync/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blocking clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#entra-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entra setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#windows-certificate-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Windows certificate store
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pem-or-pfx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PEM or PFX
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-client-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A client secret
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-resource-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-resource setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="app-sign-in">App sign-in<a class="headerlink" href="#app-sign-in" title="Permanent link">&para;</a></h1>
+<p>For code that runs with nobody there, such as a scheduled job, a service or a pipeline. The
+code signs in as an application registration instead of a user, and has the application's
+permissions.</p>
+<p>Use, in order of preference:</p>
+<ol>
+<li><a href="#windows-certificate-store">A certificate in the Windows certificate store</a>, with its
+   private key in the TPM. The key cannot be copied off the machine.</li>
+<li><a href="#pem-or-pfx">A PEM or PFX certificate</a>, on Linux and macOS.</li>
+<li><a href="#a-client-secret">A client secret</a>, only if you can't use a certificate.</li>
+</ol>
+<p>On an Azure host, use a <a href="../managed-identity/">managed identity</a> instead: there is no
+credential to store.</p>
+<h2 id="entra-setup">Entra setup<a class="headerlink" href="#entra-setup" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Register a single-tenant application.</li>
+<li>Upload the public certificate (<code>.cer</code> or <code>.pem</code>) under Certificates &amp; secrets.</li>
+<li>Under API permissions, add the <strong>application</strong> permissions it needs, then grant admin
+   consent.</li>
+<li>Set up each resource it uses (see <a href="#per-resource-setup">below</a>).</li>
+</ol>
+<p>Steps 1 to 3 from the command line:</p>
+<div class="highlight"><pre><span></span><code>az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>create<span class="w"> </span>--display-name<span class="w"> </span>my-app<span class="w"> </span>--sign-in-audience<span class="w"> </span>AzureADMyOrg
+az<span class="w"> </span>ad<span class="w"> </span>sp<span class="w"> </span>create<span class="w"> </span>--id<span class="w"> </span>&lt;application<span class="w"> </span>client<span class="w"> </span>id&gt;
+az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>credential<span class="w"> </span>reset<span class="w"> </span>--id<span class="w"> </span>&lt;application<span class="w"> </span>client<span class="w"> </span>id&gt;<span class="w"> </span>--cert<span class="w"> </span>@my-app.cer<span class="w"> </span>--append
+az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>permission<span class="w"> </span>add<span class="w"> </span>--id<span class="w"> </span>&lt;application<span class="w"> </span>client<span class="w"> </span>id&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--api<span class="w"> </span><span class="m">00000003</span>-0000-0000-c000-000000000000<span class="w"> </span>--api-permissions<span class="w"> </span>&lt;app<span class="w"> </span>role<span class="w"> </span>id&gt;<span class="o">=</span>Role
+az<span class="w"> </span>ad<span class="w"> </span>app<span class="w"> </span>permission<span class="w"> </span>admin-consent<span class="w"> </span>--id<span class="w"> </span>&lt;application<span class="w"> </span>client<span class="w"> </span>id&gt;
+</code></pre></div>
+<p><code>00000003-0000-0000-c000-000000000000</code> is Microsoft Graph.</p>
+<h2 id="windows-certificate-store">Windows certificate store<a class="headerlink" href="#windows-certificate-store" title="Permanent link">&para;</a></h2>
+<p><a href="https://github.com/DrollRobot/azure-auth/blob/main/scripts/New-TPMEntraCertificate.ps1"><code>New-TPMEntraCertificate.ps1</code></a>
+creates a certificate whose private key is generated in the TPM and can't be exported. Run it
+on the machine that will run your code: the script works on its own, without this package. It
+saves only the public <code>.cer</code> file, which you upload in step 2 above.</p>
+<div class="highlight"><pre><span></span><code><span class="p">.\</span><span class="nb">New-TPMEntraCertificate</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Subject</span> <span class="n">my-app</span>
+</code></pre></div>
+<p>Then sign in with the certificate's thumbprint:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">azure_auth</span><span class="w"> </span><span class="kn">import</span> <span class="n">AuthContext</span><span class="p">,</span> <span class="n">GraphClient</span>
+
+<span class="n">TENANT</span> <span class="o">=</span> <span class="s2">"contoso.com"</span>
+<span class="n">APP_CLIENT_ID</span> <span class="o">=</span> <span class="s2">"&lt;application client id&gt;"</span>
+<span class="n">THUMBPRINT</span> <span class="o">=</span> <span class="s2">"&lt;certificate thumbprint&gt;"</span>
+
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span><span class="n">TENANT</span><span class="p">,</span> <span class="n">client_id</span><span class="o">=</span><span class="n">APP_CLIENT_ID</span><span class="p">,</span> <span class="n">certificate_thumbprint</span><span class="o">=</span><span class="n">THUMBPRINT</span><span class="p">)</span>
+    <span class="k">async</span> <span class="k">with</span> <span class="n">GraphClient</span><span class="p">(</span><span class="n">auth</span><span class="p">)</span> <span class="k">as</span> <span class="n">graph</span><span class="p">:</span>
+        <span class="n">organization</span> <span class="o">=</span> <span class="k">await</span> <span class="n">graph</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"/organization"</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">organization</span><span class="p">[</span><span class="s2">"value"</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">"displayName"</span><span class="p">])</span>
+
+
+<span class="n">asyncio</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
+</code></pre></div>
+<ul>
+<li>Windows signs with the private key itself, so the key is never exported. That is why
+  non-exportable and TPM keys work. Only CNG keys are supported, not older CryptoAPI keys.</li>
+<li>The thumbprint is not a secret; it can go in configuration files.</li>
+<li>The sign-in request is signed with PS256. If the key provider refuses PS256, or signs it
+  incorrectly (a TPM 2.0 outside FIPS mode does), the context switches to RS256 and keeps using
+  it.</li>
+</ul>
+<p>For code that runs as a service account, put the certificate in the machine store, and give
+that account read access to the private key (certlm.msc, the certificate, All Tasks, Manage
+Private Keys).</p>
+<div class="highlight"><pre><span></span><code><span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span>
+    <span class="n">TENANT</span><span class="p">,</span>
+    <span class="n">client_id</span><span class="o">=</span><span class="n">APP_CLIENT_ID</span><span class="p">,</span>
+    <span class="n">certificate_thumbprint</span><span class="o">=</span><span class="n">THUMBPRINT</span><span class="p">,</span>
+    <span class="n">certificate_store</span><span class="o">=</span><span class="s2">"LocalMachine"</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<h2 id="pem-or-pfx">PEM or PFX<a class="headerlink" href="#pem-or-pfx" title="Permanent link">&para;</a></h2>
+<p>On Linux and macOS, pass the certificate and its private key. Keep the private key in the
+system keyring (libsecret, Keychain), never in a plain-text file.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">keyring</span>
+
+<span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span>
+    <span class="n">TENANT</span><span class="p">,</span>
+    <span class="n">client_id</span><span class="o">=</span><span class="n">APP_CLIENT_ID</span><span class="p">,</span>
+    <span class="n">certificate_pem</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="s2">"my-app.pem"</span><span class="p">)</span><span class="o">.</span><span class="n">read_bytes</span><span class="p">(),</span>  <span class="c1"># the public certificate</span>
+    <span class="n">private_key_pem</span><span class="o">=</span><span class="n">keyring</span><span class="o">.</span><span class="n">get_password</span><span class="p">(</span><span class="s2">"my-app"</span><span class="p">,</span> <span class="s2">"private-key"</span><span class="p">),</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>For an encrypted private key, also pass <code>certificate_password=</code>. For a PFX file, pass its bytes
+or path, and its password from the keyring:</p>
+<div class="highlight"><pre><span></span><code><span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span>
+    <span class="n">TENANT</span><span class="p">,</span>
+    <span class="n">client_id</span><span class="o">=</span><span class="n">APP_CLIENT_ID</span><span class="p">,</span>
+    <span class="n">certificate_pfx</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="s2">"my-app.pfx"</span><span class="p">),</span>
+    <span class="n">certificate_password</span><span class="o">=</span><span class="n">keyring</span><span class="o">.</span><span class="n">get_password</span><span class="p">(</span><span class="s2">"my-app"</span><span class="p">,</span> <span class="s2">"pfx-password"</span><span class="p">),</span>
+<span class="p">)</span>
+</code></pre></div>
+<h2 id="a-client-secret">A client secret<a class="headerlink" href="#a-client-secret" title="Permanent link">&para;</a></h2>
+<p>Anyone who has the secret can sign in as the application, from any machine, until it expires.
+Use a certificate if you can. If you can't, keep the secret in the keyring:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">keyring</span>
+
+<span class="n">auth</span> <span class="o">=</span> <span class="n">AuthContext</span><span class="p">(</span>
+    <span class="n">TENANT</span><span class="p">,</span>
+    <span class="n">client_id</span><span class="o">=</span><span class="n">APP_CLIENT_ID</span><span class="p">,</span>
+    <span class="n">client_secret</span><span class="o">=</span><span class="n">keyring</span><span class="o">.</span><span class="n">get_password</span><span class="p">(</span><span class="s2">"my-app"</span><span class="p">,</span> <span class="s2">"client-secret"</span><span class="p">),</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>On Windows, this command stores the secret in Credential Manager, where <code>keyring</code> reads it.
+<code>/pass</code> with no value prompts for the secret:</p>
+<div class="highlight"><pre><span></span><code><span class="n">cmdkey</span> <span class="p">/</span><span class="n">generic</span><span class="p">:</span><span class="n">my-app</span> <span class="p">/</span><span class="n">user</span><span class="p">:</span><span class="n">client-secret</span> <span class="p">/</span><span class="n">pass</span>
+</code></pre></div>
+<h2 id="per-resource-setup">Per-resource setup<a class="headerlink" href="#per-resource-setup" title="Permanent link">&para;</a></h2>
+<p>Every client works with an app sign-in. An app sign-in always asks for <code>&lt;resource&gt;/.default</code>,
+so passing <code>scopes=</code> raises <code>ValueError</code>. The application's permissions in Entra decide what the
+token allows.</p>
+<div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">with</span> <span class="n">GraphClient</span><span class="p">(</span><span class="n">auth</span><span class="p">)</span> <span class="k">as</span> <span class="n">graph</span><span class="p">:</span>
+    <span class="n">users</span> <span class="o">=</span> <span class="k">await</span> <span class="n">graph</span><span class="o">.</span><span class="n">get_all</span><span class="p">(</span><span class="s2">"/users"</span><span class="p">)</span>
+
+<span class="k">async</span> <span class="k">with</span> <span class="n">ExchangeClient</span><span class="p">(</span><span class="n">auth</span><span class="p">)</span> <span class="k">as</span> <span class="n">exchange</span><span class="p">:</span>
+    <span class="n">mailboxes</span> <span class="o">=</span> <span class="k">await</span> <span class="n">exchange</span><span class="o">.</span><span class="n">mailboxes</span><span class="p">(</span><span class="n">select</span><span class="o">=</span><span class="p">[</span><span class="s2">"UserPrincipalName"</span><span class="p">])</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Needs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Microsoft Graph</td>
+<td>Graph application permissions, admin consent.</td>
+</tr>
+<tr>
+<td>Exchange Online, Security &amp; Compliance</td>
+<td>The <code>Exchange.ManageAsApp</code> application permission (Office 365 Exchange Online), and an Exchange administrator role for the application's service principal.</td>
+</tr>
+<tr>
+<td>Resource Manager, Key Vault</td>
+<td>An Azure role for the application's service principal, on the subscription, resource group or vault.</td>
+</tr>
+</tbody>
+</table>
+<p>Security &amp; Compliance needs the tenant's domain name. If the context was given a GUID, the
+client asks Exchange for the domain once, so the application also needs an Exchange role that
+can read the organization's settings.</p>
+<p>A multi-tenant application can reach several tenants from one context: see
+<a href="../gdap/#an-application-across-tenants">GDAP</a>.</p>
+<h2 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Error</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ValueError</code></td>
+<td>No <code>client_id</code>, or <code>scopes=</code> given to a client.</td>
+</tr>
+<tr>
+<td><code>CertificateUnavailable</code></td>
+<td>The certificate or its private key cannot be used: wrong thumbprint, no read access to the key, an unreadable PFX.</td>
+</tr>
+<tr>
+<td><code>AuthError</code>, AADSTS700016</td>
+<td>No such application in the tenant: wrong client id, or wrong tenant.</td>
+</tr>
+<tr>
+<td><code>AuthError</code>, AADSTS700027</td>
+<td>Entra cannot verify the signed request: the certificate is not uploaded to this application.</td>
+</tr>
+<tr>
+<td><code>AuthError</code>, AADSTS7000215</td>
+<td>Wrong client secret.</td>
+</tr>
+<tr>
+<td><code>AuthError</code>, AADSTS7000222</td>
+<td>The client secret has expired.</td>
+</tr>
+<tr>
+<td><code>ResourceError</code> 403 (<code>GraphError</code>, ...)</td>
+<td>Signed in, but the application lacks the permission or role.</td>
+</tr>
+</tbody>
+</table>
+<p>If Entra refuses the sign-in, the context does not retry with RS256. See <a href="../errors/">errors</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "content.code.copy", "search.highlight"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>
