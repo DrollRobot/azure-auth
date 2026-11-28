@@ -4,6 +4,12 @@ A Python library that signs in to Microsoft cloud services and makes requests to
 code doesn't handle tokens. Create an `AuthContext`, pass it to the client for the service you
 need, such as `GraphClient`, and make requests.
 
+!!! warning "Beta"
+    Until 1.0.0, a minor release (such as 0.14.0) may contain breaking changes. A patch
+    release (such as 0.13.2) never does. Pin a release tag, and read the
+    [changelog](https://github.com/DrollRobot/azure-auth/blob/main/CHANGELOG.md) before moving
+    to a new minor version.
+
 Start with [getting started](getting-started.md): the install and a first request.
 
 ## Use cases

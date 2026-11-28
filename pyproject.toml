@@ -11,6 +11,22 @@ version = "0.13.1"
 description = "A collection of clients and helper functions for authentication with Azure, Graph, Exchange, and other Microsoft cloud systems."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Framework :: AsyncIO",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
 dependencies = [
     "azure-core>=1.41.0",
     "cryptography>=50.0.1",

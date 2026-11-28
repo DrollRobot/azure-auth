@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Documentation: one page per use case, with code examples.
+- Beta status and version policy stated in the README, docs and package metadata.
 
 ## [0.13.1] - 2026-11-23 - Any Python 3.11
 

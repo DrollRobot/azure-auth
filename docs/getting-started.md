@@ -8,6 +8,15 @@ Requires Python 3.11 or newer.
 uv add git+https://github.com/DrollRobot/azure-auth.git
 ```
 
+The package is in beta: until 1.0.0, a minor release may contain breaking changes. Pin a
+release tag, and read the
+[changelog](https://github.com/DrollRobot/azure-auth/blob/main/CHANGELOG.md) before moving to
+a new minor version:
+
+```bash
+uv add git+https://github.com/DrollRobot/azure-auth.git --tag v0.13.1
+```
+
 ## How it works
 
 You use two objects:

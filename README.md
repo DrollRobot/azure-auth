@@ -7,6 +7,10 @@
 Authentication library for Microsoft cloud services, with the goal of making common
 workflows simple, so other packages don't have to deal with it.
 
+> **Beta.** Until 1.0.0, a minor release may contain breaking changes. A
+> patch release won't. Pin a release tag, and read the
+> [changelog](CHANGELOG.md) before moving to a new minor version.
+
 ## Project Goals
 
 The high-level goals of this package.
