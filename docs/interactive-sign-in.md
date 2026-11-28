@@ -153,9 +153,7 @@ yet.
 auth = AuthContext("contoso.com", username="admin@contoso.com", broker=True)
 
 # Fail instead of falling back to the browser:
-auth = AuthContext(
-    "contoso.com", username="admin@contoso.com", broker=True, broker_fallback=False
-)
+auth = AuthContext("contoso.com", username="admin@contoso.com", broker=True, broker_fallback=False)
 ```
 
 - If the broker is missing or fails, the context uses the browser instead. With
