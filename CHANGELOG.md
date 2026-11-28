@@ -7,15 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-27 - Disk cache reminder and delete_cache()
+
 ### Added
 
 - `AuthContext(cache_reminder=)`: a shortcut to the disk cache's folder (Windows).
 - `delete_cache()` deletes the disk cache (Windows).
-
-### Changed
-
-- Documentation: one page per use case, with code examples.
-- Beta status and version policy stated in the README, docs and package metadata.
 
 ## [0.13.1] - 2026-11-23 - Any Python 3.11
 
@@ -223,7 +220,8 @@ Also included, but not yet verified: application sign-in with a secret or certif
 Windows broker, clients for Azure Resource Manager, Exchange Online, Security & Compliance
 and Key Vault, blocking versions of every client, and GDAP access to managed tenants.
 
-[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/DrollRobot/azure-auth/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/DrollRobot/azure-auth/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/DrollRobot/azure-auth/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/DrollRobot/azure-auth/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/DrollRobot/azure-auth/compare/v0.11.0...v0.12.0
